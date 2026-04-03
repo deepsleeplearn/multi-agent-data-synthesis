@@ -65,7 +65,7 @@ def build_scenarios() -> list[Scenario]:
 
 
 class ScenarioFactoryTests(unittest.TestCase):
-    def test_load_hydrates_deterministic_call_start_time(self):
+    def test_load_hydrates_random_call_start_time(self):
         factory = ScenarioFactory(rng=random.Random(0))
         scenarios = build_scenarios()
 
@@ -74,8 +74,18 @@ class ScenarioFactoryTests(unittest.TestCase):
         self.assertEqual(len(hydrated), 2)
         self.assertRegex(hydrated[0].call_start_time, r"^\d{2}:\d{2}:\d{2}$")
         self.assertRegex(hydrated[1].call_start_time, r"^\d{2}:\d{2}:\d{2}$")
-        self.assertEqual(hydrated[0].call_start_time, factory._generate_call_start_time("fault_seed"))
-        self.assertEqual(hydrated[1].call_start_time, factory._generate_call_start_time("installation_seed"))
+        self.assertNotEqual(hydrated[0].call_start_time, "")
+        self.assertNotEqual(hydrated[1].call_start_time, "")
+        self.assertNotEqual(hydrated[0].call_start_time, hydrated[1].call_start_time)
+
+    def test_preserves_explicit_call_start_time(self):
+        factory = ScenarioFactory(rng=random.Random(0))
+        scenario_data = build_scenarios()[0].to_dict()
+        scenario_data["call_start_time"] = "20:06:02"
+
+        hydrated = factory.expand_to_count([Scenario.from_dict(scenario_data)], 1)
+
+        self.assertEqual(hydrated[0].call_start_time, "20:06:02")
 
     def test_expand_can_force_fault_probability(self):
         factory = ScenarioFactory(installation_request_probability=0.0, rng=random.Random(0))

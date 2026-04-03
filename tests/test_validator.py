@@ -66,6 +66,46 @@ class ValidatorTests(unittest.TestCase):
 
         self.assertTrue(validation["passed"])
 
+    def test_rejects_issue_repetition_after_address_confirmation(self):
+        sample = DialogueSample(
+            scenario_id="case_003",
+            status="completed",
+            rounds_used=8,
+            transcript=[
+                DialogueTurn(speaker="service", text="跟您确认一下，地址是山东省济南市历下区泉城路218号贵和购物中心公寓楼12层1203室，对吗？", round_index=7),
+                DialogueTurn(speaker="user", text="对，是的，现在热水器显示E4故障代码，没法加热水。", round_index=8),
+            ],
+            collected_slots={"address": "山东省济南市历下区泉城路218号贵和购物中心公寓楼12层1203室"},
+            missing_slots=[],
+            scenario={},
+            validation={},
+        )
+
+        validation = validate_dialogue(sample)
+
+        self.assertFalse(validation["passed"])
+        self.assertIn("user introduced unrelated or repeated details after address confirmation at round 8", validation["issues"])
+
+    def test_rejects_address_repetition_during_closing_ack(self):
+        sample = DialogueSample(
+            scenario_id="case_004",
+            status="completed",
+            rounds_used=9,
+            transcript=[
+                DialogueTurn(speaker="service", text="好的，您的工单已受理成功，明天上午10点前会有专人与您确认服务时间。", round_index=8),
+                DialogueTurn(speaker="user", text="山东省济南市历下区泉城路218号贵和购物中心公寓楼12层1203室。", round_index=9),
+            ],
+            collected_slots={"address": "山东省济南市历下区泉城路218号贵和购物中心公寓楼12层1203室"},
+            missing_slots=[],
+            scenario={},
+            validation={},
+        )
+
+        validation = validate_dialogue(sample)
+
+        self.assertFalse(validation["passed"])
+        self.assertIn("user repeated prior details during closing acknowledgement at round 9", validation["issues"])
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

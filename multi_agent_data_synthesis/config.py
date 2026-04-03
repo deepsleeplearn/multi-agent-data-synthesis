@@ -56,6 +56,7 @@ class AppConfig:
     service_agent_model: str
     default_temperature: float
     service_ok_prefix_probability: float
+    second_round_include_issue_probability: float
     max_rounds: int
     max_concurrency: int
     request_timeout: float
@@ -125,6 +126,9 @@ def load_config() -> AppConfig:
         service_agent_model=os.getenv("SERVICE_AGENT_MODEL", default_model).strip(),
         default_temperature=float(os.getenv("DEFAULT_TEMPERATURE", "0.7")),
         service_ok_prefix_probability=float(os.getenv("SERVICE_OK_PREFIX_PROBABILITY", "0.7")),
+        second_round_include_issue_probability=float(
+            os.getenv("SECOND_ROUND_INCLUDE_ISSUE_PROBABILITY", "0.1")
+        ),
         max_rounds=int(os.getenv("MAX_ROUNDS", "20")),
         max_concurrency=max(1, int(os.getenv("MAX_CONCURRENCY", "5"))),
         request_timeout=float(os.getenv("REQUEST_TIMEOUT", "90")),
@@ -145,7 +149,7 @@ def load_config() -> AppConfig:
             os.getenv("INSTALLATION_REQUEST_PROBABILITY", "0.5")
         ),
         current_call_contactable_probability=float(
-            os.getenv("CURRENT_CALL_CONTACTABLE_PROBABILITY", "0.1")
+            os.getenv("CURRENT_CALL_CONTACTABLE_PROBABILITY", "0.5")
         ),
         phone_collection_second_attempt_probability=float(
             os.getenv("PHONE_COLLECTION_SECOND_ATTEMPT_PROBABILITY", "0.35")
@@ -157,7 +161,7 @@ def load_config() -> AppConfig:
             os.getenv("SERVICE_KNOWN_ADDRESS_PROBABILITY", "0.2")
         ),
         service_known_address_matches_probability=float(
-            os.getenv("SERVICE_KNOWN_ADDRESS_MATCHES_PROBABILITY", "0.8")
+            os.getenv("SERVICE_KNOWN_ADDRESS_MATCHES_PROBABILITY", "0.7")
         ),
         address_collection_followup_probability=float(
             os.getenv("ADDRESS_COLLECTION_FOLLOWUP_PROBABILITY", "0.35")

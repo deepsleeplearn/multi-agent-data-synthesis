@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from multi_agent_data_synthesis.config import AppConfig
+from multi_agent_data_synthesis.dialogue_plans import decide_second_round_reply_strategy
 from multi_agent_data_synthesis.llm import OpenAIChatClient
 from multi_agent_data_synthesis.schemas import CustomerProfile, Scenario, ServiceRequest
 
@@ -145,6 +146,7 @@ class HiddenSettingsTool:
             except ValueError as error:
                 rejection_feedback = self._build_validation_feedback(attempt, str(error))
                 continue
+            self._attach_second_round_reply_plan(scenario.scenario_id, candidate)
             self._attach_contact_plan(scenario.scenario_id, candidate)
             self._attach_address_plan(scenario.scenario_id, candidate)
             self._attach_installation_plan(candidate)
@@ -211,6 +213,7 @@ class HiddenSettingsTool:
             except ValueError as error:
                 rejection_feedback = self._build_validation_feedback(attempt, str(error))
                 continue
+            self._attach_second_round_reply_plan(scenario.scenario_id, candidate)
             self._attach_contact_plan(scenario.scenario_id, candidate)
             self._attach_address_plan(scenario.scenario_id, candidate)
             self._attach_installation_plan(candidate)
@@ -492,6 +495,12 @@ class HiddenSettingsTool:
             "- 即使允许双故障点，也不要扩展到第 3 个问题，不要堆砌温度数据或过多后果描述。\n"
         )
 
+    def _attach_second_round_reply_plan(self, scenario_id: str, candidate: dict[str, Any]) -> None:
+        candidate["hidden_context"]["second_round_reply_strategy"] = decide_second_round_reply_strategy(
+            scenario_id,
+            self.config.second_round_include_issue_probability,
+        )
+
     def _attach_contact_plan(self, scenario_id: str, candidate: dict[str, Any]) -> None:
         rng = random.Random(self._seed_for_scenario(scenario_id))
         current_call_contactable = (
@@ -514,8 +523,8 @@ class HiddenSettingsTool:
             return
 
         backup_owner = rng.choices(
-            population=["本人备用号码", "爱人", "父亲", "母亲", "朋友"],
-            weights=[55, 18, 10, 10, 7],
+            population=["本人备用号码", "爱人", "父亲", "母亲", "儿子", "女儿"],
+            weights=[50, 10, 10, 10, 10, 10],
             k=1,
         )[0]
         backup_phone = self._generate_mobile_phone(rng, excluded={primary_phone})

@@ -23,6 +23,7 @@ def build_config() -> AppConfig:
         service_agent_model="gpt-4o",
         default_temperature=0.7,
         service_ok_prefix_probability=0.0,
+        second_round_include_issue_probability=0.5,
         max_rounds=4,
         max_concurrency=2,
         request_timeout=30,
@@ -94,7 +95,7 @@ class DialogueOrchestratorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(sample.transcript[0].speaker, USER_SPEAKER)
         self.assertEqual(sample.transcript[0].text, "美的空气能热水器需要维修")
         self.assertEqual(sample.transcript[1].speaker, SERVICE_SPEAKER)
-        self.assertNotEqual(sample.transcript[1].text, "您好，很高兴为您服务，请问是美的空气能热水器需要维修吗？")
+        self.assertEqual(sample.transcript[1].text, "您好，很高兴为您服务，请问是美的空气能热水器需要维修吗？")
 
         exported = sample.to_dict()
         self.assertEqual(exported["transcript"][0]["speaker"], "用户")

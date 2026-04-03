@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+
 from multi_agent_data_synthesis.schemas import (
     DialogueSample,
     Scenario,
@@ -8,6 +10,68 @@ from multi_agent_data_synthesis.schemas import (
     effective_required_slots,
     normalize_speaker,
 )
+from multi_agent_data_synthesis.service_policy import ServiceDialoguePolicy
+
+
+ISSUE_KEYWORD_PATTERN = re.compile(
+    r"(故障|报码|故障码|报错|报警|显示|不加热|没热水|热水不稳定|忽冷忽热|温度上不去|升温慢|"
+    r"漏水|渗水|滴水|异响|噪音|不启动|启动不了|无法启动|跳闸|停机|维修)"
+)
+ADDRESS_LIKE_PATTERN = re.compile(
+    r"(省|市|区|县|镇|乡|街道|路|街|大道|巷|弄|胡同|小区|花园|公寓|苑|府|里|村|大厦|中心|广场|城|"
+    r"栋|幢|单元|室|号楼|号)"
+)
+PHONE_DIGIT_PATTERN = re.compile(r"1[3-9]\d{9}")
+
+
+def _contains_issue_detail(text: str) -> bool:
+    return bool(ISSUE_KEYWORD_PATTERN.search(text or ""))
+
+
+def _contains_address_detail(text: str) -> bool:
+    return bool(ADDRESS_LIKE_PATTERN.search(text or ""))
+
+
+def _contains_phone_number(text: str) -> bool:
+    return bool(PHONE_DIGIT_PATTERN.search(text or ""))
+
+
+def _classify_yes_no(text: str) -> str | None:
+    return ServiceDialoguePolicy._classify_yes_no(text)
+
+
+def _validate_topic_regression(sample: DialogueSample) -> list[str]:
+    issues: list[str] = []
+    transcript = sample.transcript
+    for index in range(1, len(transcript)):
+        previous_turn = transcript[index - 1]
+        current_turn = transcript[index]
+        if (
+            normalize_speaker(previous_turn.speaker) != SERVICE_SPEAKER
+            or normalize_speaker(current_turn.speaker) != USER_SPEAKER
+        ):
+            continue
+
+        service_text = previous_turn.text
+        user_text = current_turn.text
+        intent = _classify_yes_no(user_text)
+
+        if ServiceDialoguePolicy.is_phone_confirmation_prompt(service_text):
+            if _contains_issue_detail(user_text) or _contains_address_detail(user_text) or _contains_phone_number(user_text):
+                issues.append(
+                    f"user introduced unrelated or repeated details after phone confirmation at round {current_turn.round_index}"
+                )
+        elif ServiceDialoguePolicy.is_address_confirmation_prompt(service_text):
+            if intent == "yes" and (_contains_issue_detail(user_text) or _contains_address_detail(user_text) or _contains_phone_number(user_text)):
+                issues.append(
+                    f"user introduced unrelated or repeated details after address confirmation at round {current_turn.round_index}"
+                )
+        elif ServiceDialoguePolicy.is_closing_notice_prompt(service_text):
+            if _contains_issue_detail(user_text) or _contains_address_detail(user_text) or _contains_phone_number(user_text):
+                issues.append(
+                    f"user repeated prior details during closing acknowledgement at round {current_turn.round_index}"
+                )
+    return issues
 
 
 def validate_dialogue(sample: DialogueSample) -> dict:
@@ -42,6 +106,7 @@ def validate_dialogue(sample: DialogueSample) -> dict:
         missing_required = [slot for slot in required_slots if not sample.collected_slots.get(slot)]
     if missing_required and sample.status == "completed":
         issues.append("status marked completed but required slots are still missing")
+    issues.extend(_validate_topic_regression(sample))
 
     return {
         "passed": not issues,

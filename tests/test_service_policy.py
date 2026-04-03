@@ -287,7 +287,7 @@ class ServicePolicyTests(unittest.TestCase):
             "美的燃气热水器需要安装",
         )
 
-    def test_user_first_opening_moves_directly_to_next_collection(self):
+    def test_user_first_opening_uses_fixed_opening_prompt(self):
         policy = ServiceDialoguePolicy()
         state = ServiceRuntimeState()
         scenario = build_scenario()
@@ -314,7 +314,7 @@ class ServicePolicyTests(unittest.TestCase):
 
         self.assertEqual(result.slot_updates["request_type"], "fault")
         self.assertNotIn("issue_description", result.slot_updates)
-        self.assertEqual(result.reply, "好的，请问空气能热水器现在是出现了什么问题？")
+        self.assertEqual(result.reply, "您好，很高兴为您服务，请问是美的空气能热水器需要维修吗？")
 
     def test_opening_and_arrival_prompts_use_custom_product_name(self):
         policy = ServiceDialoguePolicy()
@@ -513,14 +513,14 @@ class ServicePolicyTests(unittest.TestCase):
 
         self.assertNotIn("issue_description", result.slot_updates)
         self.assertEqual(result.slot_updates["request_type"], "fault")
-        self.assertEqual(result.reply, "好的，请问空气能热水器现在是出现了什么问题？")
+        self.assertEqual(result.reply, "好的，很高兴为您服务，请问空气能热水器现在是出现了什么问题？")
 
     def test_fault_issue_followup_response_adds_apology_before_next_collection(self):
         policy = ServiceDialoguePolicy()
         state = ServiceRuntimeState()
         scenario = build_scenario()
         transcript = [
-            DialogueTurn(speaker="service", text="好的，请问空气能热水器现在是出现了什么问题？", round_index=2),
+            DialogueTurn(speaker="service", text="好的，很高兴为您服务，请问空气能热水器现在是出现了什么问题？", round_index=2),
             DialogueTurn(speaker="user", text="就是最近加热特别慢，洗澡的时候水还忽冷忽热。", round_index=2),
         ]
         collected_slots = {
@@ -629,7 +629,7 @@ class ServicePolicyTests(unittest.TestCase):
         )
         self.assertEqual(second_result.slot_updates["phone_collection_attempts"], "2")
         self.assertEqual(second_result.slot_updates.get("phone", ""), "")
-        self.assertEqual(second_result.reply, "好的，号码是13900139002，对吗")
+        self.assertEqual(second_result.reply, "好的，号码是13900139002，对吗？")
         self.assertTrue(state.expected_phone_number_confirmation)
 
     def test_confirmed_keypad_phone_moves_to_next_slot(self):
@@ -641,7 +641,7 @@ class ServicePolicyTests(unittest.TestCase):
         )
         scenario = build_scenario()
         transcript = [
-            DialogueTurn(speaker="service", text="好的，号码是13900139002，对吗", round_index=6),
+            DialogueTurn(speaker="service", text="好的，号码是13900139002，对吗？", round_index=6),
             DialogueTurn(speaker="user", text="对，就是这个。", round_index=6),
         ]
         collected_slots = {
@@ -695,7 +695,7 @@ class ServicePolicyTests(unittest.TestCase):
             runtime_state=state,
         )
 
-        self.assertEqual(result.reply, "好的，号码是13900139002，对吗")
+        self.assertEqual(result.reply, "好的，号码是13900139002，对吗？")
         self.assertEqual(result.slot_updates["phone_collection_attempts"], "3")
 
     def test_known_address_confirmation_yes_completes_address(self):

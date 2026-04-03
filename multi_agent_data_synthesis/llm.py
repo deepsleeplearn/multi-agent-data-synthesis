@@ -112,7 +112,7 @@ class OpenAIChatClient:
                     continue
                 if isinstance(item.get("content"), str):
                     text_parts.append(item["content"])
-            return "".join(text_parts)
+            return "".join(text_parts).replace(" ", "")
         return ""
 
     def _send_request(

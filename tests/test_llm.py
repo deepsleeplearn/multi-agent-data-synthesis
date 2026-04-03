@@ -20,6 +20,7 @@ def build_config() -> AppConfig:
         service_agent_model="gpt-4o",
         default_temperature=0.7,
         service_ok_prefix_probability=0.7,
+        second_round_include_issue_probability=0.5,
         max_rounds=20,
         max_concurrency=5,
         request_timeout=30,

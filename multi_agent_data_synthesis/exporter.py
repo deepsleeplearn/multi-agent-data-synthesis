@@ -8,7 +8,7 @@ from multi_agent_data_synthesis.schemas import DialogueSample
 
 def write_jsonl(samples: list[DialogueSample], output_path: Path) -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    with output_path.open("w", encoding="utf-8") as handle:
+    with output_path.open("a", encoding="utf-8") as handle:
         for sample in samples:
             handle.write(json.dumps(sample.to_dict(), ensure_ascii=False) + "\n")
 

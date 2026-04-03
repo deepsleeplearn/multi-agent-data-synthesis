@@ -10,7 +10,7 @@ from multi_agent_data_synthesis.hidden_settings_tool import (
     HiddenSettingsTool,
 )
 from multi_agent_data_synthesis.prompts import build_user_agent_messages
-from multi_agent_data_synthesis.schemas import Scenario
+from multi_agent_data_synthesis.schemas import DialogueTurn, Scenario
 
 
 class SequenceFakeClient:
@@ -31,6 +31,7 @@ def build_config(
     *,
     installation_request_probability: float = 0.5,
     hidden_settings_multi_fault_probability: float = 0.1,
+    second_round_include_issue_probability: float = 0.5,
     current_call_contactable_probability: float = 0.75,
     phone_collection_second_attempt_probability: float = 0.35,
     phone_collection_third_attempt_probability: float = 0.2,
@@ -48,6 +49,7 @@ def build_config(
         service_agent_model="qwen3.5-plus",
         default_temperature=0.7,
         service_ok_prefix_probability=0.7,
+        second_round_include_issue_probability=second_round_include_issue_probability,
         max_rounds=20,
         max_concurrency=5,
         request_timeout=30,
@@ -442,6 +444,60 @@ class UserPromptTests(unittest.TestCase):
 
         self.assertIn("默认只围绕隐藏设定中的 1 个故障点来描述", messages[1]["content"])
 
+    def test_user_prompt_marks_second_round_as_confirm_only_when_configured(self):
+        scenario = build_base_scenario()
+        messages = build_user_agent_messages(
+            scenario,
+            transcript=[
+                DialogueTurn(
+                    speaker="service",
+                    text="您好，很高兴为您服务，请问是美的空气能热水器需要维修吗？",
+                    round_index=1,
+                )
+            ],
+            round_index=2,
+            second_round_reply_strategy="confirm_only",
+        )
+
+        self.assertIn("当前这轮是否正在回应客服开场确认: 是", messages[1]["content"])
+        self.assertIn("本场景第二轮回复策略: 只做简短确认，不继续补充故障或安装细节", messages[1]["content"])
+
+    def test_user_prompt_marks_second_round_as_confirm_with_issue_when_replying_to_opening(self):
+        scenario = build_base_scenario()
+        messages = build_user_agent_messages(
+            scenario,
+            transcript=[
+                DialogueTurn(
+                    speaker="service",
+                    text="您好，很高兴为您服务，请问是美的空气能热水器需要维修吗？",
+                    round_index=1,
+                )
+            ],
+            round_index=2,
+            second_round_reply_strategy="confirm_with_issue",
+        )
+
+        self.assertIn("当前这轮是否正在回应客服开场确认: 是", messages[1]["content"])
+        self.assertIn("本场景第二轮回复策略: 确认后顺带用一句话说出当前故障现象或安装需求", messages[1]["content"])
+
+    def test_user_prompt_blocks_topic_regression_during_address_confirmation(self):
+        scenario = build_base_scenario()
+        messages = build_user_agent_messages(
+            scenario,
+            transcript=[
+                DialogueTurn(
+                    speaker="service",
+                    text="跟您确认一下，地址是山东省济南市历下区泉城路218号贵和购物中心公寓楼12层1203室，对吗？",
+                    round_index=7,
+                )
+            ],
+            round_index=8,
+            second_round_reply_strategy="confirm_only",
+        )
+
+        self.assertIn("当前客服在核对地址", messages[1]["content"])
+        self.assertIn("不要在这一轮再重复故障、电话、型号或其他旧信息", messages[1]["content"])
+
     def test_retries_when_candidate_is_too_similar(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             store_path = Path(temp_dir) / "hidden_settings_history.jsonl"
@@ -493,6 +549,66 @@ class UserPromptTests(unittest.TestCase):
             records = HiddenSettingsRepository(store_path).load()
             self.assertEqual(len(records), 2)
             self.assertEqual(records[-1].generated_customer["full_name"], "周岚")
+
+    def test_second_round_reply_strategy_can_be_forced_to_confirm_only(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store_path = Path(temp_dir) / "hidden_settings_history.jsonl"
+            tool = HiddenSettingsTool(
+                SequenceFakeClient(
+                    [
+                        build_candidate(
+                            full_name="李敏",
+                            surname="李",
+                            phone="13912345678",
+                            address="江苏省苏州市吴中区金枫路88号3幢1201室",
+                            persona="说话直接，比较关注老人洗澡热水是否稳定",
+                            speech_style="说话简短，偶尔会直接打断补充重点",
+                            issue="家里的美的空气能热水器最近早晚水温不稳定。",
+                            desired_resolution="希望尽快安排师傅上门检查温控和主机运行情况",
+                            availability="周五晚上七点后或者周日白天",
+                            emotion="有些着急但还算克制",
+                            urgency="中高",
+                            prior_attempts="重启过一次机器，没有改善",
+                            special_constraints="家里有老人，晚上更需要稳定热水",
+                        )
+                    ]
+                ),
+                build_config(store_path, second_round_include_issue_probability=0.0),
+            )
+
+            generated = tool.generate_for_scenario(build_base_scenario())
+
+            self.assertEqual(generated.hidden_context["second_round_reply_strategy"], "confirm_only")
+
+    def test_second_round_reply_strategy_can_be_forced_to_confirm_with_issue(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store_path = Path(temp_dir) / "hidden_settings_history.jsonl"
+            tool = HiddenSettingsTool(
+                SequenceFakeClient(
+                    [
+                        build_candidate(
+                            full_name="李敏",
+                            surname="李",
+                            phone="13912345678",
+                            address="江苏省苏州市吴中区金枫路88号3幢1201室",
+                            persona="说话直接，比较关注老人洗澡热水是否稳定",
+                            speech_style="说话简短，偶尔会直接打断补充重点",
+                            issue="家里的美的空气能热水器最近早晚水温不稳定。",
+                            desired_resolution="希望尽快安排师傅上门检查温控和主机运行情况",
+                            availability="周五晚上七点后或者周日白天",
+                            emotion="有些着急但还算克制",
+                            urgency="中高",
+                            prior_attempts="重启过一次机器，没有改善",
+                            special_constraints="家里有老人，晚上更需要稳定热水",
+                        )
+                    ]
+                ),
+                build_config(store_path, second_round_include_issue_probability=1.0),
+            )
+
+            generated = tool.generate_for_scenario(build_base_scenario())
+
+            self.assertEqual(generated.hidden_context["second_round_reply_strategy"], "confirm_with_issue")
 
     def test_contactable_current_call_plan_can_be_forced(self):
         with tempfile.TemporaryDirectory() as temp_dir:

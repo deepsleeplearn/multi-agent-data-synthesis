@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import json
 import random
 from pathlib import Path
@@ -74,12 +73,10 @@ class ScenarioFactory:
     def _hydrate_call_start_time(self, scenario: Scenario) -> Scenario:
         if scenario.call_start_time:
             return scenario
-        return scenario.with_call_start_time(self._generate_call_start_time(scenario.scenario_id))
+        return scenario.with_call_start_time(self._generate_call_start_time())
 
-    @staticmethod
-    def _generate_call_start_time(scenario_id: str) -> str:
-        digest = hashlib.sha256(f"{scenario_id}:call_start_time".encode("utf-8")).digest()
-        seconds = int.from_bytes(digest[:4], byteorder="big", signed=False) % 86400
+    def _generate_call_start_time(self) -> str:
+        seconds = self.rng.randint(0, 86399)
         hour, remainder = divmod(seconds, 3600)
         minute, second = divmod(remainder, 60)
         return f"{hour:02d}:{minute:02d}:{second:02d}"

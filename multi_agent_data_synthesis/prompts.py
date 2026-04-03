@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+from multi_agent_data_synthesis.dialogue_plans import (
+    SECOND_ROUND_REPLY_CONFIRM_ONLY,
+    SECOND_ROUND_REPLY_CONFIRM_WITH_ISSUE,
+    normalize_second_round_reply_strategy,
+)
 from multi_agent_data_synthesis.service_policy import ServiceDialoguePolicy
 from multi_agent_data_synthesis.schemas import (
     SLOT_DESCRIPTIONS,
@@ -83,10 +88,55 @@ def count_address_collection_prompts(transcript: list[DialogueTurn]) -> int:
     )
 
 
+def is_replying_to_service_opening(
+    scenario: Scenario,
+    transcript: list[DialogueTurn],
+    round_index: int,
+) -> bool:
+    if round_index != 2 or not transcript:
+        return False
+    last_turn = transcript[-1]
+    if normalize_speaker(last_turn.speaker) != SERVICE_SPEAKER:
+        return False
+    opening_prompt = ServiceDialoguePolicy()._build_opening_prompt(scenario)
+    return (
+        ServiceDialoguePolicy._normalize_prompt_text(last_turn.text)
+        == ServiceDialoguePolicy._normalize_prompt_text(opening_prompt)
+    )
+
+
+def build_topic_guardrail_note(transcript: list[DialogueTurn]) -> str:
+    if not transcript:
+        return "当前没有额外的话题限制。"
+
+    last_turn = transcript[-1]
+    if normalize_speaker(last_turn.speaker) != SERVICE_SPEAKER:
+        return "当前没有额外的话题限制。"
+
+    last_service_text = last_turn.text
+    if ServiceDialoguePolicy.is_phone_confirmation_prompt(last_service_text):
+        return (
+            "当前客服在核对号码。你只需要回答对或不对，不要重复号码本身，"
+            "也不要再扯回故障、地址、型号等已经讨论过的内容。"
+        )
+    if ServiceDialoguePolicy.is_address_confirmation_prompt(last_service_text):
+        return (
+            "当前客服在核对地址。地址正确就只简短确认；地址不对就否定并按需要更正地址。"
+            "不要在这一轮再重复故障、电话、型号或其他旧信息。"
+        )
+    if ServiceDialoguePolicy.is_closing_notice_prompt(last_service_text):
+        return (
+            "当前客服是在通知工单已受理并准备收尾。你通常只简短确认即可，比如“好的”“知道了”。"
+            "不要再重复地址、故障、电话、型号等前面已经说过的内容。"
+        )
+    return "当前没有额外的话题限制。"
+
+
 def build_user_agent_messages(
     scenario: Scenario,
     transcript: list[DialogueTurn],
     round_index: int,
+    second_round_reply_strategy: str | None = None,
 ) -> list[dict[str, str]]:
     system_prompt = """你是家电客服通话中的用户智能体。
 
@@ -134,14 +184,29 @@ def build_user_agent_messages(
         scenario.hidden_context.get("address_confirmation_no_reply", "不对。")
     ).strip()
     product_arrived = "是" if str(scenario.hidden_context.get("product_arrived", "yes")).strip().lower() == "yes" else "否"
-    expression_mode_note = """
-首轮表达方式补充要求：
-1. 你有两种都合法的表达方式。
-2. 第一种：在确认“是来报修/安装”的同时，顺带自然说出当前故障现象或安装需求。
-3. 第二种：第一轮只做简短确认，比如“对，是的”“嗯，需要”，先不要展开故障或安装细节，等客服继续追问后再说。
-4. 如果这一轮还没被客服明确追问故障现象、安装需求、问题描述，就不要为了补全信息而强行多说。
-5. 故障场景下，默认只围绕“问题或安装描述”里的 1 个核心故障点表达；只有当隐藏设定本身明确包含 2 个相关故障点时，才允许自然提到这 2 个，不要扩展到第 3 个。
-6. 两种方式都要自然，不能像在背规则。
+    resolved_second_round_reply_strategy = normalize_second_round_reply_strategy(
+        second_round_reply_strategy or scenario.hidden_context.get("second_round_reply_strategy", "")
+    )
+    replying_to_opening = is_replying_to_service_opening(scenario, transcript, round_index)
+    second_round_strategy_text = (
+        "确认后顺带用一句话说出当前故障现象或安装需求"
+        if resolved_second_round_reply_strategy == SECOND_ROUND_REPLY_CONFIRM_WITH_ISSUE
+        else "只做简短确认，不继续补充故障或安装细节"
+    )
+    topic_guardrail_note = build_topic_guardrail_note(transcript)
+    expression_mode_note = f"""
+第二轮回复策略补充要求：
+1. 当你是在直接回应客服开场确认时，必须严格执行本场景的固定策略，不要临场自行切换。
+2. 当前这轮是否正在回应客服开场确认: {"是" if replying_to_opening else "否"}
+3. 本场景第二轮回复策略: {second_round_strategy_text}
+4. 如果策略是“只做简短确认，不继续补充故障或安装细节”，就只回答“对，是的”“嗯，需要”这类简短确认，不要继续展开。
+5. 如果策略是“确认后顺带用一句话说出当前故障现象或安装需求”，就要在确认后自然补一句 1 个核心故障现象或安装需求，控制在一句话内。
+6. 如果这一轮还没被客服明确追问故障现象、安装需求、问题描述，就不要为了补全信息而强行多说。
+7. 故障场景下，默认只围绕“问题或安装描述”里的 1 个核心故障点表达；只有当隐藏设定本身明确包含 2 个相关故障点时，才允许自然提到这 2 个，不要扩展到第 3 个。
+8. 说法要自然，不能像在背规则。
+
+当前话题限制：
+{topic_guardrail_note}
 """.strip()
     user_prompt = f"""当前是第 {round_index} 轮。
 
@@ -186,7 +251,7 @@ def build_user_agent_messages(
 {expression_mode_note}
 
 回复规则：
-1. 如果客服第一句是在确认是否需要维修/安装，你要先确认并自然说明来电原因。
+1. 如果这一轮是在直接回应客服开场确认，严格按照“本场景第二轮回复策略”执行；不是这个场景时，再按客服实际追问自然回答。
 2. 故障场景下，默认只围绕隐藏设定中的 1 个故障点来描述；只有当隐藏设定本身已经明确给了 2 个相关故障点时，才可以一起提到，但不要再继续追加第 3 个问题或过多温度对比数据。
 3. 如果客服问“请问您贵姓”，无论前面是否带“好的”或其他安抚前缀，都只回答姓氏相关信息，不要重复之前已经说过的别的信息。
 4. 如果客服问当前来电号码能否联系到你，严格按照隐藏设定回答；如果不能联系，可以说明留谁的号码，但不要直接口述完整号码。
@@ -199,6 +264,7 @@ def build_user_agent_messages(
 11. 如果客服要求你对本次通话按 1 到 5 打分，固定回复“1”。
 12. 除了客服明确问到的内容，不要主动额外泄露地址、型号、电话号码。
 13. 回复风格要明显符合“用户画像”和“用户说话方式”；如果设定为简短就少说，如果设定为啰嗦就自然多解释一点，如果设定为略有停顿或结巴，只能轻微体现，不能夸张到影响理解。
+14. 已经确认过的旧信息，不要在后续不相关话题里重复；尤其在号码核对、地址核对、工单受理收尾这几类场景里，只围绕当前话题简短回答。
 
 请直接给出 JSON。"""
     return [

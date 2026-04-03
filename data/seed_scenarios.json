@@ -4,22 +4,22 @@
     "product": {
       "brand": "美的",
       "category": "空气能热水器",
-      "model": "KF66/200L-MI(E4)",
-      "purchase_channel": "京东官方旗舰店"
+      "model": "未知",
+      "purchase_channel": "未知"
     },
     "customer": {
-      "full_name": "张丽",
-      "surname": "张",
-      "phone": "13800138001",
-      "address": "上海市浦东新区锦绣路1888弄6号1202室",
-      "persona": "上班族，希望尽快安排处理",
-      "speech_style": "表达清楚，语速偏快，通常说话比较简短"
+      "full_name": "未知",
+      "surname": "未知",
+      "phone": "未知",
+      "address": "未知",
+      "persona": "未知",
+      "speech_style": "未知"
     },
     "request": {
       "request_type": "fault",
-      "issue": "空气能热水器这两天加热很慢，晚上洗澡时水温上不去，室外主机还有间歇性异响",
-      "desired_resolution": "尽快安排售后上门检查并确认是否需要维修",
-      "availability": "工作日晚上七点后或者周末全天"
+      "issue": "未知",
+      "desired_resolution": "未知",
+      "availability": "未知"
     },
     "required_slots": [
       "issue_description",
@@ -42,22 +42,22 @@
     "product": {
       "brand": "美的",
       "category": "空气能热水机",
-      "model": "RSJ-20/300RDN3-C",
-      "purchase_channel": "天猫官方旗舰店"
+      "model": "未知",
+      "purchase_channel": "未知"
     },
     "customer": {
-      "full_name": "王强",
-      "surname": "王",
-      "phone": "13900139002",
-      "address": "杭州市余杭区五常大道666号3幢1单元802室",
-      "persona": "语气客气，希望尽快预约安装",
-      "speech_style": "说话偏简洁，确认信息时会顺着流程快速回答"
+      "full_name": "未知",
+      "surname": "未知",
+      "phone": "未知",
+      "address": "未知",
+      "persona": "未知",
+      "speech_style": "未知"
     },
     "request": {
       "request_type": "installation",
-      "issue": "新买的美的空气能热水机已经送到家，设备还没拆箱，希望预约首次安装",
-      "desired_resolution": "确认安装前准备事项并预约上门安装时间",
-      "availability": "周六上午或者周日下午"
+      "issue": "未知",
+      "desired_resolution": "未知",
+      "availability": "未知"
     },
     "required_slots": [
       "issue_description",

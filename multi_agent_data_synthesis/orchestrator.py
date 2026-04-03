@@ -36,6 +36,7 @@ class DialogueOrchestrator:
             self.client,
             model=config.user_agent_model,
             temperature=config.default_temperature,
+            second_round_include_issue_probability=config.second_round_include_issue_probability,
         )
         self.service_agent = ServiceAgent(
             self.client,

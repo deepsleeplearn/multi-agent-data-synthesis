@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from multi_agent_data_synthesis.dialogue_plans import resolve_second_round_reply_strategy
 from multi_agent_data_synthesis.llm import OpenAIChatClient
 from multi_agent_data_synthesis.prompts import build_user_agent_messages
 from multi_agent_data_synthesis.schemas import DialogueTurn, Scenario
@@ -12,10 +13,17 @@ from multi_agent_data_synthesis.service_policy import (
 
 
 class UserAgent:
-    def __init__(self, client: OpenAIChatClient, model: str, temperature: float):
+    def __init__(
+        self,
+        client: OpenAIChatClient,
+        model: str,
+        temperature: float,
+        second_round_include_issue_probability: float,
+    ):
         self.client = client
         self.model = model
         self.temperature = temperature
+        self.second_round_include_issue_probability = second_round_include_issue_probability
 
     def respond(
         self,
@@ -24,9 +32,19 @@ class UserAgent:
         transcript: list[DialogueTurn],
         round_index: int,
     ) -> dict[str, Any]:
+        second_round_reply_strategy = resolve_second_round_reply_strategy(
+            scenario_id=scenario.scenario_id,
+            hidden_context=scenario.hidden_context,
+            include_issue_probability=self.second_round_include_issue_probability,
+        )
         payload = self.client.complete_json(
             model=self.model,
-            messages=build_user_agent_messages(scenario, transcript, round_index),
+            messages=build_user_agent_messages(
+                scenario,
+                transcript,
+                round_index,
+                second_round_reply_strategy=second_round_reply_strategy,
+            ),
             temperature=self.temperature,
         )
         return {
@@ -41,9 +59,19 @@ class UserAgent:
         transcript: list[DialogueTurn],
         round_index: int,
     ) -> dict[str, Any]:
+        second_round_reply_strategy = resolve_second_round_reply_strategy(
+            scenario_id=scenario.scenario_id,
+            hidden_context=scenario.hidden_context,
+            include_issue_probability=self.second_round_include_issue_probability,
+        )
         payload = await self.client.complete_json_async(
             model=self.model,
-            messages=build_user_agent_messages(scenario, transcript, round_index),
+            messages=build_user_agent_messages(
+                scenario,
+                transcript,
+                round_index,
+                second_round_reply_strategy=second_round_reply_strategy,
+            ),
             temperature=self.temperature,
         )
         return {

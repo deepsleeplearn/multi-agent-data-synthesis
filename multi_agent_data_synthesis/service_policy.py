@@ -53,12 +53,12 @@ class ServicePolicyResult:
 class ServiceDialoguePolicy:
     FAULT_ACKNOWLEDGEMENT_PREFIX = "非常抱歉，给您添麻烦了，我这就安排是否上门维修"
 
-    SURNAME_PROMPT = "请问您贵姓"
+    SURNAME_PROMPT = "请问您贵姓？"
     CONTACTABLE_PROMPT = "请问您当前这个来电号码能联系到您吗？"
     PHONE_KEYPAD_PROMPT = "请您在拨号盘上输入您的联系方式，并以#号键结束。"
     PHONE_KEYPAD_RETRY_PROMPT = "您输入的号码有误，请重新在拨号盘上输入您的联系方式，并以#号键结束"
     PHONE_CONFIRMATION_TEMPLATE = "号码是{phone}，对吗"
-    FAULT_ISSUE_PROMPT = "很高兴为您服务，请问{product}现在是出现了什么问题？"
+    FAULT_ISSUE_PROMPT = "请问{product}现在是出现了什么问题？"
     ADDRESS_PROMPT = "需要登记下您的地址，麻烦您完整的说下省、市、区、乡镇，精确到门牌号。"
     ADDRESS_DETAIL_FOLLOWUP_PROMPT = "请您继续提供一下小区、楼栋和门牌号。"
     ADDRESS_REGION_FOLLOWUP_PROMPT = "请您再补充一下省、市、区和乡镇街道。"
@@ -72,8 +72,8 @@ class ServiceDialoguePolicy:
     PHONE_KEYPAD_RETRY_PROMPT: PromptConfig = [
         ("您输入的号码有误，请重新在拨号盘上输入您的联系方式，并以#号键结束", 1.0)
     ]
-    PHONE_CONFIRMATION_TEMPLATE: PromptConfig = [("号码是{phone}，对吗", 1.0)]
-    FAULT_ISSUE_PROMPT: PromptConfig = [("很高兴为您服务，请问{product}现在是出现了什么问题？", 1.0)]
+    PHONE_CONFIRMATION_TEMPLATE: PromptConfig = [("号码是{phone}，对吗？", 1.0)]
+    FAULT_ISSUE_PROMPT: PromptConfig = [("请问{product}现在是出现了什么问题？", 1.0)]
     ADDRESS_PROMPT: PromptConfig = [("需要登记下您的地址，麻烦您完整的说下省、市、区、乡镇，精确到门牌号。", 1.0)]
     ADDRESS_DETAIL_FOLLOWUP_PROMPT: PromptConfig = [("请您继续提供一下小区、楼栋和门牌号。", 1.0)]
     ADDRESS_REGION_FOLLOWUP_PROMPT: PromptConfig = [("请您再补充一下省、市、区和乡镇街道。", 1.0)]
@@ -231,15 +231,10 @@ class ServiceDialoguePolicy:
         ):
             slot_updates["issue_description"] = user_text.strip()
 
-        merged_slots = dict(collected_slots)
-        merged_slots.update(slot_updates)
-        next_slot = self._next_slot_to_request(merged_slots, effective_required_slots(scenario))
-        return self._transition_to_next_slot(
-            scenario=scenario,
-            collected_slots=collected_slots,
+        return ServicePolicyResult(
+            reply=self._build_opening_prompt(scenario),
             slot_updates=slot_updates,
-            runtime_state=runtime_state,
-            next_slot=next_slot,
+            is_ready_to_close=False,
         )
 
     def _handle_contactable_confirmation(
@@ -1058,6 +1053,21 @@ class ServiceDialoguePolicy:
             or normalized.startswith("请您继续提供一下")
             or normalized.startswith("请您再补充一下省、市、区")
         )
+
+    @classmethod
+    def is_phone_confirmation_prompt(cls, text: str) -> bool:
+        normalized = cls._normalize_prompt_text(text)
+        return normalized.startswith("号码是") and "对吗" in normalized
+
+    @classmethod
+    def is_address_confirmation_prompt(cls, text: str) -> bool:
+        normalized = cls._normalize_prompt_text(text)
+        return normalized.startswith("跟您确认一下，地址是") and "对吗" in normalized
+
+    @classmethod
+    def is_closing_notice_prompt(cls, text: str) -> bool:
+        normalized = cls._normalize_prompt_text(text)
+        return normalized.startswith("您的工单已受理成功")
 
     def _choose_prompt_text(self, prompt_config: str | PromptConfig, **format_kwargs: str) -> str:
         texts, weights = self._resolve_prompt_variants(prompt_config)
