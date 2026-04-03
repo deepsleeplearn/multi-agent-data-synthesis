@@ -1,6 +1,6 @@
-# 多智能体美的空气能热水机客服对话数据生成框架
+# 多智能体对话数据生成框架
 
-这个项目用于批量生成“美的集团空气能热水机/空气能热水器”客服场景的中文通话对话数据，当前先落地一个最小但可扩展的框架：
+这个项目用于批量生成客服场景的中文通话对话数据，当前先落地一个最小但可扩展的框架：
 
 - `user_agent` 扮演真实用户，基于角色、产品和诉求与客服通话
 - `service_agent` 扮演客服，逐步收集故障/安装描述、姓氏、电话、地址、型号等槽位
@@ -8,11 +8,6 @@
 - `scenario_factory` 负责加载和扩展场景，以支持批量生成
 - `HiddenSettingsTool` 负责调用 LLM 为 `user_agent` 生成随机隐藏设定，并写入 JSONL 历史库做去重
 
-当前领域限制：
-
-- 品牌只能是 `美的`
-- 品类默认是 `空气能热水器`，也支持传入其他产品名称
-- 不符合约束的场景在加载阶段会直接报错
 
 ## 目录结构
 
@@ -57,29 +52,6 @@ pip install -r requirements.txt
 2. 配置环境变量
 
 把 `.env.example` 复制为 `.env`，填入你的 OpenAI-compatible 接口：
-
-```env
-OPENAI_BASE_URL=https://aimpapi.midea.com/t-aigc/mip-chat-app/openai/standard/v1/chat/completions
-OPENAI_API_KEY=your_api_key
-OPENAI_MODEL=gpt-5.3-chat
-OPENAI_USER=your_user
-USER_AGENT_MODEL=${OPENAI_MODEL}
-SERVICE_AGENT_MODEL=${OPENAI_MODEL}
-MODEL_REQUEST_PROFILES={"gpt-5.3-chat":{"include_temperature":false,"include_max_tokens":false}}
-SERVICE_OK_PREFIX_PROBABILITY=0.7
-MAX_CONCURRENCY=5
-INSTALLATION_REQUEST_PROBABILITY=0.5
-SECOND_ROUND_INCLUDE_ISSUE_PROBABILITY=0.5
-CURRENT_CALL_CONTACTABLE_PROBABILITY=0.75
-PHONE_COLLECTION_SECOND_ATTEMPT_PROBABILITY=0.35
-PHONE_COLLECTION_THIRD_ATTEMPT_PROBABILITY=0.2
-PHONE_COLLECTION_INVALID_SHORT_PROBABILITY=0.34
-PHONE_COLLECTION_INVALID_LONG_PROBABILITY=0.33
-PHONE_COLLECTION_INVALID_PATTERN_PROBABILITY=0.33
-SERVICE_KNOWN_ADDRESS_PROBABILITY=0.2
-SERVICE_KNOWN_ADDRESS_MATCHES_PROBABILITY=0.8
-ADDRESS_CONFIRMATION_DIRECT_CORRECTION_PROBABILITY=0.5
-```
 
 - `MODEL_REQUEST_PROFILES`: 按模型名控制请求体参数的 JSON 配置；例如 `gpt-5.3-chat` 可关闭 `temperature` 和 `max_tokens`，也可改为其他参数名
 - `SERVICE_OK_PREFIX_PROBABILITY`: 客服固定话术前带 `好的，` 的概率，`0` 表示从不带，`1` 表示总是带
