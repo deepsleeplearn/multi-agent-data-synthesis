@@ -19,10 +19,12 @@ class SequenceFakeClient:
     def __init__(self, responses: list[dict]):
         self.responses = responses
         self.calls = 0
+        self.requests: list[dict] = []
 
     def complete_json(self, **kwargs):
         if self.calls >= len(self.responses):
             raise AssertionError("Fake client ran out of prepared responses.")
+        self.requests.append(kwargs)
         response = self.responses[self.calls]
         self.calls += 1
         return response
@@ -553,10 +555,46 @@ class UserPromptTests(unittest.TestCase):
             self.assertEqual(retry_client.calls, 2)
             self.assertEqual(generated.customer.full_name, "周岚")
             self.assertEqual(generated.customer.phone, "13755556666")
+            retry_prompt = retry_client.requests[1]["messages"][-1]["content"]
+            self.assertIn("与历史样本相似度过高", retry_prompt)
+            self.assertNotIn(first_candidate["customer"]["address"], retry_prompt)
+            self.assertNotIn(first_candidate["customer"]["persona"], retry_prompt)
+            self.assertNotIn(first_candidate["request"]["issue"], retry_prompt)
 
             records = HiddenSettingsRepository(store_path).load()
             self.assertEqual(len(records), 2)
             self.assertEqual(records[-1].generated_customer["full_name"], "周岚")
+
+    def test_similarity_rejection_feedback_does_not_leak_history_content(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store_path = Path(temp_dir) / "hidden_settings_history.jsonl"
+            tool = HiddenSettingsTool(SequenceFakeClient([]), build_config(store_path))
+
+            feedback = tool._build_rejection_feedback(
+                attempt=2,
+                duplicate_rate=0.615,
+                similarity_score=0.903,
+                most_similar_record=tool.repository.load() or type(
+                    "RecordStub",
+                    (),
+                    {
+                        "generated_request": {"issue": "历史问题文本"},
+                        "generated_customer": {
+                            "address": "历史地址文本",
+                            "persona": "历史画像文本",
+                            "speech_style": "历史说话方式文本",
+                        },
+                    },
+                )(),
+            )
+
+            self.assertIn("duplicate_rate=0.615", feedback)
+            self.assertIn("similarity_score=0.903", feedback)
+            self.assertIn("不要复述历史样本内容", feedback)
+            self.assertNotIn("历史问题文本", feedback)
+            self.assertNotIn("历史地址文本", feedback)
+            self.assertNotIn("历史画像文本", feedback)
+            self.assertNotIn("历史说话方式文本", feedback)
 
     def test_second_round_reply_strategy_can_be_forced_to_confirm_only(self):
         with tempfile.TemporaryDirectory() as temp_dir:

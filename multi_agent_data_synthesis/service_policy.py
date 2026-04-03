@@ -56,8 +56,8 @@ class ServiceDialoguePolicy:
     SURNAME_PROMPT = "请问您贵姓？"
     CONTACTABLE_PROMPT = "请问您当前这个来电号码能联系到您吗？"
     PHONE_KEYPAD_PROMPT = "请您在拨号盘上输入您的联系方式，并以#号键结束。"
-    PHONE_KEYPAD_RETRY_PROMPT = "您输入的号码有误，请重新在拨号盘上输入您的联系方式，并以#号键结束"
-    PHONE_CONFIRMATION_TEMPLATE = "号码是{phone}，对吗"
+    PHONE_KEYPAD_RETRY_PROMPT = "您输入的号码有误，请重新在拨号盘上输入您的联系方式，并以#号键结束。"
+    PHONE_CONFIRMATION_TEMPLATE = "号码是{phone}，对吗？"
     FAULT_ISSUE_PROMPT = "请问{product}现在是出现了什么问题？"
     ADDRESS_PROMPT = "需要登记下您的地址，麻烦您完整的说下省、市、区、乡镇，精确到门牌号。"
     ADDRESS_DETAIL_FOLLOWUP_PROMPT = "请您继续提供一下小区、楼栋和门牌号。"
@@ -67,11 +67,11 @@ class ServiceDialoguePolicy:
     PRODUCT_ARRIVAL_PROMPT = "请问{product}到货了没？"
     PRODUCT_MODEL_PROMPT = "请问产品型号方便提供一下吗？"
     # 每条话术支持配置为 [(文案, 权重), ...]，每次发送时使用 random.choices 按权重随机选择。
-    SURNAME_PROMPT: PromptConfig = [("请问您贵姓", 1.0)]
+    SURNAME_PROMPT: PromptConfig = [("请问您贵姓？", 1.0)]
     CONTACTABLE_PROMPT: PromptConfig = [("请问您当前这个来电号码能联系到您吗？", 1.0)]
     PHONE_KEYPAD_PROMPT: PromptConfig = [("请您在拨号盘上输入您的联系方式，并以#号键结束。", 1.0)]
     PHONE_KEYPAD_RETRY_PROMPT: PromptConfig = [
-        ("您输入的号码有误，请重新在拨号盘上输入您的联系方式，并以#号键结束", 1.0)
+        ("您输入的号码有误，请重新在拨号盘上输入您的联系方式，并以#号键结束。", 1.0)
     ]
     PHONE_CONFIRMATION_TEMPLATE: PromptConfig = [("号码是{phone}，对吗？", 1.0)]
     FAULT_ISSUE_PROMPT: PromptConfig = [("请问{product}现在是出现了什么问题？", 1.0)]

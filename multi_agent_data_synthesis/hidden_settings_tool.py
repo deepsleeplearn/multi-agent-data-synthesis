@@ -128,13 +128,12 @@ class HiddenSettingsTool:
 
     def generate_for_scenario(self, scenario: Scenario) -> Scenario:
         history = self.repository.load()
-        similar_context = self._build_recent_context(history, scenario)
         rejection_feedback = ""
 
         for attempt in range(1, self.config.hidden_settings_max_attempts + 1):
             payload = self.client.complete_json(
                 model=self.config.user_agent_model,
-                messages=self._build_messages(scenario, similar_context, rejection_feedback),
+                messages=self._build_messages(scenario, rejection_feedback),
                 temperature=0.95,
             )
             try:
@@ -197,11 +196,10 @@ class HiddenSettingsTool:
         for attempt in range(1, self.config.hidden_settings_max_attempts + 1):
             async with self._history_lock:
                 history = self.repository.load()
-                similar_context = self._build_recent_context(history, scenario)
 
             payload = await self._complete_json_async(
                 model=self.config.user_agent_model,
-                messages=self._build_messages(scenario, similar_context, rejection_feedback),
+                messages=self._build_messages(scenario, rejection_feedback),
                 temperature=0.95,
             )
             try:
@@ -270,7 +268,6 @@ class HiddenSettingsTool:
     def _build_messages(
         self,
         scenario: Scenario,
-        similar_context: str,
         rejection_feedback: str,
     ) -> list[dict[str, str]]:
         product_name = str(scenario.product.category).strip() or "空气能热水器"
@@ -327,9 +324,7 @@ class HiddenSettingsTool:
 - 只有极少数场景可以写 2 个相关故障点，但不要扩展到第 3 个问题，也不要堆砌过多结果后果或温度对比数据
 - 安装场景与故障场景要区分明显
 - 用户画像与说话方式都要具体，且不要写成同一句的重复改写
-
-历史去重参考：
-{similar_context}
+- 如果收到“与历史样本相似度过高”的反馈，说明这次生成和历史记录太像，需要整体换一版内容
 
 {rejection_feedback}
 
@@ -338,43 +333,6 @@ class HiddenSettingsTool:
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
         ]
-
-    def _build_recent_context(
-        self,
-        history: list[HiddenSettingsRecord],
-        scenario: Scenario,
-        limit: int = 8,
-    ) -> str:
-        same_domain = [
-            record
-            for record in history
-            if record.product.get("brand") == scenario.product.brand
-            and record.product.get("category") == scenario.product.category
-            and record.request_type == scenario.request.request_type
-        ]
-        if not same_domain:
-            return "暂无历史样本。"
-
-        lines = []
-        for record in same_domain[-limit:]:
-            customer = record.generated_customer
-            request = record.generated_request
-            hidden_context = record.hidden_context
-            lines.append(
-                " | ".join(
-                    [
-                        f"姓名:{customer.get('full_name', '')}",
-                        f"地址:{customer.get('address', '')}",
-                        f"画像:{customer.get('persona', '')}",
-                        f"说话方式:{customer.get('speech_style', '')}",
-                        f"问题:{request.get('issue', '')}",
-                        f"期望:{request.get('desired_resolution', '')}",
-                        f"预约:{request.get('availability', '')}",
-                        f"备注:{hidden_context.get('special_constraints', '')}",
-                    ]
-                )
-            )
-        return "\n".join(lines)
 
     def _normalize_generated_payload(
         self,
@@ -702,12 +660,10 @@ class HiddenSettingsTool:
             return ""
         return (
             f"上一次生成在第 {attempt} 次尝试中被拒绝。\n"
-            f"原因：duplicate_rate={duplicate_rate:.3f}, similarity_score={similarity_score:.3f}。\n"
+            f"原因：与历史样本相似度过高，duplicate_rate={duplicate_rate:.3f}, similarity_score={similarity_score:.3f}。\n"
+            "请重新生成一版差异明显的新设定。\n"
             "请显著拉开以下字段差异：姓名、地址、用户画像、说话方式、问题细节、预约时间、既往处理、上门限制。\n"
-            f"最相似历史样本问题：{most_similar_record.generated_request.get('issue', '')}\n"
-            f"最相似历史样本地址：{most_similar_record.generated_customer.get('address', '')}\n"
-            f"最相似历史样本画像：{most_similar_record.generated_customer.get('persona', '')}\n"
-            f"最相似历史样本说话方式：{most_similar_record.generated_customer.get('speech_style', '')}"
+            "不要复述历史样本内容，不要解释原因，只返回新的 JSON。"
         )
 
     @staticmethod

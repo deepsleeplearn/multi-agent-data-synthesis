@@ -3,8 +3,6 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field, replace
 from typing import Any
 
-
-SUPPORTED_BRANDS = {"美的"}
 DEFAULT_PRODUCT_CATEGORY = "空气能热水器"
 SERVICE_SPEAKER = "service"
 USER_SPEAKER = "user"
@@ -125,10 +123,6 @@ class Scenario:
         )
 
     def validate_domain(self) -> None:
-        if self.product.brand not in SUPPORTED_BRANDS:
-            raise ValueError(
-                f"Unsupported brand '{self.product.brand}'. Only {sorted(SUPPORTED_BRANDS)} are allowed."
-            )
         if not str(self.product.category).strip():
             raise ValueError(
                 "Product category must not be empty."
