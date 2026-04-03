@@ -1,130 +1,248 @@
-# 多智能体对话数据生成框架
+# 多智能体客服对话数据生成框架
 
-这个项目用于批量生成客服场景的中文通话对话数据，当前先落地一个最小但可扩展的框架：
+这是一个面向中文客服场景的多智能体数据合成项目，当前聚焦家电售后领域，支持批量生成维修与安装类电话对话数据。
 
-- `user_agent` 扮演真实用户，基于角色、产品和诉求与客服通话
-- `service_agent` 扮演客服，逐步收集故障/安装描述、姓氏、电话、地址、型号等槽位
-- `orchestrator` 负责轮次控制、槽位合并、结束条件判断和样本导出
-- `scenario_factory` 负责加载和扩展场景，以支持批量生成
-- `HiddenSettingsTool` 负责调用 LLM 为 `user_agent` 生成随机隐藏设定，并写入 JSONL 历史库做去重
+项目通过 `user_agent`、`service_agent` 和 `orchestrator` 协同工作，输出结构化对话、拼接文本和槽位采集结果；也支持为用户侧自动生成隐藏设定，并通过历史库做重复度与相似度控制。
 
+## 当前能力
 
-## 目录结构
+- 批量生成中文客服通话对话样本
+- 支持两类请求：`fault` 和 `installation`
+- 支持按场景级别异步并发生成
+- 支持自动补齐用户隐藏设定
+- 支持将隐藏设定写入 JSONL 历史库并做去重控制
+- 支持导出 `JSONL` 和 `JSON`
+- 覆盖基础单元测试
+
+## 项目结构
 
 ```text
 multi_agent_data_synthesis/
-  config.py
-  llm.py
-  schemas.py
-  prompts.py
   agents.py
-  orchestrator.py
-  scenario_factory.py
-  validator.py
-  exporter.py
   cli.py
+  config.py
+  dialogue_plans.py
+  exporter.py
   hidden_settings_tool.py
+  llm.py
+  orchestrator.py
+  prompts.py
+  scenario_factory.py
+  schemas.py
+  service_policy.py
+  static_utterances.py
+  validator.py
 data/
   seed_scenarios.json
+  hidden_settings_history.jsonl
+tests/
+  ...
+requirements.txt
+README.md
 ```
 
-## 核心设计
+## 处理流程
 
-参考 `learn-claude-code` 的思路，这里把重点放在 harness，而不是写死流程图：
+1. `ScenarioFactory` 读取场景文件，并按 `count` 扩展样本数。
+2. `DialogueOrchestrator` 初始化用户与客服 agent。
+3. 如启用 `--auto-hidden-settings`，先由 `HiddenSettingsTool` 生成用户隐藏设定。
+4. `service_agent` 生成首轮确认话术，随后双方按轮次推进。
+5. `orchestrator` 合并槽位、检查结束条件、执行校验并导出结果。
 
-- 模型层统一走 OpenAI 协议
-- 两个 agent 各自维护自己的 system prompt 和可见上下文
-- 隐藏设定工具会读取持久化 JSONL 历史，计算重复率和相似度，规避高重复样本
-- 对话主循环稳定，后续可以继续加：
-  - 场景生成 agent
-  - 质检 agent
-  - 改写 agent
-  - 多客服角色协同
+并发粒度是“场景级别并发”。单条对话内部仍按轮次串行推进。
 
-## 使用方式
-
-1. 安装依赖
+## 安装
 
 ```bash
 pip install -r requirements.txt
 ```
 
-2. 配置环境变量
+当前依赖很轻量：
 
-把 `.env.example` 复制为 `.env`，填入你的 OpenAI-compatible 接口：
+- `httpx`
+- `openai`
+- `python-dotenv`
 
-- `MODEL_REQUEST_PROFILES`: 按模型名控制请求体参数的 JSON 配置；例如 `gpt-5.3-chat` 可关闭 `temperature` 和 `max_tokens`，也可改为其他参数名
-- `SERVICE_OK_PREFIX_PROBABILITY`: 客服固定话术前带 `好的，` 的概率，`0` 表示从不带，`1` 表示总是带
-- `MAX_CONCURRENCY`: 按场景异步并发调用模型的默认并发数
-- `INSTALLATION_REQUEST_PROBABILITY`: 扩展场景数量时，安装类场景被采样到的概率，`0` 表示全部偏向维修，`1` 表示全部偏向安装
-- `SECOND_ROUND_INCLUDE_ISSUE_PROBABILITY`: 用户在第 2 轮回复客服开场确认时，直接在确认句里顺带说出故障/安装诉求的概率；否则该轮只做简短确认
-- `CURRENT_CALL_CONTACTABLE_PROBABILITY`: 隐藏设定生成时，“当前来电号码可以联系到用户”的概率，`0` 表示总是不可联系，`1` 表示总是可联系
-- `PHONE_COLLECTION_SECOND_ATTEMPT_PROBABILITY`: 当当前来电号码联系不到用户时，需要第 2 次拨号盘输入后才录入成功的概率
-- `PHONE_COLLECTION_THIRD_ATTEMPT_PROBABILITY`: 当当前来电号码联系不到用户时，需要第 3 次拨号盘输入后才录入成功的概率
-- `PHONE_COLLECTION_INVALID_SHORT_PROBABILITY`: 生成“少于 11 位”这类错误号码输入的权重
-- `PHONE_COLLECTION_INVALID_LONG_PROBABILITY`: 生成“多于 11 位”这类错误号码输入的权重
-- `PHONE_COLLECTION_INVALID_PATTERN_PROBABILITY`: 生成“位数为 11 位但号码格式不合规”这类错误号码输入的权重
-- `SERVICE_KNOWN_ADDRESS_PROBABILITY`: 隐藏设定生成时，客服侧事先能看到地址的概率
-- `SERVICE_KNOWN_ADDRESS_MATCHES_PROBABILITY`: 当客服侧能看到地址时，这个地址与用户真实地址一致的概率
-- `ADDRESS_CONFIRMATION_DIRECT_CORRECTION_PROBABILITY`: 当客服看到的地址不对时，用户会在否定那一句里直接给出更正地址的概率；否则通常只先表示否定，等客服下一轮继续追问
+## 配置
 
-3. 生成数据
+项目会在仓库根目录读取 `.env`。仓库当前没有提供 `.env.example`，需要手动创建。
+
+最少建议配置：
+
+```dotenv
+OPENAI_MODEL=<your-model>
+OPENAI_BASE_URL=<your-openai-compatible-base-url>
+OPENAI_API_KEY=<your-api-key>
+OPENAI_USER=<optional-user-id>
+```
+
+如需拆分模型，也可以单独指定：
+
+```dotenv
+USER_AGENT_MODEL=<model-for-user-agent>
+SERVICE_AGENT_MODEL=<model-for-service-agent>
+```
+
+### 常用可选配置
+
+#### 生成与请求控制
+
+- `DEFAULT_TEMPERATURE`: 默认采样温度，默认 `0.7`
+- `REQUEST_TIMEOUT`: 请求超时秒数，默认 `90`
+- `MAX_ROUNDS`: 单条对话最大轮次，默认 `20`
+- `MAX_CONCURRENCY`: 默认并发数，默认 `5`
+- `MODEL_REQUEST_PROFILES`: 按模型名覆盖请求体参数的 JSON 配置
+
+#### 对话行为控制
+
+- `SERVICE_OK_PREFIX_PROBABILITY`: 客服回复前缀“好的，”的概率
+- `SECOND_ROUND_INCLUDE_ISSUE_PROBABILITY`: 用户第 2 轮是否顺带补充问题描述的概率
+- `INSTALLATION_REQUEST_PROBABILITY`: 扩样时安装类场景被采样到的概率
+
+#### 电话与地址采集控制
+
+- `CURRENT_CALL_CONTACTABLE_PROBABILITY`: 当前来电号码可联系到用户的概率
+- `PHONE_COLLECTION_SECOND_ATTEMPT_PROBABILITY`: 需要第 2 次拨号盘输入才成功的概率
+- `PHONE_COLLECTION_THIRD_ATTEMPT_PROBABILITY`: 需要第 3 次拨号盘输入才成功的概率
+- `PHONE_COLLECTION_INVALID_SHORT_PROBABILITY`: 错误短号权重
+- `PHONE_COLLECTION_INVALID_LONG_PROBABILITY`: 错误长号权重
+- `PHONE_COLLECTION_INVALID_PATTERN_PROBABILITY`: 错误格式号码权重
+- `SERVICE_KNOWN_ADDRESS_PROBABILITY`: 客服侧预置地址的概率
+- `SERVICE_KNOWN_ADDRESS_MATCHES_PROBABILITY`: 预置地址与真实地址一致的概率
+- `ADDRESS_COLLECTION_FOLLOWUP_PROBABILITY`: 地址补采集跟进概率
+- `ADDRESS_CONFIRMATION_DIRECT_CORRECTION_PROBABILITY`: 用户在否定地址时直接给出正确地址的概率
+
+#### 隐藏设定去重控制
+
+- `HIDDEN_SETTINGS_SIMILARITY_THRESHOLD`: 最大相似度阈值，默认 `0.82`
+- `HIDDEN_SETTINGS_DUPLICATE_THRESHOLD`: 最大重复率阈值，默认 `0.5`
+- `HIDDEN_SETTINGS_MAX_ATTEMPTS`: 隐藏设定生成最大重试次数，默认 `6`
+- `HIDDEN_SETTINGS_MULTI_FAULT_PROBABILITY`: 多故障描述出现概率
+
+## 使用方式
+
+### 生成对话数据
 
 ```bash
 python -m multi_agent_data_synthesis.cli generate --count 10 --auto-hidden-settings --concurrency 5
 ```
 
-输出文件：
+常用参数：
 
-- `outputs/dialogues.jsonl`
-- `outputs/dialogues.json`
+- `--scenario-file`: 场景文件路径，默认 `data/seed_scenarios.json`
+- `--count`: 生成数量；为空时使用场景文件中的全部场景
+- `--jsonl-output`: JSONL 输出路径，默认 `outputs/dialogues.jsonl`
+- `--json-output`: JSON 输出路径，默认 `outputs/dialogues.json`
+- `--auto-hidden-settings`: 自动生成用户隐藏设定
+- `--show-dialogue`: 在终端打印逐轮对话
+- `--concurrency`: 覆盖默认并发数
 
-其中 `dialogues.jsonl` 的每一行都会包含：
-
-- `dialogue_process`: 结构化对话轮次列表
-- `dialogue_text`: 拼接后的完整对话文本
-- `related_info`: 对应产品信息、用户隐藏设定、诉求、槽位收集结果和校验结果
-
-如果你只想先批量生成隐藏设定，不跑对话：
+### 仅生成隐藏设定
 
 ```bash
 python -m multi_agent_data_synthesis.cli generate-hidden-settings --count 10 --concurrency 5
 ```
 
-隐藏设定历史会持久化到 `data/hidden_settings_history.jsonl`，后续生成会读取该文件并计算：
+常用参数：
 
-- `duplicate_rate`: 结构化字段逐项完全相同的比例
-- `max_similarity_score`: 基于文本 n-gram Jaccard 的整体相似度
+- `--scenario-file`: 场景文件路径
+- `--count`: 生成数量
+- `--output`: 输出路径，默认 `outputs/generated_hidden_scenarios.json`
+- `--concurrency`: 覆盖默认并发数
 
-只要候选设定超过阈值，就会自动拒绝并重试。
+## 输入数据格式
 
-如果希望在生成时直接看到用户和客服的逐轮交互过程，可以加：
+场景文件需要是 JSON 数组，元素结构与 `Scenario` 对应。示意如下：
 
-```bash
-python -m multi_agent_data_synthesis.cli generate --count 1 --auto-hidden-settings --show-dialogue
+```json
+[
+  {
+    "scenario_id": "sample_fault_001",
+    "product": {
+      "brand": "<brand>",
+      "model": "<model>",
+      "category": "<category>",
+      "purchase_channel": "<channel>"
+    },
+    "customer": {
+      "full_name": "<name>",
+      "surname": "<surname>",
+      "phone": "<phone>",
+      "address": "<address>",
+      "persona": "<persona>",
+      "speech_style": "<speech_style>"
+    },
+    "request": {
+      "request_type": "fault",
+      "issue": "<issue>",
+      "desired_resolution": "<desired_resolution>",
+      "availability": "<availability>"
+    },
+    "required_slots": [
+      "issue_description",
+      "surname",
+      "phone",
+      "address"
+    ],
+    "max_turns": 20,
+    "tags": [
+      "sample"
+    ]
+  }
+]
 ```
 
-当前并发说明：
+说明：
 
-- 项目已经支持按 `scenario` 级别异步并发调用模型
-- 单条对话内部仍按轮次串行推进，因为每一轮都依赖上一轮 transcript
-- 开启 `--auto-hidden-settings` 时，隐藏设定历史库会在写入阶段串行校验，避免并发下去重失效
+- `call_start_time` 为空时会自动补生成
+- `required_slots` 会在运行时结合 `request_type` 做有效槽位过滤
+- `tags` 可为空
+- 若启用自动隐藏设定，`customer`、`request` 和 `hidden_context` 可能被生成结果覆盖
 
-## 场景格式
+## 输出说明
 
-`data/seed_scenarios.json` 中每个场景包含：
+默认会生成两个文件：
 
-- `product`: 家电品牌、品类、型号、购买渠道
-- `customer`: 用户姓名、姓氏、电话、地址、画像、说话方式
-- `request`: 诉求类型、问题描述、期望结果、可预约时间
-- `required_slots`: 客服必须收集到的字段
+- `outputs/dialogues.jsonl`
+- `outputs/dialogues.json`
 
+每条样本包含这些核心字段：
 
-## 下一步建议
+- `scenario_id`
+- `status`
+- `rounds_used`
+- `transcript`
+- `dialogue_process`
+- `dialogue_text`
+- `collected_slots`
+- `missing_slots`
+- `scenario`
+- `validation`
+- `related_info`
 
-这个版本是骨架，后续最值得继续补的能力是：
+其中：
 
-1. 增加场景自动采样器，从产品池和故障模板自动组合新样本
-2. 增加质检 agent，剔除槽位缺失、语气不自然、信息泄露的样本
-3. 增加标签体系，例如情绪、难度、一次解决/二次预约
-4. 增加多轮改写，提升数据多样性
+- `transcript` / `dialogue_process` 是结构化轮次列表
+- `dialogue_text` 是可直接阅读的完整文本
+- `related_info` 汇总产品信息、用户信息、诉求、隐藏设定、槽位采集和校验结果
+
+需要注意：
+
+- `write_jsonl` 以追加模式写入；重复执行会持续往同一个 `JSONL` 文件末尾追加
+- `write_json` 会覆盖目标文件
+- 隐藏设定历史默认写入 `data/hidden_settings_history.jsonl`
+
+## 测试
+
+```bash
+python -m unittest
+```
+
+当前仓库测试已覆盖配置加载、场景扩展、编排流程、校验逻辑、服务策略和隐藏设定工具。
+
+## 当前限制
+
+- 当前生成逻辑仍聚焦单一业务域，不是通用多行业对话平台
+- 单条对话按轮次串行执行，无法在单会话内部并行
+- 隐藏设定去重依赖本地 JSONL 历史库，不适合高并发分布式场景
+- 项目当前更偏“数据生成骨架”，尚未内置独立质检 agent、改写 agent 和评测流水线
