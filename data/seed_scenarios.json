@@ -1,5 +1,41 @@
 [
   {
+    "scenario_id": "midea_heat_pump_installation_001",
+    "product": {
+      "brand": "美的",
+      "category": "空气能热水机",
+      "model": "未知",
+      "purchase_channel": "未知"
+    },
+    "customer": {
+      "full_name": "未知",
+      "surname": "未知",
+      "phone": "未知",
+      "address": "未知",
+      "persona": "未知",
+      "speech_style": "未知"
+    },
+    "request": {
+      "request_type": "installation",
+      "issue": "未知",
+      "desired_resolution": "未知",
+      "availability": "未知"
+    },
+    "required_slots": [
+      "issue_description",
+      "surname",
+      "phone",
+      "address",
+      "request_type"
+    ],
+    "max_turns": 20,
+    "tags": [
+      "installation",
+      "midea",
+      "heat_pump_water_heater"
+    ]
+  }, 
+  {
     "scenario_id": "midea_heat_pump_fault_001",
     "product": {
       "brand": "美的",
@@ -33,42 +69,6 @@
     "max_turns": 20,
     "tags": [
       "fault",
-      "midea",
-      "heat_pump_water_heater"
-    ]
-  },
-  {
-    "scenario_id": "midea_heat_pump_installation_001",
-    "product": {
-      "brand": "美的",
-      "category": "空气能热水机",
-      "model": "未知",
-      "purchase_channel": "未知"
-    },
-    "customer": {
-      "full_name": "未知",
-      "surname": "未知",
-      "phone": "未知",
-      "address": "未知",
-      "persona": "未知",
-      "speech_style": "未知"
-    },
-    "request": {
-      "request_type": "installation",
-      "issue": "未知",
-      "desired_resolution": "未知",
-      "availability": "未知"
-    },
-    "required_slots": [
-      "issue_description",
-      "surname",
-      "phone",
-      "address",
-      "request_type"
-    ],
-    "max_turns": 20,
-    "tags": [
-      "installation",
       "midea",
       "heat_pump_water_heater"
     ]

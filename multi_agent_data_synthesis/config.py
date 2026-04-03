@@ -71,6 +71,9 @@ class AppConfig:
     current_call_contactable_probability: float
     phone_collection_second_attempt_probability: float
     phone_collection_third_attempt_probability: float
+    phone_collection_invalid_short_probability: float
+    phone_collection_invalid_long_probability: float
+    phone_collection_invalid_pattern_probability: float
     service_known_address_probability: float
     service_known_address_matches_probability: float
     address_collection_followup_probability: float
@@ -127,7 +130,7 @@ def load_config() -> AppConfig:
         default_temperature=float(os.getenv("DEFAULT_TEMPERATURE", "0.7")),
         service_ok_prefix_probability=float(os.getenv("SERVICE_OK_PREFIX_PROBABILITY", "0.7")),
         second_round_include_issue_probability=float(
-            os.getenv("SECOND_ROUND_INCLUDE_ISSUE_PROBABILITY", "0.1")
+            os.getenv("SECOND_ROUND_INCLUDE_ISSUE_PROBABILITY", "0.4")
         ),
         max_rounds=int(os.getenv("MAX_ROUNDS", "20")),
         max_concurrency=max(1, int(os.getenv("MAX_CONCURRENCY", "5"))),
@@ -156,6 +159,15 @@ def load_config() -> AppConfig:
         ),
         phone_collection_third_attempt_probability=float(
             os.getenv("PHONE_COLLECTION_THIRD_ATTEMPT_PROBABILITY", "0.2")
+        ),
+        phone_collection_invalid_short_probability=float(
+            os.getenv("PHONE_COLLECTION_INVALID_SHORT_PROBABILITY", "0.34")
+        ),
+        phone_collection_invalid_long_probability=float(
+            os.getenv("PHONE_COLLECTION_INVALID_LONG_PROBABILITY", "0.33")
+        ),
+        phone_collection_invalid_pattern_probability=float(
+            os.getenv("PHONE_COLLECTION_INVALID_PATTERN_PROBABILITY", "0.33")
         ),
         service_known_address_probability=float(
             os.getenv("SERVICE_KNOWN_ADDRESS_PROBABILITY", "0.2")

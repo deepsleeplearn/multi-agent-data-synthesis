@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import random
+import re
 import tempfile
 import unittest
 from pathlib import Path
@@ -35,6 +37,9 @@ def build_config(
     current_call_contactable_probability: float = 0.75,
     phone_collection_second_attempt_probability: float = 0.35,
     phone_collection_third_attempt_probability: float = 0.2,
+    phone_collection_invalid_short_probability: float = 0.34,
+    phone_collection_invalid_long_probability: float = 0.33,
+    phone_collection_invalid_pattern_probability: float = 0.33,
     service_known_address_probability: float = 0.2,
     service_known_address_matches_probability: float = 0.8,
     address_collection_followup_probability: float = 0.35,
@@ -64,6 +69,9 @@ def build_config(
         current_call_contactable_probability=current_call_contactable_probability,
         phone_collection_second_attempt_probability=phone_collection_second_attempt_probability,
         phone_collection_third_attempt_probability=phone_collection_third_attempt_probability,
+        phone_collection_invalid_short_probability=phone_collection_invalid_short_probability,
+        phone_collection_invalid_long_probability=phone_collection_invalid_long_probability,
+        phone_collection_invalid_pattern_probability=phone_collection_invalid_pattern_probability,
         service_known_address_probability=service_known_address_probability,
         service_known_address_matches_probability=service_known_address_matches_probability,
         address_collection_followup_probability=address_collection_followup_probability,
@@ -682,6 +690,64 @@ class UserPromptTests(unittest.TestCase):
             self.assertTrue(str(generated.hidden_context["phone_input_round_2"]).endswith("#"))
             self.assertTrue(str(generated.hidden_context["phone_input_round_3"]).endswith("#"))
 
+    def test_invalid_phone_input_can_force_short_variant(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store_path = Path(temp_dir) / "hidden_settings_history.jsonl"
+            tool = HiddenSettingsTool(
+                SequenceFakeClient([]),
+                build_config(
+                    store_path,
+                    phone_collection_invalid_short_probability=1.0,
+                    phone_collection_invalid_long_probability=0.0,
+                    phone_collection_invalid_pattern_probability=0.0,
+                ),
+            )
+
+            invalid_input = tool._generate_invalid_phone_input(random.Random(0), "13876543210")
+            digits = re.sub(r"\D", "", invalid_input)
+
+            self.assertTrue(invalid_input.endswith("#"))
+            self.assertLess(len(digits), 11)
+
+    def test_invalid_phone_input_can_force_long_variant(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store_path = Path(temp_dir) / "hidden_settings_history.jsonl"
+            tool = HiddenSettingsTool(
+                SequenceFakeClient([]),
+                build_config(
+                    store_path,
+                    phone_collection_invalid_short_probability=0.0,
+                    phone_collection_invalid_long_probability=1.0,
+                    phone_collection_invalid_pattern_probability=0.0,
+                ),
+            )
+
+            invalid_input = tool._generate_invalid_phone_input(random.Random(0), "13876543210")
+            digits = re.sub(r"\D", "", invalid_input)
+
+            self.assertTrue(invalid_input.endswith("#"))
+            self.assertGreater(len(digits), 11)
+
+    def test_invalid_phone_input_can_force_pattern_variant(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store_path = Path(temp_dir) / "hidden_settings_history.jsonl"
+            tool = HiddenSettingsTool(
+                SequenceFakeClient([]),
+                build_config(
+                    store_path,
+                    phone_collection_invalid_short_probability=0.0,
+                    phone_collection_invalid_long_probability=0.0,
+                    phone_collection_invalid_pattern_probability=1.0,
+                ),
+            )
+
+            invalid_input = tool._generate_invalid_phone_input(random.Random(0), "13876543210")
+            digits = re.sub(r"\D", "", invalid_input)
+
+            self.assertTrue(invalid_input.endswith("#"))
+            self.assertEqual(len(digits), 11)
+            self.assertIsNone(re.fullmatch(r"1[3-9]\d{9}", digits))
+
     def test_backup_phone_plan_can_require_third_attempt(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             store_path = Path(temp_dir) / "hidden_settings_history.jsonl"
@@ -873,7 +939,9 @@ class UserPromptTests(unittest.TestCase):
             )
 
             generated = tool.generate_for_scenario(build_base_scenario())
-            self.assertIn("正确地址是", generated.hidden_context["address_confirmation_no_reply"])
+            reply = str(generated.hidden_context["address_confirmation_no_reply"])
+            self.assertNotIn(reply, {"不对。", "不对，不是这个地址。", "不对，地址不对。", "不是这个地址。"})
+            self.assertTrue(reply.endswith("。"))
 
     def test_mismatched_known_address_can_only_deny_without_correction(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -908,6 +976,24 @@ class UserPromptTests(unittest.TestCase):
 
             generated = tool.generate_for_scenario(build_base_scenario())
             self.assertNotIn("正确地址是", generated.hidden_context["address_confirmation_no_reply"])
+
+    def test_generate_address_correction_can_return_room_only_for_fine_grained_mismatch(self):
+        correction = HiddenSettingsTool._generate_address_correction(
+            actual_address="河南省郑州市金水区北环路天伦雅苑15号楼2单元503室",
+            stale_address="河南省郑州市金水区北环路天伦雅苑15号楼2单元505室",
+            rng=random.Random(1),
+        )
+
+        self.assertEqual(correction, "503室")
+
+    def test_generate_address_correction_can_return_full_address_for_cross_region_mismatch(self):
+        correction = HiddenSettingsTool._generate_address_correction(
+            actual_address="山东省青岛市市南区香港东路银海花园3号楼1203室",
+            stale_address="河南省郑州市金水区北环路天伦雅苑15号楼2单元505室",
+            rng=random.Random(1),
+        )
+
+        self.assertEqual(correction, "山东省青岛市市南区香港东路银海花园3号楼1203室")
 
     def test_installation_hidden_context_infers_product_arrived(self):
         with tempfile.TemporaryDirectory() as temp_dir:

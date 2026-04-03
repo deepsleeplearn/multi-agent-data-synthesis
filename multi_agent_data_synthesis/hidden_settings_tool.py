@@ -578,10 +578,13 @@ class HiddenSettingsTool:
             )
             if not service_known_address_matches_actual:
                 if rng.random() < self.config.address_confirmation_direct_correction_probability:
-                    correction_address = (
-                        actual_address if rng.random() < 0.7 else self._generate_partial_address(actual_address)
+                    correction_address = self._generate_address_correction(
+                        actual_address=actual_address,
+                        stale_address=service_known_address_value,
+                        rng=rng,
                     )
-                    address_confirmation_no_reply = f"不对，正确地址是{correction_address}。"
+                    prefix = rng.choice(["不对，", "不是，", "不对，正确的是", "不是，正确的是"])
+                    address_confirmation_no_reply = f"{prefix}{correction_address}。"
                 else:
                     address_confirmation_no_reply = rng.choice(
                         [
@@ -741,15 +744,24 @@ class HiddenSettingsTool:
             if phone not in excluded:
                 return phone
 
-    @staticmethod
-    def _generate_invalid_phone_input(rng: random.Random, valid_phone: str) -> str:
-        candidates = [
-            f"{valid_phone[:-1]}#",
-            f"2{valid_phone[1:]}#",
-            f"{valid_phone[:10]}#",
+    def _generate_invalid_phone_input(self, rng: random.Random, valid_phone: str) -> str:
+        variants = [
+            lambda: f"{valid_phone[:-1]}#",
+            lambda: f"{valid_phone}{rng.randint(0, 9)}#",
+            lambda: f"2{valid_phone[1:]}#",
         ]
-        invalid_options = [value for value in candidates if not re.fullmatch(r"1[3-9]\d{9}#", value)]
-        return rng.choice(invalid_options)
+        weights = [
+            max(0.0, self.config.phone_collection_invalid_short_probability),
+            max(0.0, self.config.phone_collection_invalid_long_probability),
+            max(0.0, self.config.phone_collection_invalid_pattern_probability),
+        ]
+        if sum(weights) <= 0:
+            weights = [1.0, 1.0, 1.0]
+
+        candidate = rng.choices(variants, weights=weights, k=1)[0]()
+        if re.fullmatch(r"1[3-9]\d{9}#", candidate):
+            raise AssertionError(f"Generated phone input should be invalid: {candidate}")
+        return candidate
 
     @staticmethod
     def _generate_partial_address(address: str) -> str:
@@ -786,6 +798,10 @@ class HiddenSettingsTool:
 
     @staticmethod
     def _generate_stale_address(address: str, rng: random.Random) -> str:
+        if rng.random() < 0.3:
+            region_stale = HiddenSettingsTool._generate_region_stale_address(address, rng)
+            if region_stale != address:
+                return region_stale
         substitutions = [
             (r"(\d{1,4})室", lambda m: f"{max(1, int(m.group(1)) + rng.choice([1, 2, 3]))}室"),
             (r"(\d{1,3})单元", lambda m: f"{max(1, int(m.group(1)) + 1)}单元"),
@@ -807,6 +823,93 @@ class HiddenSettingsTool:
                 + address[last_match.end() :]
             )
         return f"{address}1号"
+
+    @staticmethod
+    def _generate_region_stale_address(address: str, rng: random.Random) -> str:
+        stale = address
+        changed = False
+
+        province_match = re.search(r"^[^省]+省", stale)
+        if province_match and rng.random() >= 0.5:
+            pool = ["广东省", "浙江省", "江苏省", "山东省", "河南省", "湖北省", "湖南省", "四川省", "福建省", "安徽省"]
+            original = province_match.group(0)
+            alternatives = [value for value in pool if value != original]
+            if alternatives:
+                stale = stale[: province_match.start()] + rng.choice(alternatives) + stale[province_match.end() :]
+                changed = True
+
+        city_pattern = r"(?<=省)[^市]+市" if re.search(r"^[^省]+省", stale) else r"^[^市]+市"
+        city_match = re.search(city_pattern, stale)
+        if city_match and rng.random() >= 0.5:
+            pool = ["广州市", "深圳市", "杭州市", "宁波市", "南京市", "苏州市", "青岛市", "郑州市", "武汉市", "长沙市", "成都市", "佛山市", "济南市"]
+            original = city_match.group(0)
+            alternatives = [value for value in pool if value != original]
+            if alternatives:
+                stale = stale[: city_match.start()] + rng.choice(alternatives) + stale[city_match.end() :]
+                changed = True
+
+        district_match = re.search(r"(?<=市)[^区县]+(?:区|县)", stale)
+        if district_match and rng.random() >= 0.5:
+            pool = ["天河区", "南山区", "西湖区", "浦东新区", "鼓楼区", "历下区", "金水区", "顺德区", "鄞州区", "盘龙区", "市南区", "余杭区"]
+            original = district_match.group(0)
+            alternatives = [value for value in pool if value != original]
+            if alternatives:
+                stale = stale[: district_match.start()] + rng.choice(alternatives) + stale[district_match.end() :]
+                changed = True
+
+        return stale if changed else address
+
+    @staticmethod
+    def _extract_address_detail_token(address: str, pattern: str) -> str:
+        match = re.search(pattern, address)
+        return match.group(0) if match else ""
+
+    @classmethod
+    def _generate_address_correction(
+        cls,
+        *,
+        actual_address: str,
+        stale_address: str,
+        rng: random.Random,
+    ) -> str:
+        if not stale_address:
+            return actual_address
+
+        actual_room = cls._extract_address_detail_token(actual_address, r"\d+\s*室")
+        stale_room = cls._extract_address_detail_token(stale_address, r"\d+\s*室")
+        actual_unit = cls._extract_address_detail_token(actual_address, r"\d+\s*单元")
+        stale_unit = cls._extract_address_detail_token(stale_address, r"\d+\s*单元")
+        actual_building = cls._extract_address_detail_token(actual_address, r"\d+\s*(?:号楼|栋|幢|座|楼)")
+        stale_building = cls._extract_address_detail_token(stale_address, r"\d+\s*(?:号楼|栋|幢|座|楼)")
+
+        actual_region = cls._generate_partial_address(actual_address)
+        stale_region = cls._generate_partial_address(stale_address)
+
+        if actual_region != stale_region:
+            return actual_address if rng.random() < 0.75 else cls._generate_partial_address(actual_address)
+
+        candidates: list[str] = []
+        if actual_building and actual_building != stale_building:
+            building_tail = actual_building
+            if actual_unit:
+                building_tail += actual_unit
+            if actual_room:
+                building_tail += actual_room
+            candidates.append(building_tail)
+        if actual_unit and actual_unit != stale_unit:
+            unit_tail = actual_unit
+            if actual_room:
+                unit_tail += actual_room
+            candidates.append(unit_tail)
+        if actual_room and actual_room != stale_room:
+            candidates.append(actual_room)
+
+        if candidates:
+            if rng.random() < 0.7:
+                return rng.choice(candidates)
+            return actual_address
+
+        return actual_address if rng.random() < 0.5 else cls._generate_partial_address(actual_address)
 
     @staticmethod
     def _infer_product_arrived(issue_text: str) -> bool:

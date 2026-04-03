@@ -63,6 +63,7 @@ class ServiceDialoguePolicy:
     ADDRESS_DETAIL_FOLLOWUP_PROMPT = "请您继续提供一下小区、楼栋和门牌号。"
     ADDRESS_REGION_FOLLOWUP_PROMPT = "请您再补充一下省、市、区和乡镇街道。"
     ADDRESS_CONFIRMATION_TEMPLATE = "跟您确认一下，地址是{address}，对吗？"
+    KNOWN_ADDRESS_CONFIRMATION_TEMPLATE = "您的地址是{address}，对吗？"
     PRODUCT_ARRIVAL_PROMPT = "请问{product}到货了没？"
     PRODUCT_MODEL_PROMPT = "请问产品型号方便提供一下吗？"
     # 每条话术支持配置为 [(文案, 权重), ...]，每次发送时使用 random.choices 按权重随机选择。
@@ -78,6 +79,7 @@ class ServiceDialoguePolicy:
     ADDRESS_DETAIL_FOLLOWUP_PROMPT: PromptConfig = [("请您继续提供一下小区、楼栋和门牌号。", 1.0)]
     ADDRESS_REGION_FOLLOWUP_PROMPT: PromptConfig = [("请您再补充一下省、市、区和乡镇街道。", 1.0)]
     ADDRESS_CONFIRMATION_TEMPLATE: PromptConfig = [("跟您确认一下，地址是{address}，对吗？", 1.0)]
+    KNOWN_ADDRESS_CONFIRMATION_TEMPLATE: PromptConfig = [("您的地址是{address}，对吗？", 1.0)]
     PRODUCT_ARRIVAL_PROMPT: PromptConfig = [("请问{product}到货了没？", 1.0)]
     PRODUCT_MODEL_PROMPT: PromptConfig = [("请问产品型号方便提供一下吗？", 1.0)]
     def __init__(
@@ -168,6 +170,7 @@ class ServiceDialoguePolicy:
             return self._handle_product_arrival_confirmation(
                 scenario=scenario,
                 user_text=last_user_turn.text,
+                collected_slots=merged_slots,
                 slot_updates=slot_updates,
                 runtime_state=runtime_state,
             )
@@ -378,13 +381,15 @@ class ServiceDialoguePolicy:
                 runtime_state.awaiting_full_address = True
                 runtime_state.address_input_attempts = 1
                 runtime_state.pending_address_confirmation = ""
-                runtime_state.partial_address_candidate = denial_address
-                normalized_candidate = self._normalize_address_text(denial_address)
+                merged_candidate = self._merge_address_candidate(confirmation_address, denial_address)
+                runtime_state.partial_address_candidate = merged_candidate
+                normalized_candidate = self._normalize_address_text(merged_candidate)
                 if self._is_complete_address(normalized_candidate, scenario.customer.address):
                     return self._start_address_confirmation(
                         runtime_state=runtime_state,
-                        address=denial_address,
+                        address=merged_candidate,
                         slot_updates=slot_updates,
+                        use_known_address_prompt=False,
                     )
                 return ServicePolicyResult(
                     reply=self._address_followup_prompt(normalized_candidate),
@@ -405,6 +410,7 @@ class ServiceDialoguePolicy:
             runtime_state=runtime_state,
             address=confirmation_address,
             slot_updates=slot_updates,
+            use_known_address_prompt=False,
         )
 
     def _handle_phone_keypad_input(
@@ -466,6 +472,7 @@ class ServiceDialoguePolicy:
                 runtime_state=runtime_state,
                 address=combined_address,
                 slot_updates=slot_updates,
+                use_known_address_prompt=False,
             )
 
         return ServicePolicyResult(
@@ -479,6 +486,7 @@ class ServiceDialoguePolicy:
         *,
         scenario: Scenario,
         user_text: str,
+        collected_slots: dict[str, str],
         slot_updates: dict[str, str],
         runtime_state: ServiceRuntimeState,
     ) -> ServicePolicyResult:
@@ -496,10 +504,15 @@ class ServiceDialoguePolicy:
         runtime_state.product_arrival_checked = True
         slot_updates = dict(slot_updates)
         slot_updates["product_arrived"] = "yes" if intent == "yes" else "no"
-        return ServicePolicyResult(
-            reply=self._start_closing_sequence(scenario, runtime_state),
+        merged_slots = dict(collected_slots)
+        merged_slots.update(slot_updates)
+        next_slot = self._next_slot_to_request(merged_slots, effective_required_slots(scenario))
+        return self._transition_to_next_slot(
+            scenario=scenario,
+            collected_slots=collected_slots,
             slot_updates=slot_updates,
-            is_ready_to_close=False,
+            runtime_state=runtime_state,
+            next_slot=next_slot,
         )
 
     def _handle_closing_acknowledgement(
@@ -816,13 +829,17 @@ class ServiceDialoguePolicy:
         runtime_state: ServiceRuntimeState,
         address: str,
         slot_updates: dict[str, str],
+        use_known_address_prompt: bool = False,
     ) -> ServicePolicyResult:
         runtime_state.expected_address_confirmation = True
         runtime_state.awaiting_full_address = False
         runtime_state.pending_address_confirmation = address
         runtime_state.partial_address_candidate = ""
         return ServicePolicyResult(
-            reply=self._address_confirmation_prompt(address),
+            reply=self._address_confirmation_prompt(
+                address,
+                use_known_address_prompt=use_known_address_prompt,
+            ),
             slot_updates=slot_updates,
             is_ready_to_close=False,
         )
@@ -835,6 +852,7 @@ class ServiceDialoguePolicy:
             r"^(好的[，,\s]*)?我家地址是",
             r"^(好的[，,\s]*)?详细地址是",
             r"^(好的[，,\s]*)?我的地址是",
+            r"^(好的[，,\s]*)?我现在地址是",
         )
         for pattern in prefix_patterns:
             cleaned = re.sub(pattern, "", cleaned)
@@ -860,6 +878,15 @@ class ServiceDialoguePolicy:
         for pattern in cleanup_patterns:
             cleaned = re.sub(pattern, "", cleaned)
         cleaned = re.sub(r"^(正确地址是|地址是|是)[，,\s]*", "", cleaned)
+        correction_patterns = (
+            r"(?:就是|改成|换成|应该是|应为)\s*([^，,。！？!?]+)$",
+            r"(?:正确的是|正确地址是)\s*([^，,。！？!?]+)$",
+        )
+        for pattern in correction_patterns:
+            match = re.search(pattern, cleaned)
+            if match:
+                cleaned = match.group(1)
+                break
 
         cleaned = cleaned.strip("，,。！？!? ")
         normalized = cls._normalize_address_text(cleaned)
@@ -868,7 +895,7 @@ class ServiceDialoguePolicy:
             return ""
         if cls._address_has_admin_region(cleaned):
             return cleaned
-        strong_detail_markers = r"(路|街|大道|巷|弄|胡同|小区|花园|公寓|苑|府|里|村|大厦|中心|广场|城|栋|幢|单元|号)"
+        strong_detail_markers = r"(路|街|大道|巷|弄|胡同|小区|花园|公寓|苑|府|里|村|大厦|中心|广场|城|栋|幢|座|楼|单元|室|号)"
         if re.search(strong_detail_markers, normalized) and cls._address_has_detail_info(cleaned):
             return cleaned
         return ""
@@ -947,11 +974,44 @@ class ServiceDialoguePolicy:
         existing_has_admin_region = cls._address_has_admin_region(prepared_existing)
         new_has_admin_region = cls._address_has_admin_region(prepared_new)
 
+        if new_has_region and new_has_detail:
+            return prepared_new
+
+        if not new_has_admin_region:
+            detail_merged = cls._merge_address_detail_replacements(prepared_existing, prepared_new)
+            if detail_merged != prepared_existing:
+                return detail_merged
+
         if new_has_admin_region and not existing_has_admin_region and existing_has_detail and not new_has_detail:
             return f"{prepared_new}{prepared_existing}"
         if existing_has_admin_region and not new_has_admin_region and new_has_detail and not existing_has_detail:
             return f"{prepared_existing}{prepared_new}"
         return f"{prepared_existing}{prepared_new}"
+
+    @classmethod
+    def _merge_address_detail_replacements(cls, existing: str, new: str) -> str:
+        merged = existing
+        replaced = False
+        detail_patterns = (
+            r"\d+\s*室",
+            r"\d+\s*单元",
+            r"\d+\s*(?:号楼|栋|幢|座|楼)",
+            r"\d+\s*号",
+        )
+        for pattern in detail_patterns:
+            new_match = re.search(pattern, new)
+            existing_match = re.search(pattern, merged)
+            if not new_match or not existing_match:
+                continue
+            if cls._normalize_address_text(new_match.group(0)) == cls._normalize_address_text(existing_match.group(0)):
+                continue
+            merged = (
+                merged[: existing_match.start()]
+                + new_match.group(0)
+                + merged[existing_match.end() :]
+            )
+            replaced = True
+        return merged if replaced else existing
 
     @classmethod
     def _address_followup_kind(cls, candidate: str) -> str:
@@ -1062,7 +1122,10 @@ class ServiceDialoguePolicy:
     @classmethod
     def is_address_confirmation_prompt(cls, text: str) -> bool:
         normalized = cls._normalize_prompt_text(text)
-        return normalized.startswith("跟您确认一下，地址是") and "对吗" in normalized
+        return (
+            (normalized.startswith("跟您确认一下，地址是") and "对吗" in normalized)
+            or (normalized.startswith("您的地址是") and "对吗" in normalized)
+        )
 
     @classmethod
     def is_closing_notice_prompt(cls, text: str) -> bool:
@@ -1128,9 +1191,19 @@ class ServiceDialoguePolicy:
             return self._choose_prompt_text(self.ADDRESS_REGION_FOLLOWUP_PROMPT)
         return self._choose_prompt_text(self.ADDRESS_PROMPT)
 
-    def _address_confirmation_prompt(self, address: str) -> str:
+    def _address_confirmation_prompt(
+        self,
+        address: str,
+        *,
+        use_known_address_prompt: bool = False,
+    ) -> str:
+        prompt_config = (
+            self.KNOWN_ADDRESS_CONFIRMATION_TEMPLATE
+            if use_known_address_prompt
+            else self.ADDRESS_CONFIRMATION_TEMPLATE
+        )
         return self._with_optional_ok_prefix(
-            self._choose_prompt_text(self.ADDRESS_CONFIRMATION_TEMPLATE, address=address)
+            self._choose_prompt_text(prompt_config, address=address)
         )
 
     def _product_arrival_prompt(self, scenario: Scenario) -> str:
@@ -1149,13 +1222,14 @@ class ServiceDialoguePolicy:
         runtime_state: ServiceRuntimeState,
         next_slot: str | None,
     ) -> ServicePolicyResult:
+        if scenario.request.request_type == "installation" and not runtime_state.product_arrival_checked:
+            return self._start_product_arrival_confirmation(
+                scenario=scenario,
+                runtime_state=runtime_state,
+                slot_updates=slot_updates,
+            )
+
         if not next_slot:
-            if scenario.request.request_type == "installation" and not runtime_state.product_arrival_checked:
-                return self._start_product_arrival_confirmation(
-                    scenario=scenario,
-                    runtime_state=runtime_state,
-                    slot_updates=slot_updates,
-                )
             return ServicePolicyResult(
                 reply=self._start_closing_sequence(scenario, runtime_state),
                 slot_updates=slot_updates,
@@ -1171,6 +1245,7 @@ class ServiceDialoguePolicy:
                     runtime_state=runtime_state,
                     address=known_address,
                     slot_updates=slot_updates,
+                    use_known_address_prompt=True,
                 )
             runtime_state.awaiting_full_address = True
             runtime_state.address_input_attempts = 0
