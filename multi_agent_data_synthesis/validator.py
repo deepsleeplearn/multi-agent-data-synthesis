@@ -1,6 +1,13 @@
 from __future__ import annotations
 
-from multi_agent_data_synthesis.schemas import DialogueSample, Scenario, effective_required_slots
+from multi_agent_data_synthesis.schemas import (
+    DialogueSample,
+    Scenario,
+    SERVICE_SPEAKER,
+    USER_SPEAKER,
+    effective_required_slots,
+    normalize_speaker,
+)
 
 
 def validate_dialogue(sample: DialogueSample) -> dict:
@@ -8,15 +15,19 @@ def validate_dialogue(sample: DialogueSample) -> dict:
 
     if not sample.transcript:
         issues.append("transcript is empty")
-    elif sample.transcript[0].speaker != "service":
-        issues.append("dialogue must start with service")
-
-    expected = "service"
-    for turn in sample.transcript:
-        if turn.speaker != expected:
-            issues.append(f"speaker order mismatch at round {turn.round_index}: expected {expected}")
-            break
-        expected = "user" if expected == "service" else "service"
+    else:
+        first_speaker = normalize_speaker(sample.transcript[0].speaker)
+        if first_speaker not in {SERVICE_SPEAKER, USER_SPEAKER}:
+            issues.append("dialogue must start with user or service")
+        else:
+            expected = first_speaker
+            for turn in sample.transcript:
+                if normalize_speaker(turn.speaker) != expected:
+                    issues.append(
+                        f"speaker order mismatch at round {turn.round_index}: expected {expected}"
+                    )
+                    break
+                expected = USER_SPEAKER if expected == SERVICE_SPEAKER else SERVICE_SPEAKER
 
     required_slots: list[str] | None = None
     if sample.scenario:

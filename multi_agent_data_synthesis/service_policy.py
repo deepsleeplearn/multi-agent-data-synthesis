@@ -4,7 +4,20 @@ import random
 import re
 from dataclasses import dataclass
 
-from multi_agent_data_synthesis.schemas import DialogueTurn, Scenario, effective_required_slots
+from multi_agent_data_synthesis.schemas import (
+    DialogueTurn,
+    Scenario,
+    SERVICE_SPEAKER,
+    USER_SPEAKER,
+    effective_required_slots,
+    normalize_speaker,
+)
+from multi_agent_data_synthesis.static_utterances import (
+    appointment_utterance,
+    ask_satisfaction_utterance,
+    end_utterance,
+    fee_collect_utterance,
+)
 
 
 MOBILE_PHONE_PATTERN = re.compile(r"^1[3-9]\d{9}$")
@@ -25,6 +38,9 @@ class ServiceRuntimeState:
     pending_address_confirmation: str = ""
     awaiting_full_address: bool = False
     address_input_attempts: int = 0
+    partial_address_candidate: str = ""
+    awaiting_closing_ack: bool = False
+    awaiting_satisfaction_rating: bool = False
 
 
 @dataclass
@@ -42,18 +58,13 @@ class ServiceDialoguePolicy:
     PHONE_KEYPAD_PROMPT = "请您在拨号盘上输入您的联系方式，并以#号键结束。"
     PHONE_KEYPAD_RETRY_PROMPT = "您输入的号码有误，请重新在拨号盘上输入您的联系方式，并以#号键结束"
     PHONE_CONFIRMATION_TEMPLATE = "号码是{phone}，对吗"
-    ISSUE_PROMPT = "请您简单描述一下当前需要处理的问题或安装需求。"
-    FAULT_ISSUE_PROMPT = "请问热水器现在是出现了什么问题？"
-    ADDRESS_PROMPT = "需要登记下您的地址，麻烦你完整的说下省、市、区、乡镇，精确到门牌号。"
-    ADDRESS_FOLLOWUP_PROMPT = "请再补充完整地址，需要包含省、市、区、乡镇，精确到门牌号。"
+    FAULT_ISSUE_PROMPT = "很高兴为您服务，请问{product}现在是出现了什么问题？"
+    ADDRESS_PROMPT = "需要登记下您的地址，麻烦您完整的说下省、市、区、乡镇，精确到门牌号。"
+    ADDRESS_DETAIL_FOLLOWUP_PROMPT = "请您继续提供一下小区、楼栋和门牌号。"
+    ADDRESS_REGION_FOLLOWUP_PROMPT = "请您再补充一下省、市、区和乡镇街道。"
     ADDRESS_CONFIRMATION_TEMPLATE = "跟您确认一下，地址是{address}，对吗？"
-    PRODUCT_ARRIVAL_PROMPT = "请问热水器到货了没？"
+    PRODUCT_ARRIVAL_PROMPT = "请问{product}到货了没？"
     PRODUCT_MODEL_PROMPT = "请问产品型号方便提供一下吗？"
-    AVAILABILITY_PROMPT = "请问您方便预约什么时间上门？"
-    PURCHASE_CHANNEL_PROMPT = "请问您是通过哪个渠道购买的呢？"
-    CLOSING_PROMPT = "这边先帮您登记好了，后续会有师傅与您联系，请您保持电话畅通。"
-    INSTALLATION_CLOSING_PROMPT = "这边先帮您登记好了，后续会有专人与您联系安装事宜，请您保持电话畅通。"
-
     # 每条话术支持配置为 [(文案, 权重), ...]，每次发送时使用 random.choices 按权重随机选择。
     SURNAME_PROMPT: PromptConfig = [("请问您贵姓", 1.0)]
     CONTACTABLE_PROMPT: PromptConfig = [("请问您当前这个来电号码能联系到您吗？", 1.0)]
@@ -62,24 +73,13 @@ class ServiceDialoguePolicy:
         ("您输入的号码有误，请重新在拨号盘上输入您的联系方式，并以#号键结束", 1.0)
     ]
     PHONE_CONFIRMATION_TEMPLATE: PromptConfig = [("号码是{phone}，对吗", 1.0)]
-    ISSUE_PROMPT: PromptConfig = [("请您简单描述一下当前需要处理的问题或安装需求。", 1.0)]
-    FAULT_ISSUE_PROMPT: PromptConfig = [("请问热水器现在是出现了什么问题？", 1.0)]
-    ADDRESS_PROMPT: PromptConfig = [
-        ("需要登记下您的地址，麻烦你完整的说下省、市、区、乡镇，精确到门牌号。", 1.0)
-    ]
-    ADDRESS_FOLLOWUP_PROMPT: PromptConfig = [
-        ("请再补充完整地址，需要包含省、市、区、乡镇，精确到门牌号。", 1.0)
-    ]
+    FAULT_ISSUE_PROMPT: PromptConfig = [("很高兴为您服务，请问{product}现在是出现了什么问题？", 1.0)]
+    ADDRESS_PROMPT: PromptConfig = [("需要登记下您的地址，麻烦您完整的说下省、市、区、乡镇，精确到门牌号。", 1.0)]
+    ADDRESS_DETAIL_FOLLOWUP_PROMPT: PromptConfig = [("请您继续提供一下小区、楼栋和门牌号。", 1.0)]
+    ADDRESS_REGION_FOLLOWUP_PROMPT: PromptConfig = [("请您再补充一下省、市、区和乡镇街道。", 1.0)]
     ADDRESS_CONFIRMATION_TEMPLATE: PromptConfig = [("跟您确认一下，地址是{address}，对吗？", 1.0)]
-    PRODUCT_ARRIVAL_PROMPT: PromptConfig = [("请问热水器到货了没？", 1.0)]
+    PRODUCT_ARRIVAL_PROMPT: PromptConfig = [("请问{product}到货了没？", 1.0)]
     PRODUCT_MODEL_PROMPT: PromptConfig = [("请问产品型号方便提供一下吗？", 1.0)]
-    AVAILABILITY_PROMPT: PromptConfig = [("请问您方便预约什么时间上门？", 1.0)]
-    PURCHASE_CHANNEL_PROMPT: PromptConfig = [("请问您是通过哪个渠道购买的呢？", 1.0)]
-    CLOSING_PROMPT: PromptConfig = [("这边先帮您登记好了，后续会有师傅与您联系，请您保持电话畅通。", 1.0)]
-    INSTALLATION_CLOSING_PROMPT: PromptConfig = [
-        ("这边先帮您登记好了，后续会有专人与您联系安装事宜，请您保持电话畅通。", 1.0)
-    ]
-
     def __init__(
         self,
         ok_prefix_probability: float = 1.0,
@@ -96,14 +96,26 @@ class ServiceDialoguePolicy:
         collected_slots: dict[str, str],
         runtime_state: ServiceRuntimeState,
     ) -> ServicePolicyResult:
-        if not any(turn.speaker == "service" for turn in transcript):
+        has_service_turn = any(normalize_speaker(turn.speaker) == SERVICE_SPEAKER for turn in transcript)
+        if not has_service_turn and not transcript:
             return ServicePolicyResult(
                 reply=self._build_opening_prompt(scenario),
                 slot_updates={},
                 is_ready_to_close=False,
             )
 
-        last_user_turn = self._last_turn_by_speaker(transcript, "user")
+        if not has_service_turn:
+            initial_user_turn = self._last_turn_by_speaker(transcript, USER_SPEAKER)
+            if initial_user_turn is None:
+                return ServicePolicyResult(reply="", slot_updates={}, is_ready_to_close=False)
+            return self._handle_initial_user_utterance(
+                scenario=scenario,
+                user_text=initial_user_turn.text,
+                collected_slots=collected_slots,
+                runtime_state=runtime_state,
+            )
+
+        last_user_turn = self._last_turn_by_speaker(transcript, USER_SPEAKER)
         if last_user_turn is None:
             return ServicePolicyResult(reply="", slot_updates={}, is_ready_to_close=False)
 
@@ -169,42 +181,65 @@ class ServiceDialoguePolicy:
                 slot_updates=slot_updates,
             )
 
-        next_slot = self._next_slot_to_request(
-            merged_slots,
-            required_slots,
-        )
-        if not next_slot:
-            if scenario.request.request_type == "installation" and not runtime_state.product_arrival_checked:
-                return self._start_product_arrival_confirmation(runtime_state=runtime_state)
-            return ServicePolicyResult(
-                reply=self._closing_prompt_for_scenario(scenario),
+        if runtime_state.awaiting_closing_ack:
+            return self._handle_closing_acknowledgement(
+                scenario=scenario,
                 slot_updates=slot_updates,
-                is_ready_to_close=True,
+                runtime_state=runtime_state,
             )
 
-        if next_slot == "phone":
-            runtime_state.expected_contactable_confirmation = True
-
-            if next_slot == "address":
-                known_address = self._service_known_address_value(scenario)
-                if known_address:
-                    return self._start_address_confirmation(
-                        runtime_state=runtime_state,
-                        address=known_address,
-                        slot_updates=slot_updates,
-                    )
-                runtime_state.awaiting_full_address = True
-                runtime_state.address_input_attempts = 0
-
-        return ServicePolicyResult(
-            reply=self._reply_for_next_slot(
+        if runtime_state.awaiting_satisfaction_rating:
+            return self._handle_satisfaction_rating(
                 scenario=scenario,
-                collected_slots=collected_slots,
+                user_text=last_user_turn.text,
                 slot_updates=slot_updates,
-                next_slot=next_slot,
-            ),
+                runtime_state=runtime_state,
+            )
+
+        next_slot = self._next_slot_to_request(merged_slots, required_slots)
+        return self._transition_to_next_slot(
+            scenario=scenario,
+            collected_slots=collected_slots,
             slot_updates=slot_updates,
-            is_ready_to_close=False,
+            runtime_state=runtime_state,
+            next_slot=next_slot,
+        )
+
+    def build_initial_user_utterance(self, scenario: Scenario) -> str:
+        action = "维修" if scenario.request.request_type == "fault" else "安装"
+        return f"{scenario.product.brand}{self._product_name(scenario)}需要{action}"
+
+    def _handle_initial_user_utterance(
+        self,
+        *,
+        scenario: Scenario,
+        user_text: str,
+        collected_slots: dict[str, str],
+        runtime_state: ServiceRuntimeState,
+    ) -> ServicePolicyResult:
+        slot_updates: dict[str, str] = {}
+        if "request_type" in collected_slots and not collected_slots["request_type"].strip():
+            slot_updates["request_type"] = scenario.request.request_type
+
+        if (
+            "issue_description" in collected_slots
+            and not collected_slots["issue_description"].strip()
+            and user_text.strip()
+            and self._normalize_prompt_text(user_text)
+            != self._normalize_prompt_text(self.build_initial_user_utterance(scenario))
+            and self._opening_response_contains_issue_detail(user_text)
+        ):
+            slot_updates["issue_description"] = user_text.strip()
+
+        merged_slots = dict(collected_slots)
+        merged_slots.update(slot_updates)
+        next_slot = self._next_slot_to_request(merged_slots, effective_required_slots(scenario))
+        return self._transition_to_next_slot(
+            scenario=scenario,
+            collected_slots=collected_slots,
+            slot_updates=slot_updates,
+            runtime_state=runtime_state,
+            next_slot=next_slot,
         )
 
     def _handle_contactable_confirmation(
@@ -228,36 +263,12 @@ class ServiceDialoguePolicy:
             merged_slots = dict(collected_slots)
             merged_slots.update(slot_updates)
             next_slot = self._next_slot_to_request(merged_slots, effective_required_slots(scenario))
-            if not next_slot:
-                if scenario.request.request_type == "installation" and not runtime_state.product_arrival_checked:
-                    return self._start_product_arrival_confirmation(
-                        runtime_state=runtime_state,
-                        slot_updates=slot_updates,
-                    )
-                return ServicePolicyResult(
-                    reply=self._closing_prompt_for_scenario(scenario),
-                    slot_updates=slot_updates,
-                    is_ready_to_close=True,
-                )
-            if next_slot == "address":
-                known_address = self._service_known_address_value(scenario)
-                if known_address:
-                    return self._start_address_confirmation(
-                        runtime_state=runtime_state,
-                        address=known_address,
-                        slot_updates=slot_updates,
-                    )
-                runtime_state.awaiting_full_address = True
-                runtime_state.address_input_attempts = 0
-            return ServicePolicyResult(
-                reply=self._reply_for_next_slot(
-                    scenario=scenario,
-                    collected_slots=collected_slots,
-                    slot_updates=slot_updates,
-                    next_slot=next_slot,
-                ),
+            return self._transition_to_next_slot(
+                scenario=scenario,
+                collected_slots=collected_slots,
                 slot_updates=slot_updates,
-                is_ready_to_close=False,
+                runtime_state=runtime_state,
+                next_slot=next_slot,
             )
 
         if intent == "no":
@@ -304,31 +315,12 @@ class ServiceDialoguePolicy:
             merged_slots = dict(collected_slots)
             merged_slots.update(slot_updates)
             next_slot = self._next_slot_to_request(merged_slots, effective_required_slots(scenario))
-            if not next_slot:
-                if scenario.request.request_type == "installation" and not runtime_state.product_arrival_checked:
-                    return self._start_product_arrival_confirmation(
-                        runtime_state=runtime_state,
-                        slot_updates=slot_updates,
-                    )
-                return ServicePolicyResult(
-                    reply=self._closing_prompt_for_scenario(scenario),
-                    slot_updates=slot_updates,
-                    is_ready_to_close=True,
-                )
-            if next_slot == "address":
-                known_address = self._service_known_address_value(scenario)
-                if known_address:
-                    return self._start_address_confirmation(
-                        runtime_state=runtime_state,
-                        address=known_address,
-                        slot_updates=slot_updates,
-                    )
-                runtime_state.awaiting_full_address = True
-                runtime_state.address_input_attempts = 0
-            return ServicePolicyResult(
-                reply=self._prompt_for_slot(next_slot, scenario),
+            return self._transition_to_next_slot(
+                scenario=scenario,
+                collected_slots=collected_slots,
                 slot_updates=slot_updates,
-                is_ready_to_close=False,
+                runtime_state=runtime_state,
+                next_slot=next_slot,
             )
 
         if intent == "no":
@@ -374,34 +366,40 @@ class ServiceDialoguePolicy:
             merged_slots = dict(collected_slots)
             merged_slots.update(slot_updates)
             next_slot = self._next_slot_to_request(merged_slots, effective_required_slots(scenario))
-            if not next_slot:
-                if scenario.request.request_type == "installation" and not runtime_state.product_arrival_checked:
-                    return self._start_product_arrival_confirmation(
-                        runtime_state=runtime_state,
-                        slot_updates=slot_updates,
-                    )
-                return ServicePolicyResult(
-                    reply=self._closing_prompt_for_scenario(scenario),
-                    slot_updates=slot_updates,
-                    is_ready_to_close=True,
-                )
-            if next_slot == "phone":
-                runtime_state.expected_contactable_confirmation = True
-            return ServicePolicyResult(
-                reply=self._reply_for_next_slot(
-                    scenario=scenario,
-                    collected_slots=collected_slots,
-                    slot_updates=slot_updates,
-                    next_slot=next_slot,
-                ),
+            return self._transition_to_next_slot(
+                scenario=scenario,
+                collected_slots=collected_slots,
                 slot_updates=slot_updates,
-                is_ready_to_close=False,
+                runtime_state=runtime_state,
+                next_slot=next_slot,
             )
 
         if intent == "no":
+            denial_address = self._extract_address_candidate_from_denial(
+                user_text=user_text,
+                confirmation_address=confirmation_address,
+            )
+            if denial_address:
+                runtime_state.awaiting_full_address = True
+                runtime_state.address_input_attempts = 1
+                runtime_state.pending_address_confirmation = ""
+                runtime_state.partial_address_candidate = denial_address
+                normalized_candidate = self._normalize_address_text(denial_address)
+                if self._is_complete_address(normalized_candidate, scenario.customer.address):
+                    return self._start_address_confirmation(
+                        runtime_state=runtime_state,
+                        address=denial_address,
+                        slot_updates=slot_updates,
+                    )
+                return ServicePolicyResult(
+                    reply=self._address_followup_prompt(normalized_candidate),
+                    slot_updates=slot_updates,
+                    is_ready_to_close=False,
+                )
             runtime_state.awaiting_full_address = True
             runtime_state.address_input_attempts = 0
             runtime_state.pending_address_confirmation = ""
+            runtime_state.partial_address_candidate = ""
             return ServicePolicyResult(
                 reply=self._address_prompt(),
                 slot_updates=slot_updates,
@@ -461,18 +459,22 @@ class ServiceDialoguePolicy:
     ) -> ServicePolicyResult:
         runtime_state.address_input_attempts += 1
         prepared_address = self._prepare_address_for_confirmation(user_text)
-        address_candidate = self._normalize_address_text(prepared_address)
+        combined_address = self._merge_address_candidate(
+            runtime_state.partial_address_candidate,
+            prepared_address,
+        )
+        address_candidate = self._normalize_address_text(combined_address)
+        runtime_state.partial_address_candidate = combined_address
 
         if self._is_complete_address(address_candidate, scenario.customer.address):
-            runtime_state.awaiting_full_address = False
             return self._start_address_confirmation(
                 runtime_state=runtime_state,
-                address=prepared_address,
+                address=combined_address,
                 slot_updates=slot_updates,
             )
 
         return ServicePolicyResult(
-            reply=self._address_followup_prompt(),
+            reply=self._address_followup_prompt(address_candidate),
             slot_updates=slot_updates,
             is_ready_to_close=False,
         )
@@ -490,7 +492,7 @@ class ServiceDialoguePolicy:
         if intent not in {"yes", "no"}:
             runtime_state.expected_product_arrival_confirmation = True
             return ServicePolicyResult(
-                reply=self._product_arrival_prompt(),
+                reply=self._product_arrival_prompt(scenario),
                 slot_updates=slot_updates,
                 is_ready_to_close=False,
             )
@@ -500,7 +502,46 @@ class ServiceDialoguePolicy:
         slot_updates = dict(slot_updates)
         slot_updates["product_arrived"] = "yes" if intent == "yes" else "no"
         return ServicePolicyResult(
-            reply=self._closing_prompt_for_scenario(scenario),
+            reply=self._start_closing_sequence(scenario, runtime_state),
+            slot_updates=slot_updates,
+            is_ready_to_close=False,
+        )
+
+    def _handle_closing_acknowledgement(
+        self,
+        *,
+        scenario: Scenario,
+        slot_updates: dict[str, str],
+        runtime_state: ServiceRuntimeState,
+    ) -> ServicePolicyResult:
+        runtime_state.awaiting_closing_ack = False
+        runtime_state.awaiting_satisfaction_rating = True
+        return ServicePolicyResult(
+            reply=self._fee_and_satisfaction_prompt(scenario),
+            slot_updates=slot_updates,
+            is_ready_to_close=False,
+        )
+
+    def _handle_satisfaction_rating(
+        self,
+        *,
+        scenario: Scenario,
+        user_text: str,
+        slot_updates: dict[str, str],
+        runtime_state: ServiceRuntimeState,
+    ) -> ServicePolicyResult:
+        score = self._extract_satisfaction_score(user_text)
+        if not score:
+            runtime_state.awaiting_satisfaction_rating = True
+            return ServicePolicyResult(
+                reply=self._satisfaction_prompt(),
+                slot_updates=slot_updates,
+                is_ready_to_close=False,
+            )
+
+        runtime_state.awaiting_satisfaction_rating = False
+        return ServicePolicyResult(
+            reply=self._end_prompt_for_scenario(scenario),
             slot_updates=slot_updates,
             is_ready_to_close=True,
         )
@@ -523,9 +564,14 @@ class ServiceDialoguePolicy:
             if previous_service_signature == self._normalize_prompt_text(self._build_opening_prompt(scenario)):
                 if self._opening_response_contains_issue_detail(user_text):
                     slot_updates["issue_description"] = user_text.strip()
-            elif previous_service_signature in (
-                self._prompt_signatures(self.ISSUE_PROMPT)
-                | self._prompt_signatures(self.FAULT_ISSUE_PROMPT)
+                elif (
+                    scenario.request.request_type == "installation"
+                    and self._classify_yes_no(user_text) == "yes"
+                ):
+                    slot_updates["issue_description"] = user_text.strip()
+            elif self._signature_matches_prompt(
+                previous_service_signature,
+                self._format_prompt_config(self.FAULT_ISSUE_PROMPT, product=self._product_name(scenario)),
             ):
                 slot_updates["issue_description"] = user_text.strip()
 
@@ -539,7 +585,7 @@ class ServiceDialoguePolicy:
         if (
             "surname" in collected_slots
             and not collected_slots["surname"].strip()
-            and previous_service_signature in self._prompt_signatures(self.SURNAME_PROMPT)
+            and self._signature_matches_prompt(previous_service_signature, self.SURNAME_PROMPT)
             and scenario.customer.surname in user_text
         ):
             slot_updates["surname"] = scenario.customer.surname
@@ -547,28 +593,10 @@ class ServiceDialoguePolicy:
         if (
             "product_model" in collected_slots
             and not collected_slots["product_model"].strip()
-            and previous_service_signature in self._prompt_signatures(self.PRODUCT_MODEL_PROMPT)
+            and self._signature_matches_prompt(previous_service_signature, self.PRODUCT_MODEL_PROMPT)
             and scenario.product.model in user_text
         ):
             slot_updates["product_model"] = scenario.product.model
-
-        if (
-            "availability" in collected_slots
-            and not collected_slots["availability"].strip()
-            and previous_service_signature in self._prompt_signatures(self.AVAILABILITY_PROMPT)
-            and scenario.request.availability
-            and scenario.request.availability in user_text
-        ):
-            slot_updates["availability"] = scenario.request.availability
-
-        if (
-            "purchase_channel" in collected_slots
-            and not collected_slots["purchase_channel"].strip()
-            and previous_service_signature in self._prompt_signatures(self.PURCHASE_CHANNEL_PROMPT)
-            and scenario.product.purchase_channel
-            and scenario.product.purchase_channel in user_text
-        ):
-            slot_updates["purchase_channel"] = scenario.product.purchase_channel
 
         return slot_updates
 
@@ -585,8 +613,6 @@ class ServiceDialoguePolicy:
             "phone",
             "address",
             "product_model",
-            "purchase_channel",
-            "availability",
             "request_type",
         ]
         for slot in priority:
@@ -603,18 +629,16 @@ class ServiceDialoguePolicy:
 
     def _prompt_for_slot(self, slot: str, scenario: Scenario) -> str:
         prompts = {
-            "issue_description": self._fault_issue_prompt()
+            "issue_description": self._fault_issue_prompt(scenario)
             if scenario.request.request_type == "fault"
-            else self._issue_prompt(),
+            else self._surname_prompt(),
             "surname": self._surname_prompt(),
             "phone": self._contactable_prompt(),
             "address": self._address_prompt(),
             "product_model": self._product_model_prompt(),
-            "purchase_channel": self._purchase_channel_prompt(),
-            "availability": self._availability_prompt(),
-            "request_type": self._issue_prompt(),
+            "request_type": self._surname_prompt(),
         }
-        return prompts.get(slot, self._issue_prompt())
+        return prompts.get(slot, self._surname_prompt())
 
     def _reply_for_next_slot(
         self,
@@ -652,14 +676,39 @@ class ServiceDialoguePolicy:
             return self.FAULT_ACKNOWLEDGEMENT_PREFIX
         return f"{self.FAULT_ACKNOWLEDGEMENT_PREFIX}，{normalized_reply}"
 
-    def _closing_prompt_for_scenario(self, scenario: Scenario) -> str:
-        if scenario.request.request_type == "installation":
-            return self._with_optional_ok_prefix(self._choose_prompt_text(self.INSTALLATION_CLOSING_PROMPT))
-        return self._with_optional_ok_prefix(self._choose_prompt_text(self.CLOSING_PROMPT))
+    def _start_closing_sequence(self, scenario: Scenario, runtime_state: ServiceRuntimeState) -> str:
+        runtime_state.awaiting_closing_ack = True
+        runtime_state.awaiting_satisfaction_rating = False
+        return self._appointment_prompt_for_scenario(scenario)
+
+    def _appointment_prompt_for_scenario(self, scenario: Scenario) -> str:
+        return appointment_utterance(
+            brand=scenario.product.brand,
+            category=self._product_name(scenario),
+            request_type=scenario.request.request_type,
+            call_start_time=scenario.call_start_time,
+        )
+
+    def _fee_and_satisfaction_prompt(self, scenario: Scenario) -> str:
+        return f"{self._fee_collect_prompt_for_scenario(scenario)} {self._satisfaction_prompt()}"
+
+    def _fee_collect_prompt_for_scenario(self, scenario: Scenario) -> str:
+        return fee_collect_utterance(request_type=scenario.request.request_type)
+
+    def _satisfaction_prompt(self) -> str:
+        return ask_satisfaction_utterance()
+
+    def _end_prompt_for_scenario(self, scenario: Scenario) -> str:
+        return end_utterance(brand=scenario.product.brand)
+
+    @staticmethod
+    def _extract_satisfaction_score(text: str) -> str:
+        match = re.search(r"[1-5]", text or "")
+        return match.group(0) if match else ""
 
     def _build_opening_prompt(self, scenario: Scenario) -> str:
         action = "维修" if scenario.request.request_type == "fault" else "安装"
-        return f"您好，很高兴为您服务，请问是美的空气能热水器需要{action}吗？"
+        return f"您好，很高兴为您服务，请问是{scenario.product.brand}{self._product_name(scenario)}需要{action}吗？"
 
     @staticmethod
     def _last_turn_by_speaker(
@@ -667,7 +716,7 @@ class ServiceDialoguePolicy:
         speaker: str,
     ) -> DialogueTurn | None:
         for turn in reversed(transcript):
-            if turn.speaker == speaker:
+            if normalize_speaker(turn.speaker) == speaker:
                 return turn
         return None
 
@@ -676,7 +725,7 @@ class ServiceDialoguePolicy:
         if len(transcript) < 2:
             return ""
         previous_turn = transcript[-2]
-        return previous_turn.text if previous_turn.speaker == "service" else ""
+        return previous_turn.text if normalize_speaker(previous_turn.speaker) == SERVICE_SPEAKER else ""
 
     @staticmethod
     def _classify_yes_no(text: str) -> str | None:
@@ -755,12 +804,13 @@ class ServiceDialoguePolicy:
     def _start_product_arrival_confirmation(
         self,
         *,
+        scenario: Scenario,
         runtime_state: ServiceRuntimeState,
         slot_updates: dict[str, str] | None = None,
     ) -> ServicePolicyResult:
         runtime_state.expected_product_arrival_confirmation = True
         return ServicePolicyResult(
-            reply=self._product_arrival_prompt(),
+            reply=self._product_arrival_prompt(scenario),
             slot_updates=slot_updates or {},
             is_ready_to_close=False,
         )
@@ -775,6 +825,7 @@ class ServiceDialoguePolicy:
         runtime_state.expected_address_confirmation = True
         runtime_state.awaiting_full_address = False
         runtime_state.pending_address_confirmation = address
+        runtime_state.partial_address_candidate = ""
         return ServicePolicyResult(
             reply=self._address_confirmation_prompt(address),
             slot_updates=slot_updates,
@@ -796,6 +847,37 @@ class ServiceDialoguePolicy:
         cleaned = re.split(r"[，,]\s*(?:麻烦|另外|还有|辛苦|谢谢|尽快|催一下|师傅)", cleaned, maxsplit=1)[0]
         return cleaned.strip().strip("，,。！？!?")
 
+    @classmethod
+    def _extract_address_candidate_from_denial(
+        cls,
+        *,
+        user_text: str,
+        confirmation_address: str,
+    ) -> str:
+        prepared = cls._prepare_address_for_confirmation(user_text)
+        if not prepared:
+            return ""
+
+        cleaned = prepared
+        cleanup_patterns = (
+            r"^(不对|不是这个地址|地址不对|不太对)[，,\s]*",
+        )
+        for pattern in cleanup_patterns:
+            cleaned = re.sub(pattern, "", cleaned)
+        cleaned = re.sub(r"^(正确地址是|地址是|是)[，,\s]*", "", cleaned)
+
+        cleaned = cleaned.strip("，,。！？!? ")
+        normalized = cls._normalize_address_text(cleaned)
+        normalized_confirmation = cls._normalize_address_text(confirmation_address)
+        if not normalized or normalized == normalized_confirmation:
+            return ""
+        if cls._address_has_admin_region(cleaned):
+            return cleaned
+        strong_detail_markers = r"(路|街|大道|巷|弄|胡同|小区|花园|公寓|苑|府|里|村|大厦|中心|广场|城|栋|幢|单元|号)"
+        if re.search(strong_detail_markers, normalized) and cls._address_has_detail_info(cleaned):
+            return cleaned
+        return ""
+
     @staticmethod
     def _normalize_address_text(text: str) -> str:
         return (
@@ -814,14 +896,79 @@ class ServiceDialoguePolicy:
         normalized_actual = cls._normalize_address_text(actual_address)
         if candidate == normalized_actual:
             return True
-        required_markers = ("省", "市", "区")
-        has_required_markers = all(marker in candidate for marker in required_markers)
-        has_house_number = bool(re.search(r"\d+", candidate))
+        return cls._address_has_region_info(candidate) and cls._address_has_detail_info(candidate)
+
+    @classmethod
+    def _address_has_region_info(cls, candidate: str) -> bool:
+        normalized = cls._normalize_address_text(candidate)
+        municipality_markers = ("北京市", "上海市", "天津市", "重庆市")
+        if any(marker in normalized for marker in municipality_markers):
+            return ("区" in normalized or "县" in normalized) and (
+                "街道" in normalized or "镇" in normalized or "乡" in normalized or "路" in normalized or "街" in normalized
+            )
         return (
-            has_required_markers
-            and has_house_number
-            and len(candidate) >= max(10, len(normalized_actual) // 2)
+            "市" in normalized
+            and ("区" in normalized or "县" in normalized)
+            and ("街道" in normalized or "镇" in normalized or "乡" in normalized or "路" in normalized or "街" in normalized)
         )
+
+    @classmethod
+    def _address_has_admin_region(cls, candidate: str) -> bool:
+        normalized = cls._normalize_address_text(candidate)
+        municipality_markers = ("北京市", "上海市", "天津市", "重庆市")
+        if any(marker in normalized for marker in municipality_markers):
+            return "区" in normalized or "县" in normalized
+        return ("省" in normalized or "市" in normalized) and ("区" in normalized or "县" in normalized)
+
+    @classmethod
+    def _address_has_detail_info(cls, candidate: str) -> bool:
+        normalized = cls._normalize_address_text(candidate)
+        has_room = bool(re.search(r"\d+\s*室", normalized))
+        has_building = bool(re.search(r"\d+\s*(?:栋|幢|座|号楼|楼|单元)", normalized))
+        has_community = bool(re.search(r"(小区|花园|公寓|苑|府|里|村|大厦|中心|广场|城)", normalized))
+        has_road_number = bool(re.search(r"(路|街|大道|巷|弄|胡同).*\d+号", normalized))
+        return has_room or (has_building and (has_community or has_road_number))
+
+    @classmethod
+    def _merge_address_candidate(cls, existing: str, new: str) -> str:
+        prepared_existing = cls._prepare_address_for_confirmation(existing)
+        prepared_new = cls._prepare_address_for_confirmation(new)
+        if not prepared_existing:
+            return prepared_new
+        if not prepared_new:
+            return prepared_existing
+
+        normalized_existing = cls._normalize_address_text(prepared_existing)
+        normalized_new = cls._normalize_address_text(prepared_new)
+        if normalized_existing in normalized_new:
+            return prepared_new
+        if normalized_new in normalized_existing:
+            return prepared_existing
+
+        existing_has_region = cls._address_has_region_info(prepared_existing)
+        existing_has_detail = cls._address_has_detail_info(prepared_existing)
+        new_has_region = cls._address_has_region_info(prepared_new)
+        new_has_detail = cls._address_has_detail_info(prepared_new)
+        existing_has_admin_region = cls._address_has_admin_region(prepared_existing)
+        new_has_admin_region = cls._address_has_admin_region(prepared_new)
+
+        if new_has_admin_region and not existing_has_admin_region and existing_has_detail and not new_has_detail:
+            return f"{prepared_new}{prepared_existing}"
+        if existing_has_admin_region and not new_has_admin_region and new_has_detail and not existing_has_detail:
+            return f"{prepared_existing}{prepared_new}"
+        return f"{prepared_existing}{prepared_new}"
+
+    @classmethod
+    def _address_followup_kind(cls, candidate: str) -> str:
+        has_region = cls._address_has_region_info(candidate)
+        has_detail = cls._address_has_detail_info(candidate)
+        if has_region and not has_detail:
+            return "detail"
+        if has_detail and not has_region:
+            return "region"
+        if not has_region and not has_detail:
+            return "full"
+        return "full"
 
     @staticmethod
     def _normalize_prompt_text(text: str) -> str:
@@ -856,6 +1003,15 @@ class ServiceDialoguePolicy:
     def _prompt_signatures(cls, prompt_config: str | PromptConfig) -> set[str]:
         texts, _ = cls._resolve_prompt_variants(prompt_config)
         return {cls._normalize_prompt_text(text) for text in texts if text.strip()}
+
+    @classmethod
+    def _signature_matches_prompt(cls, signature: str, prompt_config: str | PromptConfig) -> bool:
+        normalized_signature = cls._normalize_prompt_text(signature)
+        signatures = cls._prompt_signatures(prompt_config)
+        return normalized_signature in signatures or any(
+            normalized_signature.endswith(expected_signature)
+            for expected_signature in signatures
+        )
 
     @classmethod
     def summarize_prompt_variants(
@@ -895,8 +1051,12 @@ class ServiceDialoguePolicy:
     @classmethod
     def is_address_collection_prompt(cls, text: str) -> bool:
         normalized = cls._normalize_prompt_text(text)
-        return normalized in cls._prompt_signatures(cls.ADDRESS_PROMPT) or normalized in cls._prompt_signatures(
-            cls.ADDRESS_FOLLOWUP_PROMPT
+        return (
+            normalized in cls._prompt_signatures(cls.ADDRESS_PROMPT)
+            or normalized in cls._prompt_signatures(cls.ADDRESS_DETAIL_FOLLOWUP_PROMPT)
+            or normalized in cls._prompt_signatures(cls.ADDRESS_REGION_FOLLOWUP_PROMPT)
+            or normalized.startswith("请您继续提供一下")
+            or normalized.startswith("请您再补充一下省、市、区")
         )
 
     def _choose_prompt_text(self, prompt_config: str | PromptConfig, **format_kwargs: str) -> str:
@@ -927,31 +1087,92 @@ class ServiceDialoguePolicy:
     def _phone_confirmation_prompt(self, phone: str) -> str:
         return self._with_optional_ok_prefix(self._choose_prompt_text(self.PHONE_CONFIRMATION_TEMPLATE, phone=phone))
 
-    def _issue_prompt(self) -> str:
-        return self._choose_prompt_text(self.ISSUE_PROMPT)
+    @staticmethod
+    def _format_prompt_config(prompt_config: PromptConfig, **format_kwargs: str) -> PromptConfig:
+        formatted: PromptConfig = []
+        for variant in prompt_config:
+            if isinstance(variant, str):
+                formatted.append(variant.format(**format_kwargs))
+                continue
+            text, weight = variant
+            formatted.append((text.format(**format_kwargs), weight))
+        return formatted
 
-    def _fault_issue_prompt(self) -> str:
-        return self._with_optional_ok_prefix(self._choose_prompt_text(self.FAULT_ISSUE_PROMPT))
+    @staticmethod
+    def _product_name(scenario: Scenario) -> str:
+        value = str(scenario.product.category).strip()
+        return value or "空气能热水器"
+
+    def _fault_issue_prompt(self, scenario: Scenario) -> str:
+        prompt_config = self._format_prompt_config(self.FAULT_ISSUE_PROMPT, product=self._product_name(scenario))
+        return self._with_optional_ok_prefix(self._choose_prompt_text(prompt_config))
 
     def _address_prompt(self) -> str:
         return self._with_optional_ok_prefix(self._choose_prompt_text(self.ADDRESS_PROMPT))
 
-    def _address_followup_prompt(self) -> str:
-        return self._choose_prompt_text(self.ADDRESS_FOLLOWUP_PROMPT)
+    def _address_followup_prompt(self, candidate: str) -> str:
+        followup_kind = self._address_followup_kind(candidate)
+        if followup_kind == "detail":
+            return self._choose_prompt_text(self.ADDRESS_DETAIL_FOLLOWUP_PROMPT)
+        if followup_kind == "region":
+            return self._choose_prompt_text(self.ADDRESS_REGION_FOLLOWUP_PROMPT)
+        return self._choose_prompt_text(self.ADDRESS_PROMPT)
 
     def _address_confirmation_prompt(self, address: str) -> str:
         return self._with_optional_ok_prefix(
             self._choose_prompt_text(self.ADDRESS_CONFIRMATION_TEMPLATE, address=address)
         )
 
-    def _product_arrival_prompt(self) -> str:
-        return self._with_optional_ok_prefix(self._choose_prompt_text(self.PRODUCT_ARRIVAL_PROMPT))
+    def _product_arrival_prompt(self, scenario: Scenario) -> str:
+        prompt_config = self._format_prompt_config(self.PRODUCT_ARRIVAL_PROMPT, product=self._product_name(scenario))
+        return self._with_optional_ok_prefix(self._choose_prompt_text(prompt_config))
 
     def _product_model_prompt(self) -> str:
         return self._choose_prompt_text(self.PRODUCT_MODEL_PROMPT)
 
-    def _availability_prompt(self) -> str:
-        return self._choose_prompt_text(self.AVAILABILITY_PROMPT)
+    def _transition_to_next_slot(
+        self,
+        *,
+        scenario: Scenario,
+        collected_slots: dict[str, str],
+        slot_updates: dict[str, str],
+        runtime_state: ServiceRuntimeState,
+        next_slot: str | None,
+    ) -> ServicePolicyResult:
+        if not next_slot:
+            if scenario.request.request_type == "installation" and not runtime_state.product_arrival_checked:
+                return self._start_product_arrival_confirmation(
+                    scenario=scenario,
+                    runtime_state=runtime_state,
+                    slot_updates=slot_updates,
+                )
+            return ServicePolicyResult(
+                reply=self._start_closing_sequence(scenario, runtime_state),
+                slot_updates=slot_updates,
+                is_ready_to_close=False,
+            )
 
-    def _purchase_channel_prompt(self) -> str:
-        return self._choose_prompt_text(self.PURCHASE_CHANNEL_PROMPT)
+        if next_slot == "phone":
+            runtime_state.expected_contactable_confirmation = True
+        elif next_slot == "address":
+            known_address = self._service_known_address_value(scenario)
+            if known_address:
+                return self._start_address_confirmation(
+                    runtime_state=runtime_state,
+                    address=known_address,
+                    slot_updates=slot_updates,
+                )
+            runtime_state.awaiting_full_address = True
+            runtime_state.address_input_attempts = 0
+            runtime_state.partial_address_candidate = ""
+
+        return ServicePolicyResult(
+            reply=self._reply_for_next_slot(
+                scenario=scenario,
+                collected_slots=collected_slots,
+                slot_updates=slot_updates,
+                next_slot=next_slot,
+            ),
+            slot_updates=slot_updates,
+            is_ready_to_close=False,
+        )

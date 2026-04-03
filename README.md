@@ -8,10 +8,10 @@
 - `scenario_factory` 负责加载和扩展场景，以支持批量生成
 - `HiddenSettingsTool` 负责调用 LLM 为 `user_agent` 生成随机隐藏设定，并写入 JSONL 历史库做去重
 
-当前领域限制是硬约束：
+当前领域限制：
 
 - 品牌只能是 `美的`
-- 品类只能是 `空气能热水器` 或 `空气能热水机`
+- 品类默认是 `空气能热水器`，也支持传入其他产品名称
 - 不符合约束的场景在加载阶段会直接报错
 
 ## 目录结构
@@ -59,15 +59,30 @@ pip install -r requirements.txt
 把 `.env.example` 复制为 `.env`，填入你的 OpenAI-compatible 接口：
 
 ```env
-OPENAI_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
+OPENAI_BASE_URL=https://aimpapi.midea.com/t-aigc/mip-chat-app/openai/standard/v1/chat/completions
 OPENAI_API_KEY=your_api_key
-OPENAI_MODEL=qwen-plus
+OPENAI_MODEL=gpt-5.3-chat
+OPENAI_USER=your_user
+USER_AGENT_MODEL=${OPENAI_MODEL}
+SERVICE_AGENT_MODEL=${OPENAI_MODEL}
+MODEL_REQUEST_PROFILES={"gpt-5.3-chat":{"include_temperature":false,"include_max_tokens":false}}
 SERVICE_OK_PREFIX_PROBABILITY=0.7
 MAX_CONCURRENCY=5
+INSTALLATION_REQUEST_PROBABILITY=0.5
+CURRENT_CALL_CONTACTABLE_PROBABILITY=0.75
+SERVICE_KNOWN_ADDRESS_PROBABILITY=0.2
+SERVICE_KNOWN_ADDRESS_MATCHES_PROBABILITY=0.8
+ADDRESS_CONFIRMATION_DIRECT_CORRECTION_PROBABILITY=0.5
 ```
 
+- `MODEL_REQUEST_PROFILES`: 按模型名控制请求体参数的 JSON 配置；例如 `gpt-5.3-chat` 可关闭 `temperature` 和 `max_tokens`，也可改为其他参数名
 - `SERVICE_OK_PREFIX_PROBABILITY`: 客服固定话术前带 `好的，` 的概率，`0` 表示从不带，`1` 表示总是带
 - `MAX_CONCURRENCY`: 按场景异步并发调用模型的默认并发数
+- `INSTALLATION_REQUEST_PROBABILITY`: 扩展场景数量时，安装类场景被采样到的概率，`0` 表示全部偏向维修，`1` 表示全部偏向安装
+- `CURRENT_CALL_CONTACTABLE_PROBABILITY`: 隐藏设定生成时，“当前来电号码可以联系到用户”的概率，`0` 表示总是不可联系，`1` 表示总是可联系
+- `SERVICE_KNOWN_ADDRESS_PROBABILITY`: 隐藏设定生成时，客服侧事先能看到地址的概率
+- `SERVICE_KNOWN_ADDRESS_MATCHES_PROBABILITY`: 当客服侧能看到地址时，这个地址与用户真实地址一致的概率
+- `ADDRESS_CONFIRMATION_DIRECT_CORRECTION_PROBABILITY`: 当客服看到的地址不对时，用户会在否定那一句里直接给出更正地址的概率；否则通常只先表示否定，等客服下一轮继续追问
 
 3. 生成数据
 
@@ -116,11 +131,11 @@ python -m multi_agent_data_synthesis.cli generate --count 1 --auto-hidden-settin
 `data/seed_scenarios.json` 中每个场景包含：
 
 - `product`: 家电品牌、品类、型号、购买渠道
-- `customer`: 用户姓名、姓氏、电话、地址、画像
+- `customer`: 用户姓名、姓氏、电话、地址、画像、说话方式
 - `request`: 诉求类型、问题描述、期望结果、可预约时间
 - `required_slots`: 客服必须收集到的字段
 
-其中 `product.brand` 必须为 `美的`，`product.category` 必须为 `空气能热水器` 或 `空气能热水机`。
+其中 `product.brand` 必须为 `美的`；`product.category` 为空时会默认补成 `空气能热水器`，也可以传入其他产品名称用于话术渲染。
 
 ## 下一步建议
 

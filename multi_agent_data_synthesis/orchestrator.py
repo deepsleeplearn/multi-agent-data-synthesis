@@ -10,6 +10,9 @@ from multi_agent_data_synthesis.schemas import (
     DialogueSample,
     DialogueTurn,
     Scenario,
+    SERVICE_SPEAKER,
+    USER_SPEAKER,
+    display_speaker,
     effective_required_slots,
 )
 from multi_agent_data_synthesis.service_policy import ServiceRuntimeState
@@ -60,6 +63,17 @@ class DialogueOrchestrator:
         rounds_limit = scenario.max_turns or self.config.max_rounds
         runtime_state = ServiceRuntimeState()
 
+        initial_user_utterance = self.service_agent.build_initial_user_utterance(scenario)
+        transcript.append(
+            DialogueTurn(
+                speaker=USER_SPEAKER,
+                text=initial_user_utterance,
+                round_index=1,
+            )
+        )
+        if self.show_dialogue_progress:
+            await self._print_turn_async(USER_SPEAKER, 1, initial_user_utterance)
+
         opening_action = self.service_agent.respond(
             scenario=scenario,
             transcript=transcript,
@@ -68,55 +82,68 @@ class DialogueOrchestrator:
         )
         transcript.append(
             DialogueTurn(
-                speaker="service",
+                speaker=SERVICE_SPEAKER,
                 text=opening_action["reply"],
                 round_index=1,
             )
         )
         if self.show_dialogue_progress:
-            await self._print_turn_async("service", 1, opening_action["reply"])
+            await self._print_turn_async(SERVICE_SPEAKER, 1, opening_action["reply"])
 
-        for round_index in range(1, rounds_limit + 1):
-            user_action = await self.user_agent.respond_async(
-                scenario=scenario,
-                transcript=transcript,
-                round_index=round_index,
-            )
-            transcript.append(
-                DialogueTurn(
-                    speaker="user",
-                    text=user_action["reply"],
+        self._merge_slots(collected_slots, opening_action["slot_updates"], required_slots)
+        self._merge_slots(
+            collected_slots,
+            opening_action["slot_updates"],
+            ["phone_contactable", "phone_contact_owner", "phone_collection_attempts", "product_arrived"],
+        )
+
+        ready_to_close = opening_action["is_ready_to_close"]
+        if not (ready_to_close and self._all_required_slots_filled(collected_slots, required_slots)):
+            for round_index in range(2, rounds_limit + 1):
+                user_action = await self.user_agent.respond_async(
+                    scenario=scenario,
+                    transcript=transcript,
                     round_index=round_index,
                 )
-            )
-            if self.show_dialogue_progress:
-                await self._print_turn_async("user", round_index, user_action["reply"])
-
-            service_action = self.service_agent.respond(
-                scenario=scenario,
-                transcript=transcript,
-                collected_slots=collected_slots,
-                runtime_state=runtime_state,
-            )
-            self._merge_slots(collected_slots, service_action["slot_updates"], required_slots)
-            self._merge_slots(
-                collected_slots,
-                service_action["slot_updates"],
-                ["phone_contactable", "phone_contact_owner", "phone_collection_attempts", "product_arrived"],
-            )
-            transcript.append(
-                DialogueTurn(
-                    speaker="service",
-                    text=service_action["reply"],
-                    round_index=round_index + 1,
+                transcript.append(
+                    DialogueTurn(
+                        speaker=USER_SPEAKER,
+                        text=user_action["reply"],
+                        round_index=round_index,
+                    )
                 )
-            )
-            if self.show_dialogue_progress and service_action["reply"]:
-                await self._print_turn_async("service", round_index + 1, service_action["reply"])
+                if self.show_dialogue_progress:
+                    await self._print_turn_async(USER_SPEAKER, round_index, user_action["reply"])
 
-            ready_to_close = service_action["is_ready_to_close"]
-            if ready_to_close and self._all_required_slots_filled(collected_slots, required_slots):
-                break
+                service_action = self.service_agent.respond(
+                    scenario=scenario,
+                    transcript=transcript,
+                    collected_slots=collected_slots,
+                    runtime_state=runtime_state,
+                )
+                self._merge_slots(collected_slots, service_action["slot_updates"], required_slots)
+                self._merge_slots(
+                    collected_slots,
+                    service_action["slot_updates"],
+                    ["phone_contactable", "phone_contact_owner", "phone_collection_attempts", "product_arrived"],
+                )
+                transcript.append(
+                    DialogueTurn(
+                        speaker=SERVICE_SPEAKER,
+                        text=service_action["reply"],
+                        round_index=round_index,
+                    )
+                )
+                if self.show_dialogue_progress and service_action["reply"]:
+                    await self._print_turn_async(
+                        SERVICE_SPEAKER,
+                        round_index,
+                        service_action["reply"],
+                    )
+
+                ready_to_close = service_action["is_ready_to_close"]
+                if ready_to_close and self._all_required_slots_filled(collected_slots, required_slots):
+                    break
 
         missing_slots = [
             slot for slot in required_slots if not collected_slots.get(slot, "").strip()
@@ -175,10 +202,11 @@ class DialogueOrchestrator:
             f"Product: {scenario.product.brand} {scenario.product.category} {scenario.product.model}"
         )
         print(f"Request Type: {scenario.request.request_type}")
+        print(f"Call Start Time: {scenario.call_start_time or 'N/A'}")
 
     @staticmethod
     def _print_turn(speaker: str, round_index: int, text: str) -> None:
-        print(f"[Round {round_index}] {speaker}: {text}")
+        print(f"[{round_index}] {display_speaker(speaker)}: {text}")
 
     @staticmethod
     def _print_dialogue_footer(sample: DialogueSample) -> None:

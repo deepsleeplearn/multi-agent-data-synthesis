@@ -5,7 +5,19 @@ from typing import Any
 
 
 SUPPORTED_BRANDS = {"美的"}
-SUPPORTED_CATEGORIES = {"空气能热水器", "空气能热水机"}
+DEFAULT_PRODUCT_CATEGORY = "空气能热水器"
+SERVICE_SPEAKER = "service"
+USER_SPEAKER = "user"
+SPEAKER_DISPLAY_NAMES = {
+    SERVICE_SPEAKER: "客服",
+    USER_SPEAKER: "用户",
+}
+SPEAKER_ALIASES = {
+    SERVICE_SPEAKER: SERVICE_SPEAKER,
+    "客服": SERVICE_SPEAKER,
+    USER_SPEAKER: USER_SPEAKER,
+    "用户": USER_SPEAKER,
+}
 
 SLOT_DESCRIPTIONS = {
     "issue_description": "用户对故障或安装诉求的具体描述",
@@ -23,11 +35,20 @@ SLOT_DESCRIPTIONS = {
 }
 
 
+def normalize_speaker(speaker: str) -> str:
+    normalized = str(speaker or "").strip()
+    return SPEAKER_ALIASES.get(normalized, normalized)
+
+
+def display_speaker(speaker: str) -> str:
+    return SPEAKER_DISPLAY_NAMES.get(normalize_speaker(speaker), str(speaker or "").strip())
+
+
 @dataclass
 class ProductProfile:
     brand: str
-    category: str
     model: str
+    category: str = DEFAULT_PRODUCT_CATEGORY
     purchase_channel: str = ""
 
 
@@ -38,6 +59,7 @@ class CustomerProfile:
     phone: str
     address: str
     persona: str
+    speech_style: str = ""
 
 
 @dataclass
@@ -54,6 +76,7 @@ class Scenario:
     product: ProductProfile
     customer: CustomerProfile
     request: ServiceRequest
+    call_start_time: str = ""
     hidden_context: dict[str, Any] = field(default_factory=dict)
     required_slots: list[str] = field(default_factory=list)
     max_turns: int = 20
@@ -61,11 +84,15 @@ class Scenario:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "Scenario":
+        product_data = dict(data["product"])
+        if not str(product_data.get("category", "")).strip():
+            product_data["category"] = DEFAULT_PRODUCT_CATEGORY
         scenario = cls(
             scenario_id=data["scenario_id"],
-            product=ProductProfile(**data["product"]),
+            product=ProductProfile(**product_data),
             customer=CustomerProfile(**data["customer"]),
             request=ServiceRequest(**data["request"]),
+            call_start_time=str(data.get("call_start_time", "")).strip(),
             hidden_context=dict(data.get("hidden_context", {})),
             required_slots=list(data.get("required_slots", [])),
             max_turns=int(data.get("max_turns", 20)),
@@ -79,6 +106,9 @@ class Scenario:
 
     def clone_with_id(self, scenario_id: str) -> "Scenario":
         return replace(self, scenario_id=scenario_id)
+
+    def with_call_start_time(self, call_start_time: str) -> "Scenario":
+        return replace(self, call_start_time=call_start_time)
 
     def with_generated_hidden_settings(
         self,
@@ -99,10 +129,9 @@ class Scenario:
             raise ValueError(
                 f"Unsupported brand '{self.product.brand}'. Only {sorted(SUPPORTED_BRANDS)} are allowed."
             )
-        if self.product.category not in SUPPORTED_CATEGORIES:
+        if not str(self.product.category).strip():
             raise ValueError(
-                "Unsupported category "
-                f"'{self.product.category}'. Only {sorted(SUPPORTED_CATEGORIES)} are allowed."
+                "Product category must not be empty."
             )
 
 
@@ -114,6 +143,13 @@ class DialogueTurn:
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+    def to_display_dict(self) -> dict[str, Any]:
+        return {
+            "speaker": display_speaker(self.speaker),
+            "text": self.text,
+            "round_index": self.round_index,
+        }
 
 
 @dataclass
@@ -129,9 +165,11 @@ class DialogueSample:
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
-        data["dialogue_process"] = data["transcript"]
+        display_transcript = [turn.to_display_dict() for turn in self.transcript]
+        data["transcript"] = display_transcript
+        data["dialogue_process"] = display_transcript
         data["dialogue_text"] = "\n".join(
-            f"{turn['speaker']}: {turn['text']}" for turn in data["transcript"]
+            f"{turn['speaker']}: {turn['text']}" for turn in display_transcript
         )
         data["related_info"] = {
             "product": data["scenario"]["product"],
@@ -150,7 +188,7 @@ class DialogueSample:
 def effective_required_slots(scenario: Scenario) -> list[str]:
     skip_slots: set[str] = set()
     if scenario.request.request_type == "fault":
-        skip_slots.update({"product_model", "availability"})
+        skip_slots.update({"product_model", "availability", "purchase_channel"})
     if scenario.request.request_type == "installation":
-        skip_slots.update({"product_model", "availability"})
+        skip_slots.update({"product_model", "availability", "purchase_channel"})
     return [slot for slot in scenario.required_slots if slot not in skip_slots]

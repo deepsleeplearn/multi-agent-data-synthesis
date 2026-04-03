@@ -21,6 +21,7 @@ VARIABLE_FIELDS = (
     "phone",
     "address",
     "persona",
+    "speech_style",
     "issue",
     "desired_resolution",
     "availability",
@@ -134,9 +135,16 @@ class HiddenSettingsTool:
                 model=self.config.user_agent_model,
                 messages=self._build_messages(scenario, similar_context, rejection_feedback),
                 temperature=0.95,
-                max_tokens=1200,
             )
-            candidate = self._normalize_generated_payload(payload, scenario.request.request_type)
+            try:
+                candidate = self._normalize_generated_payload(
+                    payload,
+                    scenario.request.request_type,
+                    scenario_id=scenario.scenario_id,
+                )
+            except ValueError as error:
+                rejection_feedback = self._build_validation_feedback(attempt, str(error))
+                continue
             self._attach_contact_plan(scenario.scenario_id, candidate)
             self._attach_address_plan(scenario.scenario_id, candidate)
             self._attach_installation_plan(candidate)
@@ -193,9 +201,16 @@ class HiddenSettingsTool:
                 model=self.config.user_agent_model,
                 messages=self._build_messages(scenario, similar_context, rejection_feedback),
                 temperature=0.95,
-                max_tokens=1200,
             )
-            candidate = self._normalize_generated_payload(payload, scenario.request.request_type)
+            try:
+                candidate = self._normalize_generated_payload(
+                    payload,
+                    scenario.request.request_type,
+                    scenario_id=scenario.scenario_id,
+                )
+            except ValueError as error:
+                rejection_feedback = self._build_validation_feedback(attempt, str(error))
+                continue
             self._attach_contact_plan(scenario.scenario_id, candidate)
             self._attach_address_plan(scenario.scenario_id, candidate)
             self._attach_installation_plan(candidate)
@@ -255,37 +270,40 @@ class HiddenSettingsTool:
         similar_context: str,
         rejection_feedback: str,
     ) -> list[dict[str, str]]:
-        system_prompt = """你是一个家电客服数据生成工具，负责给 user_agent 生成隐藏设定。
+        product_name = str(scenario.product.category).strip() or "空气能热水器"
+        system_prompt = f"""你是一个家电客服数据生成工具，负责给 user_agent 生成隐藏设定。
 
 任务约束：
-1. 只生成美的(家用)空气能热水机/器的中文客服场景。
+1. 只生成美的(家用){product_name}的中文客服场景。
 2. 生成的内容必须是用户视角隐藏信息，供 user_agent 使用。
 3. 输出必须具体、自然、生活化，避免模板化和高相似复用。
 4. 电话、地址、用户画像、问题细节、预约时间、历史尝试等都要有变化。
-5. 只返回一个 JSON 对象，不要解释。
+5. 用户画像与说话方式要拆开写，二者都要具体，方便塑造人物。
+6. 只返回一个 JSON 对象，不要解释。
 
 输出 JSON 结构：
-{
-  "customer": {
+{{
+  "customer": {{
     "full_name": "张三",
     "surname": "张",
     "phone": "13800000000",
     "address": "完整中文地址",
-    "persona": "用户性格和说话风格"
-  },
-  "request": {
+    "persona": "用户背景、性格、关注点等人物画像",
+    "speech_style": "用户说话方式，如简短/啰嗦/条理清晰/略带停顿等"
+  }},
+  "request": {{
     "request_type": "fault 或 installation",
     "issue": "具体诉求描述",
     "desired_resolution": "希望客服帮助达成什么",
     "availability": "可预约时间"
-  },
-  "hidden_context": {
+  }},
+  "hidden_context": {{
     "emotion": "情绪状态",
     "urgency": "紧急程度",
     "prior_attempts": "此前是否做过处理或排查",
     "special_constraints": "上门限制、家庭情况或其他备注"
-  }
-}
+  }}
+}}
 """
         user_prompt = f"""请基于以下产品骨架生成新的隐藏设定：
 
@@ -302,7 +320,10 @@ class HiddenSettingsTool:
 - 用户信息必须完整，可直接用于后续对话
 - 地址必须是合理的中国地址
 - 电话必须是 11 位中国大陆手机号
+- 故障场景下，大多数 issue 只写 1 个具体故障点，只保留一个核心现象
+- 只有极少数场景可以写 2 个相关故障点，但不要扩展到第 3 个问题，也不要堆砌过多结果后果或温度对比数据
 - 安装场景与故障场景要区分明显
+- 用户画像与说话方式都要具体，且不要写成同一句的重复改写
 
 历史去重参考：
 {similar_context}
@@ -342,6 +363,7 @@ class HiddenSettingsTool:
                         f"姓名:{customer.get('full_name', '')}",
                         f"地址:{customer.get('address', '')}",
                         f"画像:{customer.get('persona', '')}",
+                        f"说话方式:{customer.get('speech_style', '')}",
                         f"问题:{request.get('issue', '')}",
                         f"期望:{request.get('desired_resolution', '')}",
                         f"预约:{request.get('availability', '')}",
@@ -355,6 +377,7 @@ class HiddenSettingsTool:
         self,
         payload: dict[str, Any],
         expected_request_type: str,
+        scenario_id: str = "",
     ) -> dict[str, Any]:
         customer = payload.get("customer") or {}
         request = payload.get("request") or {}
@@ -364,9 +387,10 @@ class HiddenSettingsTool:
             "customer": {
                 "full_name": str(customer.get("full_name", "")).strip(),
                 "surname": str(customer.get("surname", "")).strip(),
-                "phone": str(customer.get("phone", "")).strip(),
+                "phone": self._normalize_mobile_phone(customer.get("phone", "")),
                 "address": str(customer.get("address", "")).strip(),
                 "persona": str(customer.get("persona", "")).strip(),
+                "speech_style": str(customer.get("speech_style", "")).strip(),
             },
             "request": {
                 "request_type": expected_request_type,
@@ -381,12 +405,92 @@ class HiddenSettingsTool:
             },
         }
 
-        if len(normalized["customer"]["phone"]) != 11 or not normalized["customer"]["phone"].isdigit():
-            raise ValueError("Generated hidden settings contain invalid phone number.")
+        self._validate_issue_description(
+            normalized["request"]["issue"],
+            normalized["request"]["request_type"],
+            scenario_id=scenario_id,
+        )
         for group_name, group in normalized.items():
             if any(not value for value in group.values()) and group_name != "hidden_context":
                 raise ValueError(f"Generated hidden settings missing required fields in {group_name}.")
         return normalized
+
+    @staticmethod
+    def _normalize_mobile_phone(raw_phone: Any) -> str:
+        phone = str(raw_phone or "").strip()
+        digits = re.sub(r"\D", "", phone)
+
+        if digits.startswith("0086") and len(digits) > 11:
+            digits = digits[4:]
+        elif digits.startswith("86") and len(digits) > 11:
+            digits = digits[2:]
+
+        if not re.fullmatch(r"1[3-9]\d{9}", digits):
+            raise ValueError("Generated hidden settings contain invalid phone number.")
+        return digits
+
+    def _validate_issue_description(
+        self,
+        issue_text: str,
+        request_type: str,
+        scenario_id: str = "",
+    ) -> None:
+        issue = str(issue_text or "").strip()
+        if not issue:
+            raise ValueError("Generated hidden settings missing request issue.")
+        if request_type != "fault":
+            return
+        symptom_count = self._count_fault_symptom_clauses(issue)
+        if symptom_count <= 1:
+            return
+        if symptom_count > 2:
+            raise ValueError("Generated hidden settings issue contains too many fault symptoms.")
+        if not self._issue_allows_multi_fault(scenario_id, issue):
+            raise ValueError("Generated hidden settings issue should usually describe only one fault symptom.")
+
+    @classmethod
+    def _count_fault_symptom_clauses(cls, issue_text: str) -> int:
+        normalized = re.sub(r"\s+", "", issue_text or "")
+        if not normalized:
+            return 0
+
+        clauses = re.split(r"[，,；;。！？、]|(?:还有|而且|并且|同时|另外|又|还会|还总是|还老是)", normalized)
+        symptom_pattern = re.compile(
+            r"(故障码|报码|报错|报警|显示|不加热|不制热|没热水|热水不稳定|忽冷忽热|温度上不去|升温慢|制热慢|"
+            r"热水.{0,6}(不稳定|不稳|不足|异常)|出水温度|水温.{0,6}(异常|不稳|过低|过高)|"
+            r"热水.{0,6}(中断|出不来|没有|没了)|出水.{0,6}(常温|不热|偏冷)|达不到设定水温|"
+            r"漏水|渗水|滴水|异响|噪音|嗡嗡|轰鸣|不启动|启动不了|无法启动|跳闸|断电|停机|不出热水)"
+        )
+        filler_pattern = re.compile(
+            r"^(嗯|嗯嗯|是|是的|对|对的|哎对|好的|需要维修|来报修|报修|想报修|这个热水器|家里这个热水器)+$"
+        )
+
+        count = 0
+        for clause in clauses:
+            part = clause.strip()
+            if not part or filler_pattern.fullmatch(part):
+                continue
+            if symptom_pattern.search(part):
+                count += 1
+        return count
+
+    def _issue_allows_multi_fault(self, scenario_id: str, issue_text: str) -> bool:
+        if not scenario_id or not issue_text:
+            return False
+        digest = hashlib.sha256(f"{scenario_id}:multi_fault:{issue_text}".encode("utf-8")).digest()
+        score = int.from_bytes(digest[:8], byteorder="big", signed=False) / 2**64
+        return score < self.config.hidden_settings_multi_fault_probability
+
+    @staticmethod
+    def _build_validation_feedback(attempt: int, error_message: str) -> str:
+        return (
+            "上一次输出不合规，不能直接使用。\n"
+            f"- 第 {attempt} 次失败原因: {error_message}\n"
+            "- 请重新生成完整 JSON。\n"
+            "- 手机号必须是 11 位中国大陆手机号，只保留号码本体，不要附带备注、空格或分隔符。\n"
+            "- 故障场景下，绝大多数 issue 只保留 1 个核心故障现象；只有极少数场景可写 2 个相关故障点。\n"
+            "- 即使允许双故障点，也不要扩展到第 3 个问题，不要堆砌温度数据或过多后果描述。\n"
+        )
 
     def _attach_contact_plan(self, scenario_id: str, candidate: dict[str, Any]) -> None:
         rng = random.Random(self._seed_for_scenario(scenario_id))
@@ -452,6 +556,7 @@ class HiddenSettingsTool:
         address_round_2 = actual_address
         service_known_address_value = ""
         service_known_address_matches_actual = False
+        address_confirmation_no_reply = "不对。"
 
         if service_knows_address:
             service_known_address_matches_actual = (
@@ -462,15 +567,33 @@ class HiddenSettingsTool:
                 if service_known_address_matches_actual
                 else self._generate_stale_address(actual_address, rng)
             )
+            if not service_known_address_matches_actual:
+                if rng.random() < self.config.address_confirmation_direct_correction_probability:
+                    correction_address = (
+                        actual_address if rng.random() < 0.7 else self._generate_partial_address(actual_address)
+                    )
+                    address_confirmation_no_reply = f"不对，正确地址是{correction_address}。"
+                else:
+                    address_confirmation_no_reply = rng.choice(
+                        [
+                            "不对，不是这个地址。",
+                            "不对，地址不对。",
+                            "不是这个地址。",
+                        ]
+                    )
 
         if rng.random() < self.config.address_collection_followup_probability:
-            address_round_1 = self._generate_partial_address(actual_address)
+            if rng.random() < 0.5:
+                address_round_1 = self._generate_partial_address(actual_address)
+            else:
+                address_round_1 = self._generate_detail_address(actual_address)
 
         candidate["hidden_context"].update(
             {
                 "service_known_address": service_knows_address,
                 "service_known_address_value": service_known_address_value,
                 "service_known_address_matches_actual": service_known_address_matches_actual,
+                "address_confirmation_no_reply": address_confirmation_no_reply,
                 "address_input_round_1": address_round_1,
                 "address_input_round_2": address_round_2,
             }
@@ -490,6 +613,7 @@ class HiddenSettingsTool:
             "phone": candidate["customer"]["phone"],
             "address": candidate["customer"]["address"],
             "persona": candidate["customer"]["persona"],
+            "speech_style": candidate["customer"]["speech_style"],
             "issue": candidate["request"]["issue"],
             "desired_resolution": candidate["request"]["desired_resolution"],
             "availability": candidate["request"]["availability"],
@@ -506,6 +630,7 @@ class HiddenSettingsTool:
             "phone": record.generated_customer.get("phone", ""),
             "address": record.generated_customer.get("address", ""),
             "persona": record.generated_customer.get("persona", ""),
+            "speech_style": record.generated_customer.get("speech_style", ""),
             "issue": record.generated_request.get("issue", ""),
             "desired_resolution": record.generated_request.get("desired_resolution", ""),
             "availability": record.generated_request.get("availability", ""),
@@ -566,10 +691,11 @@ class HiddenSettingsTool:
         return (
             f"上一次生成在第 {attempt} 次尝试中被拒绝。\n"
             f"原因：duplicate_rate={duplicate_rate:.3f}, similarity_score={similarity_score:.3f}。\n"
-            "请显著拉开以下字段差异：姓名、地址、用户画像、问题细节、预约时间、既往处理、上门限制。\n"
+            "请显著拉开以下字段差异：姓名、地址、用户画像、说话方式、问题细节、预约时间、既往处理、上门限制。\n"
             f"最相似历史样本问题：{most_similar_record.generated_request.get('issue', '')}\n"
             f"最相似历史样本地址：{most_similar_record.generated_customer.get('address', '')}\n"
-            f"最相似历史样本画像：{most_similar_record.generated_customer.get('persona', '')}"
+            f"最相似历史样本画像：{most_similar_record.generated_customer.get('persona', '')}\n"
+            f"最相似历史样本说话方式：{most_similar_record.generated_customer.get('speech_style', '')}"
         )
 
     @staticmethod
@@ -631,6 +757,23 @@ class HiddenSettingsTool:
             if partial != address and partial.strip():
                 return partial.strip(" ，,。")
         return address[: max(6, len(address) // 2)].strip(" ，,。")
+
+    @staticmethod
+    def _generate_detail_address(address: str) -> str:
+        split_patterns = [
+            r".*?(?<=街道)",
+            r".*?(?<=镇)",
+            r".*?(?<=乡)",
+            r".*?(?<=区)",
+            r".*?(?<=县)",
+        ]
+        for pattern in split_patterns:
+            match = re.match(pattern, address)
+            if match:
+                detail = address[match.end() :].strip(" ，,。")
+                if detail:
+                    return detail
+        return address[max(0, len(address) // 2) :].strip(" ，,。")
 
     @staticmethod
     def _generate_stale_address(address: str, rng: random.Random) -> str:

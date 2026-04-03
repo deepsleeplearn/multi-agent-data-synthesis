@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -16,11 +17,40 @@ ENV_PATH = ROOT_DIR / ".env"
 if load_dotenv:
     load_dotenv(ENV_PATH, override=False)
 
+LLMS = {
+    "gpt-4o": {
+        "base_url": "https://aimpapi.midea.com/t-aigc/mip-chat-app/openai/standard/v1/chat/completions",
+        "api_key": "msk-32f9a642470a34097797176b81f814dd947a3cc868530c76d2b490db689f79ed",
+        "user": "guojian34"
+    },
+    "gpt-5.3-chat": {
+        "base_url": "https://aimpapi.midea.com/t-aigc/mip-chat-app/openai/standard/v1/chat/completions",
+        "api_key": "msk-e3034ea0ae3d04bc6ce8534cabed92d3a7029ccc85be32101e052a8b163e21a4",
+        "user": "guojian34"
+    }
+}
+
+DEFAULT_MODEL_REQUEST_PROFILES = {
+    "default": {
+        "include_temperature": True,
+        "include_max_tokens": True,
+        "temperature_param": "temperature",
+        "max_tokens_param": "max_tokens",
+        "include_enable_thinking": True,
+        "enable_thinking_param": "enable_thinking",
+    },
+    "gpt-5.3-chat": {
+        "include_temperature": False,
+        "include_max_tokens": False,
+    },
+}
+
 
 @dataclass(frozen=True)
 class AppConfig:
     openai_base_url: str
     openai_api_key: str
+    user: str
     default_model: str
     user_agent_model: str
     service_agent_model: str
@@ -35,26 +65,61 @@ class AppConfig:
     hidden_settings_similarity_threshold: float
     hidden_settings_duplicate_threshold: float
     hidden_settings_max_attempts: int
+    hidden_settings_multi_fault_probability: float
+    installation_request_probability: float
     current_call_contactable_probability: float
     phone_collection_second_attempt_probability: float
     phone_collection_third_attempt_probability: float
     service_known_address_probability: float
     service_known_address_matches_probability: float
     address_collection_followup_probability: float
+    address_confirmation_direct_correction_probability: float
+
+
+def load_model_request_profiles() -> dict[str, dict[str, object]]:
+    profiles = {
+        model_name: dict(profile)
+        for model_name, profile in DEFAULT_MODEL_REQUEST_PROFILES.items()
+    }
+    raw = os.getenv("MODEL_REQUEST_PROFILES", "").strip()
+    if not raw:
+        return profiles
+
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError("MODEL_REQUEST_PROFILES must be valid JSON.") from exc
+
+    if not isinstance(parsed, dict):
+        raise ValueError("MODEL_REQUEST_PROFILES must be a JSON object.")
+
+    for model_name, profile in parsed.items():
+        if not isinstance(profile, dict):
+            raise ValueError("Each MODEL_REQUEST_PROFILES entry must be a JSON object.")
+        merged = dict(profiles.get(model_name, {}))
+        merged.update(profile)
+        profiles[str(model_name)] = merged
+
+    return profiles
 
 
 def load_config() -> AppConfig:
-    api_key = os.getenv("OPENAI_API_KEY", "sk-a5735e44c73347978f9a4664ef8bea7d").strip()
+    default_model = os.getenv("OPENAI_MODEL", "gpt-4o").strip()
+    model_defaults = LLMS.get(default_model, {})
+    api_key = os.getenv("OPENAI_API_KEY", model_defaults.get("api_key", "")).strip()
     if not api_key:
         raise ValueError("Missing OPENAI_API_KEY. Set it in environment variables or .env.")
 
-    default_model = os.getenv("OPENAI_MODEL", "qwen3.5-plus").strip()
+    base_url = os.getenv("OPENAI_BASE_URL", model_defaults.get("base_url", "")).strip()
+    if not base_url:
+        raise ValueError("Missing OPENAI_BASE_URL. Set it in environment variables or .env.")
+
+    user = os.getenv("OPENAI_USER", model_defaults.get("user", "")).strip()
+
     return AppConfig(
-        openai_base_url=os.getenv(
-            "OPENAI_BASE_URL",
-            "https://dashscope.aliyuncs.com/compatible-mode/v1",
-        ).strip(),
+        openai_base_url=base_url,
         openai_api_key=api_key,
+        user=user,
         default_model=default_model,
         user_agent_model=os.getenv("USER_AGENT_MODEL", default_model).strip(),
         service_agent_model=os.getenv("SERVICE_AGENT_MODEL", default_model).strip(),
@@ -73,8 +138,14 @@ def load_config() -> AppConfig:
             os.getenv("HIDDEN_SETTINGS_DUPLICATE_THRESHOLD", "0.5")
         ),
         hidden_settings_max_attempts=int(os.getenv("HIDDEN_SETTINGS_MAX_ATTEMPTS", "6")),
+        hidden_settings_multi_fault_probability=float(
+            os.getenv("HIDDEN_SETTINGS_MULTI_FAULT_PROBABILITY", "0.1")
+        ),
+        installation_request_probability=float(
+            os.getenv("INSTALLATION_REQUEST_PROBABILITY", "0.5")
+        ),
         current_call_contactable_probability=float(
-            os.getenv("CURRENT_CALL_CONTACTABLE_PROBABILITY", "0.75")
+            os.getenv("CURRENT_CALL_CONTACTABLE_PROBABILITY", "0.1")
         ),
         phone_collection_second_attempt_probability=float(
             os.getenv("PHONE_COLLECTION_SECOND_ATTEMPT_PROBABILITY", "0.35")
@@ -90,5 +161,8 @@ def load_config() -> AppConfig:
         ),
         address_collection_followup_probability=float(
             os.getenv("ADDRESS_COLLECTION_FOLLOWUP_PROBABILITY", "0.35")
+        ),
+        address_confirmation_direct_correction_probability=float(
+            os.getenv("ADDRESS_CONFIRMATION_DIRECT_CORRECTION_PROBABILITY", "0.5")
         ),
     )

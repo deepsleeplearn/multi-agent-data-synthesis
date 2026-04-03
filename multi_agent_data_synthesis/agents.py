@@ -81,3 +81,6 @@ class ServiceAgent:
             "slot_updates": result.slot_updates,
             "is_ready_to_close": result.is_ready_to_close,
         }
+
+    def build_initial_user_utterance(self, scenario: Scenario) -> str:
+        return self.policy.build_initial_user_utterance(scenario)

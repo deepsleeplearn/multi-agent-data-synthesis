@@ -12,7 +12,8 @@
       "surname": "张",
       "phone": "13800138001",
       "address": "上海市浦东新区锦绣路1888弄6号1202室",
-      "persona": "上班族，讲话清楚，但希望尽快安排处理"
+      "persona": "上班族，希望尽快安排处理",
+      "speech_style": "表达清楚，语速偏快，通常说话比较简短"
     },
     "request": {
       "request_type": "fault",
@@ -49,7 +50,8 @@
       "surname": "王",
       "phone": "13900139002",
       "address": "杭州市余杭区五常大道666号3幢1单元802室",
-      "persona": "语气客气，希望尽快预约安装"
+      "persona": "语气客气，希望尽快预约安装",
+      "speech_style": "说话偏简洁，确认信息时会顺着流程快速回答"
     },
     "request": {
       "request_type": "installation",

@@ -5,6 +5,9 @@ from multi_agent_data_synthesis.schemas import (
     SLOT_DESCRIPTIONS,
     DialogueTurn,
     Scenario,
+    SERVICE_SPEAKER,
+    display_speaker,
+    normalize_speaker,
     effective_required_slots,
 )
 
@@ -12,7 +15,7 @@ from multi_agent_data_synthesis.schemas import (
 def format_transcript(transcript: list[DialogueTurn]) -> str:
     if not transcript:
         return "暂无历史对话。"
-    return "\n".join(f"{turn.speaker}: {turn.text}" for turn in transcript)
+    return "\n".join(f"{display_speaker(turn.speaker)}: {turn.text}" for turn in transcript)
 
 
 def format_slot_state(required_slots: list[str], collected_slots: dict[str, str]) -> str:
@@ -34,7 +37,7 @@ def count_phone_keypad_prompts(transcript: list[DialogueTurn]) -> int:
     return sum(
         1
         for turn in transcript
-        if turn.speaker == "service" and "拨号盘上输入您的联系方式" in turn.text
+        if normalize_speaker(turn.speaker) == SERVICE_SPEAKER and "拨号盘上输入您的联系方式" in turn.text
     )
 
 
@@ -49,18 +52,6 @@ def next_phone_input_value(scenario: Scenario, transcript: list[DialogueTurn]) -
     if keypad_prompt_count == 2:
         return str(hidden_context.get("phone_input_round_2", "")).strip() or "无"
     return str(hidden_context.get("phone_input_round_3", "")).strip() or "无"
-
-
-def count_address_collection_prompts(transcript: list[DialogueTurn]) -> int:
-    return sum(
-        1
-        for turn in transcript
-        if turn.speaker == "service"
-        and (
-            "麻烦你完整的说下省、市、区、乡镇，精确到门牌号" in turn.text
-            or "请再补充完整地址" in turn.text
-        )
-    )
 
 
 def next_address_input_value(scenario: Scenario, transcript: list[DialogueTurn]) -> str:
@@ -78,7 +69,8 @@ def count_phone_keypad_prompts(transcript: list[DialogueTurn]) -> int:
     return sum(
         1
         for turn in transcript
-        if turn.speaker == "service" and ServiceDialoguePolicy.is_phone_keypad_prompt(turn.text)
+        if normalize_speaker(turn.speaker) == SERVICE_SPEAKER
+        and ServiceDialoguePolicy.is_phone_keypad_prompt(turn.text)
     )
 
 
@@ -86,7 +78,8 @@ def count_address_collection_prompts(transcript: list[DialogueTurn]) -> int:
     return sum(
         1
         for turn in transcript
-        if turn.speaker == "service" and ServiceDialoguePolicy.is_address_collection_prompt(turn.text)
+        if normalize_speaker(turn.speaker) == SERVICE_SPEAKER
+        and ServiceDialoguePolicy.is_address_collection_prompt(turn.text)
     )
 
 
@@ -137,6 +130,9 @@ def build_user_agent_messages(
     address_input_round_2 = str(
         scenario.hidden_context.get("address_input_round_2", scenario.customer.address)
     ).strip()
+    address_confirmation_no_reply = str(
+        scenario.hidden_context.get("address_confirmation_no_reply", "不对。")
+    ).strip()
     product_arrived = "是" if str(scenario.hidden_context.get("product_arrived", "yes")).strip().lower() == "yes" else "否"
     expression_mode_note = """
 首轮表达方式补充要求：
@@ -144,7 +140,8 @@ def build_user_agent_messages(
 2. 第一种：在确认“是来报修/安装”的同时，顺带自然说出当前故障现象或安装需求。
 3. 第二种：第一轮只做简短确认，比如“对，是的”“嗯，需要”，先不要展开故障或安装细节，等客服继续追问后再说。
 4. 如果这一轮还没被客服明确追问故障现象、安装需求、问题描述，就不要为了补全信息而强行多说。
-5. 两种方式都要自然，不能像在背规则。
+5. 故障场景下，默认只围绕“问题或安装描述”里的 1 个核心故障点表达；只有当隐藏设定本身明确包含 2 个相关故障点时，才允许自然提到这 2 个，不要扩展到第 3 个。
+6. 两种方式都要自然，不能像在背规则。
 """.strip()
     user_prompt = f"""当前是第 {round_index} 轮。
 
@@ -154,11 +151,13 @@ def build_user_agent_messages(
 - 用户电话: {scenario.customer.phone}
 - 用户地址: {scenario.customer.address}
 - 用户画像: {scenario.customer.persona}
+- 用户说话方式: {scenario.customer.speech_style or '未特别设定'}
 - 产品品牌: {scenario.product.brand}
 - 产品品类: {scenario.product.category}
 - 产品型号: {scenario.product.model}
 - 购买渠道: {scenario.product.purchase_channel or '未提供'}
 - 诉求类型: {scenario.request.request_type}
+- 通话开始时间: {scenario.call_start_time or '未提供'}
 - 问题或安装描述: {scenario.request.issue}
 - 希望结果: {scenario.request.desired_resolution}
 - 可预约时间: {scenario.request.availability or '未提供'}
@@ -173,10 +172,11 @@ def build_user_agent_messages(
 - 客服侧是否已知地址: {service_known_address}
 - 若客服已知地址，客服掌握的地址内容: {service_known_address_value}
 - 若客服已知地址，该地址是否与真实地址一致: {service_known_address_matches_actual}
-- 若客服要求完整报地址，第 1 次应答: {address_input_round_1}
-- 若客服继续追问完整地址，第 2 次应答: {address_input_round_2}
-- 当前已被要求完整报地址的次数: {count_address_collection_prompts(transcript)}
-- 如果这轮正被要求完整报地址，本轮应答: {next_address_input_value(scenario, transcript)}
+- 若客服核对了错误地址，你这一轮应答: {address_confirmation_no_reply}
+- 若客服第一次询问地址信息，第 1 次应答: {address_input_round_1}
+- 若客服继续追问剩余地址细节，第 2 次应答: {address_input_round_2}
+- 当前已被要求提供地址信息的次数: {count_address_collection_prompts(transcript)}
+- 如果这轮正被要求补充地址信息，本轮应答: {next_address_input_value(scenario, transcript)}
 - 额外隐藏设定:
 {format_hidden_context(scenario.hidden_context)}
 
@@ -187,14 +187,18 @@ def build_user_agent_messages(
 
 回复规则：
 1. 如果客服第一句是在确认是否需要维修/安装，你要先确认并自然说明来电原因。
-2. 如果客服问“请问您贵姓”，无论前面是否带“好的”，都只回答姓氏相关信息。
-3. 如果客服问当前来电号码能否联系到你，严格按照隐藏设定回答；如果不能联系，可以说明留谁的号码，但不要直接口述完整号码。
-4. 如果客服要求你在拨号盘上输入联系方式并以#号键结束，只输出本轮应输入的内容，不要附带任何解释。
-5. 如果客服用“号码是某个号码，对吗”这类话术核对号码，无论前面是否带“好的”，都根据事实回答对或不对。
-6. 如果客服用“跟您确认一下，地址是某个地址，对吗？”这类话术核对地址，无论前面是否带“好的”，都要根据隐藏设定回答对或不对；如果不对，不要在这一轮一次性补全全部地址，等客服让你完整报地址后再按隐藏设定回答。
-7. 如果客服要求完整报地址，就按本轮应答内容回复；如果第一次只说了半截地址，等客服继续追问后再补全。完整地址说完后，如果客服再按固定话术核对地址，就只回答是否正确。
-8. 如果客服问热水器或者产品到货了没，就按隐藏设定回答，说话不需要太正式，口语化些，并且说话可以简洁也可啰嗦，但最后简洁些。
-9. 除了客服明确问到的内容，不要主动额外泄露地址、型号、电话号码。
+2. 故障场景下，默认只围绕隐藏设定中的 1 个故障点来描述；只有当隐藏设定本身已经明确给了 2 个相关故障点时，才可以一起提到，但不要再继续追加第 3 个问题或过多温度对比数据。
+3. 如果客服问“请问您贵姓”，无论前面是否带“好的”或其他安抚前缀，都只回答姓氏相关信息，不要重复之前已经说过的别的信息。
+4. 如果客服问当前来电号码能否联系到你，严格按照隐藏设定回答；如果不能联系，可以说明留谁的号码，但不要直接口述完整号码。
+5. 如果客服要求你在拨号盘上输入联系方式并以#号键结束，只输出本轮应输入的内容，不要附带任何解释。
+6. 如果客服用“号码是某个号码，对吗”这类话术核对号码，无论前面是否带“好的”，都根据事实回答对或不对。
+7. 如果客服用“跟您确认一下，地址是某个地址，对吗？”这类话术核对地址，无论前面是否带“好的”，都要根据隐藏设定回答；如果地址正确，通常只简短表示肯定，不要重复完整地址；如果地址不对，就优先按“若客服核对了错误地址，你这一轮应答”来回复，这一轮可以只是表达否定，也可以顺带直接给更正地址。
+8. 如果客服第一次问地址，你可以先说大地址，也可以先说细地址；如果客服继续追问缺失部分，就按本轮应答内容补充，也可以直接给出完整地址。完整地址确认完后，如果客服再按固定话术核对地址，就只做简短确认。
+9. 如果客服问产品或者产品到货了没，就按隐藏设定回答，说话不需要太正式，口语化些，并且说话可以简洁也可啰嗦，但最后简洁些。
+10. 如果客服通知“工单已受理成功”并说明后续联系时间，这一轮通常只做简短确认，例如“好的”。
+11. 如果客服要求你对本次通话按 1 到 5 打分，固定回复“1”。
+12. 除了客服明确问到的内容，不要主动额外泄露地址、型号、电话号码。
+13. 回复风格要明显符合“用户画像”和“用户说话方式”；如果设定为简短就少说，如果设定为啰嗦就自然多解释一点，如果设定为略有停顿或结巴，只能轻微体现，不能夸张到影响理解。
 
 请直接给出 JSON。"""
     return [

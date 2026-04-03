@@ -94,7 +94,9 @@ def run_generate(args: argparse.Namespace) -> None:
 
 async def run_generate_async(args: argparse.Namespace) -> None:
     config = load_config()
-    factory = ScenarioFactory()
+    factory = ScenarioFactory(
+        installation_request_probability=config.installation_request_probability,
+    )
     scenarios = factory.load_from_file(args.scenario_file)
     scenarios = factory.expand_to_count(scenarios, args.count)
 
@@ -122,7 +124,9 @@ def run_generate_hidden_settings(args: argparse.Namespace) -> None:
 
 async def run_generate_hidden_settings_async(args: argparse.Namespace) -> None:
     config = load_config()
-    factory = ScenarioFactory()
+    factory = ScenarioFactory(
+        installation_request_probability=config.installation_request_probability,
+    )
     scenarios = factory.load_from_file(args.scenario_file)
     scenarios = factory.expand_to_count(scenarios, args.count)
 
