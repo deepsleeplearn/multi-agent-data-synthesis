@@ -44,11 +44,29 @@ def build_config(
     phone_collection_invalid_short_probability: float = 0.34,
     phone_collection_invalid_long_probability: float = 0.33,
     phone_collection_invalid_pattern_probability: float = 0.33,
+    phone_collection_invalid_digit_mismatch_probability: float = 0.33,
     service_known_address_probability: float = 0.2,
     service_known_address_matches_probability: float = 0.8,
     address_collection_followup_probability: float = 0.35,
+    address_segmented_reply_probability: float | None = None,
+    address_segment_rounds_weights: dict[str, float] | None = None,
+    address_segment_strategy_weights: dict[str, float] | None = None,
+    address_input_omit_province_city_suffix_probability: float = 0.0,
     address_confirmation_direct_correction_probability: float = 0.5,
 ) -> AppConfig:
+    if address_segmented_reply_probability is None:
+        address_segmented_reply_probability = address_collection_followup_probability
+    if address_segment_rounds_weights is None:
+        address_segment_rounds_weights = {"2": 0.45, "3": 0.35, "4": 0.20}
+    if address_segment_strategy_weights is None:
+        address_segment_strategy_weights = {
+            "province_city__district__locality__detail": 0.20,
+            "province_city_district__locality__detail": 0.30,
+            "province_city__district_locality__detail": 0.15,
+            "province_city__district__locality_detail": 0.10,
+            "province_city_district_locality__detail": 0.15,
+            "province_city_district__locality_detail": 0.10,
+        }
     return AppConfig(
         openai_base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
         openai_api_key="sk-a5735e44c73347978f9a4664ef8bea7d",
@@ -76,9 +94,14 @@ def build_config(
         phone_collection_invalid_short_probability=phone_collection_invalid_short_probability,
         phone_collection_invalid_long_probability=phone_collection_invalid_long_probability,
         phone_collection_invalid_pattern_probability=phone_collection_invalid_pattern_probability,
+        phone_collection_invalid_digit_mismatch_probability=phone_collection_invalid_digit_mismatch_probability,
         service_known_address_probability=service_known_address_probability,
         service_known_address_matches_probability=service_known_address_matches_probability,
         address_collection_followup_probability=address_collection_followup_probability,
+        address_segmented_reply_probability=address_segmented_reply_probability,
+        address_segment_rounds_weights=address_segment_rounds_weights,
+        address_segment_strategy_weights=address_segment_strategy_weights,
+        address_input_omit_province_city_suffix_probability=address_input_omit_province_city_suffix_probability,
         address_confirmation_direct_correction_probability=address_confirmation_direct_correction_probability,
     )
 
@@ -775,6 +798,7 @@ class UserPromptTests(unittest.TestCase):
                     phone_collection_invalid_short_probability=1.0,
                     phone_collection_invalid_long_probability=0.0,
                     phone_collection_invalid_pattern_probability=0.0,
+                    phone_collection_invalid_digit_mismatch_probability=0.0,
                 ),
             )
 
@@ -794,6 +818,7 @@ class UserPromptTests(unittest.TestCase):
                     phone_collection_invalid_short_probability=0.0,
                     phone_collection_invalid_long_probability=1.0,
                     phone_collection_invalid_pattern_probability=0.0,
+                    phone_collection_invalid_digit_mismatch_probability=0.0,
                 ),
             )
 
@@ -813,6 +838,7 @@ class UserPromptTests(unittest.TestCase):
                     phone_collection_invalid_short_probability=0.0,
                     phone_collection_invalid_long_probability=0.0,
                     phone_collection_invalid_pattern_probability=1.0,
+                    phone_collection_invalid_digit_mismatch_probability=0.0,
                 ),
             )
 
@@ -822,6 +848,33 @@ class UserPromptTests(unittest.TestCase):
             self.assertTrue(invalid_input.endswith("#"))
             self.assertEqual(len(digits), 11)
             self.assertIsNone(re.fullmatch(r"1[3-9]\d{9}", digits))
+
+    def test_invalid_phone_input_can_force_digit_mismatch_variant(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store_path = Path(temp_dir) / "hidden_settings_history.jsonl"
+            tool = HiddenSettingsTool(
+                SequenceFakeClient([]),
+                build_config(
+                    store_path,
+                    phone_collection_invalid_short_probability=0.0,
+                    phone_collection_invalid_long_probability=0.0,
+                    phone_collection_invalid_pattern_probability=0.0,
+                    phone_collection_invalid_digit_mismatch_probability=1.0,
+                ),
+            )
+
+            valid_phone = "13876543210"
+            invalid_input = tool._generate_invalid_phone_input(random.Random(0), valid_phone)
+            digits = re.sub(r"\D", "", invalid_input)
+            digit_difference_count = sum(
+                expected != actual for expected, actual in zip(valid_phone, digits)
+            )
+
+            self.assertTrue(invalid_input.endswith("#"))
+            self.assertEqual(len(digits), 11)
+            self.assertIsNotNone(re.fullmatch(r"1[3-9]\d{9}", digits))
+            self.assertNotEqual(digits, valid_phone)
+            self.assertIn(digit_difference_count, (1, 2))
 
     def test_backup_phone_plan_can_require_third_attempt(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -935,13 +988,145 @@ class UserPromptTests(unittest.TestCase):
             generated = tool.generate_for_scenario(build_base_scenario())
 
             self.assertFalse(generated.hidden_context["service_known_address"])
+            self.assertGreaterEqual(len(generated.hidden_context["address_input_rounds"]), 2)
             self.assertNotEqual(
                 generated.hidden_context["address_input_round_1"],
                 generated.customer.address,
             )
             self.assertEqual(
-                generated.hidden_context["address_input_round_2"],
+                "".join(generated.hidden_context["address_input_rounds"]),
                 generated.customer.address,
+            )
+
+    def test_address_followup_plan_can_force_specific_round_count_and_strategy(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store_path = Path(temp_dir) / "hidden_settings_history.jsonl"
+            tool = HiddenSettingsTool(
+                SequenceFakeClient(
+                    [
+                        build_candidate(
+                            full_name="赵欣",
+                            surname="赵",
+                            phone="13876543210",
+                            address="江苏省扬州市宝应县安宜镇宝应碧桂园3幢5层502室",
+                            persona="语气温和，但希望客服快一点登记完",
+                            speech_style="整体简洁，确认信息时会按流程快速回答",
+                            issue="空气能热水器加热速度很慢，想尽快约人看一下",
+                            desired_resolution="尽快安排人员上门检查机器情况",
+                            availability="周日下午两点后",
+                            emotion="有些担心",
+                            urgency="中",
+                            prior_attempts="暂时还没有自行处理",
+                            special_constraints="最好周末联系",
+                        )
+                    ]
+                ),
+                build_config(
+                    store_path,
+                    service_known_address_probability=0.0,
+                    address_collection_followup_probability=1.0,
+                    address_segmented_reply_probability=1.0,
+                    address_segment_rounds_weights={"2": 0.0, "3": 1.0, "4": 0.0},
+                    address_segment_strategy_weights={
+                        "province_city_district__locality__detail": 1.0,
+                        "province_city__district__locality__detail": 0.0,
+                        "province_city__district_locality__detail": 0.0,
+                        "province_city__district__locality_detail": 0.0,
+                        "province_city_district_locality__detail": 0.0,
+                        "province_city_district__locality_detail": 0.0,
+                    },
+                ),
+            )
+
+            generated = tool.generate_for_scenario(build_base_scenario())
+
+            self.assertEqual(
+                generated.hidden_context["address_input_rounds"],
+                ["江苏省扬州市宝应县", "安宜镇宝应碧桂园", "3幢5层502室"],
+            )
+
+    def test_address_input_can_omit_province_and_city_suffixes(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store_path = Path(temp_dir) / "hidden_settings_history.jsonl"
+            tool = HiddenSettingsTool(
+                SequenceFakeClient(
+                    [
+                        build_candidate(
+                            full_name="赵欣",
+                            surname="赵",
+                            phone="13876543210",
+                            address="江苏省南京市鼓楼区汉中门大街288号金陵世纪花园6幢1单元1204室",
+                            persona="语气温和，但希望客服快一点登记完",
+                            speech_style="整体简洁，确认信息时会按流程快速回答",
+                            issue="新装的空气能热水器试机时发现制热速度偏慢，想尽快预约检查",
+                            desired_resolution="尽快安排人员上门确认安装情况和机器状态",
+                            availability="周日下午两点后",
+                            emotion="有些担心",
+                            urgency="中",
+                            prior_attempts="暂时还没有自行处理",
+                            special_constraints="白天家里只有老人，最好周末联系",
+                        )
+                    ]
+                ),
+                build_config(
+                    store_path,
+                    service_known_address_probability=0.0,
+                    address_collection_followup_probability=0.0,
+                    address_input_omit_province_city_suffix_probability=1.0,
+                ),
+            )
+
+            generated = tool.generate_for_scenario(build_base_scenario())
+
+            self.assertEqual(
+                generated.hidden_context["address_input_round_1"],
+                "江苏南京鼓楼区汉中门大街288号金陵世纪花园6幢1单元1204室",
+            )
+            self.assertEqual(
+                generated.hidden_context["address_input_round_2"],
+                "江苏南京鼓楼区汉中门大街288号金陵世纪花园6幢1单元1204室",
+            )
+
+    def test_address_input_keeps_province_and_city_suffixes_when_disabled(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store_path = Path(temp_dir) / "hidden_settings_history.jsonl"
+            tool = HiddenSettingsTool(
+                SequenceFakeClient(
+                    [
+                        build_candidate(
+                            full_name="赵欣",
+                            surname="赵",
+                            phone="13876543210",
+                            address="江苏省南京市鼓楼区汉中门大街288号金陵世纪花园6幢1单元1204室",
+                            persona="语气温和，但希望客服快一点登记完",
+                            speech_style="整体简洁，确认信息时会按流程快速回答",
+                            issue="新装的空气能热水器试机时发现制热速度偏慢，想尽快预约检查",
+                            desired_resolution="尽快安排人员上门确认安装情况和机器状态",
+                            availability="周日下午两点后",
+                            emotion="有些担心",
+                            urgency="中",
+                            prior_attempts="暂时还没有自行处理",
+                            special_constraints="白天家里只有老人，最好周末联系",
+                        )
+                    ]
+                ),
+                build_config(
+                    store_path,
+                    service_known_address_probability=0.0,
+                    address_collection_followup_probability=0.0,
+                    address_input_omit_province_city_suffix_probability=0.0,
+                ),
+            )
+
+            generated = tool.generate_for_scenario(build_base_scenario())
+
+            self.assertEqual(
+                generated.hidden_context["address_input_round_1"],
+                "江苏省南京市鼓楼区汉中门大街288号金陵世纪花园6幢1单元1204室",
+            )
+            self.assertEqual(
+                generated.hidden_context["address_input_round_2"],
+                "江苏省南京市鼓楼区汉中门大街288号金陵世纪花园6幢1单元1204室",
             )
 
     def test_mismatched_known_address_forces_full_correct_address_on_followup(self):
@@ -981,11 +1166,11 @@ class UserPromptTests(unittest.TestCase):
             self.assertTrue(generated.hidden_context["service_known_address"])
             self.assertFalse(generated.hidden_context["service_known_address_matches_actual"])
             self.assertEqual(
-                generated.hidden_context["address_input_round_1"],
-                generated.customer.address,
+                generated.hidden_context["address_input_rounds"],
+                [generated.customer.address],
             )
             self.assertEqual(
-                generated.hidden_context["address_input_round_2"],
+                generated.hidden_context["address_input_round_1"],
                 generated.customer.address,
             )
 

@@ -44,6 +44,19 @@ DEFAULT_MODEL_REQUEST_PROFILES = {
         "include_max_tokens": False,
     },
 }
+DEFAULT_ADDRESS_SEGMENT_ROUNDS_WEIGHTS = {
+    "2": 0.45,
+    "3": 0.35,
+    "4": 0.20,
+}
+DEFAULT_ADDRESS_SEGMENT_STRATEGY_WEIGHTS = {
+    "province_city__district__locality__detail": 0.20,
+    "province_city_district__locality__detail": 0.30,
+    "province_city__district_locality__detail": 0.15,
+    "province_city__district__locality_detail": 0.10,
+    "province_city_district_locality__detail": 0.15,
+    "province_city_district__locality_detail": 0.10,
+}
 
 
 @dataclass(frozen=True)
@@ -74,9 +87,14 @@ class AppConfig:
     phone_collection_invalid_short_probability: float
     phone_collection_invalid_long_probability: float
     phone_collection_invalid_pattern_probability: float
+    phone_collection_invalid_digit_mismatch_probability: float
     service_known_address_probability: float
     service_known_address_matches_probability: float
     address_collection_followup_probability: float
+    address_segmented_reply_probability: float
+    address_segment_rounds_weights: dict[str, float]
+    address_segment_strategy_weights: dict[str, float]
+    address_input_omit_province_city_suffix_probability: float
     address_confirmation_direct_correction_probability: float
 
 
@@ -105,6 +123,28 @@ def load_model_request_profiles() -> dict[str, dict[str, object]]:
         profiles[str(model_name)] = merged
 
     return profiles
+
+
+def _load_weight_map(
+    env_name: str,
+    default: dict[str, float],
+) -> dict[str, float]:
+    raw = os.getenv(env_name, "").strip()
+    if not raw:
+        return dict(default)
+
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"{env_name} must be valid JSON.") from exc
+
+    if not isinstance(parsed, dict):
+        raise ValueError(f"{env_name} must be a JSON object.")
+
+    merged = dict(default)
+    for key, value in parsed.items():
+        merged[str(key)] = float(value)
+    return merged
 
 
 def load_config() -> AppConfig:
@@ -169,6 +209,9 @@ def load_config() -> AppConfig:
         phone_collection_invalid_pattern_probability=float(
             os.getenv("PHONE_COLLECTION_INVALID_PATTERN_PROBABILITY", "0.33")
         ),
+        phone_collection_invalid_digit_mismatch_probability=float(
+            os.getenv("PHONE_COLLECTION_INVALID_DIGIT_MISMATCH_PROBABILITY", "0.33")
+        ),
         service_known_address_probability=float(
             os.getenv("SERVICE_KNOWN_ADDRESS_PROBABILITY", "0.2")
         ),
@@ -177,6 +220,23 @@ def load_config() -> AppConfig:
         ),
         address_collection_followup_probability=float(
             os.getenv("ADDRESS_COLLECTION_FOLLOWUP_PROBABILITY", "0.35")
+        ),
+        address_segmented_reply_probability=float(
+            os.getenv(
+                "ADDRESS_SEGMENTED_REPLY_PROBABILITY",
+                os.getenv("ADDRESS_COLLECTION_FOLLOWUP_PROBABILITY", "0.35"),
+            )
+        ),
+        address_segment_rounds_weights=_load_weight_map(
+            "ADDRESS_SEGMENT_ROUNDS_WEIGHTS",
+            DEFAULT_ADDRESS_SEGMENT_ROUNDS_WEIGHTS,
+        ),
+        address_segment_strategy_weights=_load_weight_map(
+            "ADDRESS_SEGMENT_MERGE_STRATEGY_WEIGHTS",
+            DEFAULT_ADDRESS_SEGMENT_STRATEGY_WEIGHTS,
+        ),
+        address_input_omit_province_city_suffix_probability=float(
+            os.getenv("ADDRESS_INPUT_OMIT_PROVINCE_CITY_SUFFIX_PROBABILITY", "0.0")
         ),
         address_confirmation_direct_correction_probability=float(
             os.getenv("ADDRESS_CONFIRMATION_DIRECT_CORRECTION_PROBABILITY", "0.5")

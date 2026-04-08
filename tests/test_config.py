@@ -19,6 +19,9 @@ class ConfigTests(unittest.TestCase):
                 "USER_AGENT_MODEL": "user-model",
                 "SERVICE_AGENT_MODEL": "service-model",
                 "SECOND_ROUND_INCLUDE_ISSUE_PROBABILITY": "0.9",
+                "ADDRESS_SEGMENTED_REPLY_PROBABILITY": "0.8",
+                "ADDRESS_SEGMENT_ROUNDS_WEIGHTS": '{"2": 0.1, "3": 0.9, "4": 0.0}',
+                "ADDRESS_SEGMENT_MERGE_STRATEGY_WEIGHTS": '{"province_city_district__locality__detail": 1.0}',
                 "MAX_CONCURRENCY": "3",
             },
             clear=False,
@@ -31,6 +34,12 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(config.user_agent_model, "user-model")
         self.assertEqual(config.service_agent_model, "service-model")
         self.assertEqual(config.second_round_include_issue_probability, 0.9)
+        self.assertEqual(config.address_segmented_reply_probability, 0.8)
+        self.assertEqual(config.address_segment_rounds_weights["3"], 0.9)
+        self.assertEqual(
+            config.address_segment_strategy_weights["province_city_district__locality__detail"],
+            1.0,
+        )
         self.assertEqual(config.max_concurrency, 3)
 
     def test_load_config_allows_custom_model_when_env_is_complete(self):

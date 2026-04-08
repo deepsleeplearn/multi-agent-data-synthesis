@@ -38,9 +38,21 @@ def build_config() -> AppConfig:
         phone_collection_invalid_short_probability=0.34,
         phone_collection_invalid_long_probability=0.33,
         phone_collection_invalid_pattern_probability=0.33,
+        phone_collection_invalid_digit_mismatch_probability=0.33,
         service_known_address_probability=0.2,
         service_known_address_matches_probability=0.8,
         address_collection_followup_probability=0.35,
+        address_segmented_reply_probability=0.35,
+        address_segment_rounds_weights={"2": 0.45, "3": 0.35, "4": 0.20},
+        address_segment_strategy_weights={
+            "province_city__district__locality__detail": 0.20,
+            "province_city_district__locality__detail": 0.30,
+            "province_city__district_locality__detail": 0.15,
+            "province_city__district__locality_detail": 0.10,
+            "province_city_district_locality__detail": 0.15,
+            "province_city_district__locality_detail": 0.10,
+        },
+        address_input_omit_province_city_suffix_probability=0.0,
         address_confirmation_direct_correction_probability=0.5,
     )
 

@@ -65,9 +65,23 @@ def next_address_input_value(scenario: Scenario, transcript: list[DialogueTurn])
         return "无"
 
     hidden_context = scenario.hidden_context
-    if prompt_count == 1:
-        return str(hidden_context.get("address_input_round_1", "")).strip() or "无"
-    return str(hidden_context.get("address_input_round_2", "")).strip() or "无"
+    round_values = hidden_context.get("address_input_rounds", [])
+    if isinstance(round_values, list):
+        normalized_round_values = [str(value).strip() for value in round_values if str(value).strip()]
+        if normalized_round_values:
+            return normalized_round_values[min(prompt_count - 1, len(normalized_round_values) - 1)]
+
+    fallback_keys = (
+        "address_input_round_1",
+        "address_input_round_2",
+        "address_input_round_3",
+        "address_input_round_4",
+    )
+    fallback_values = [str(hidden_context.get(key, "")).strip() for key in fallback_keys]
+    fallback_values = [value for value in fallback_values if value]
+    if fallback_values:
+        return fallback_values[min(prompt_count - 1, len(fallback_values) - 1)]
+    return "无"
 
 
 def count_phone_keypad_prompts(transcript: list[DialogueTurn]) -> int:
@@ -186,6 +200,12 @@ def build_user_agent_messages(
     address_input_round_2 = str(
         scenario.hidden_context.get("address_input_round_2", scenario.customer.address)
     ).strip()
+    address_input_rounds = scenario.hidden_context.get("address_input_rounds", [])
+    if not isinstance(address_input_rounds, list):
+        address_input_rounds = []
+    address_input_rounds_text = " / ".join(
+        str(value).strip() for value in address_input_rounds if str(value).strip()
+    ) or f"{address_input_round_1} / {address_input_round_2}"
     address_confirmation_no_reply = str(
         scenario.hidden_context.get("address_confirmation_no_reply", "不对。")
     ).strip()
@@ -246,6 +266,7 @@ def build_user_agent_messages(
 - 若客服核对了错误地址，你这一轮应答: {address_confirmation_no_reply}
 - 若客服第一次询问地址信息，第 1 次应答: {address_input_round_1}
 - 若客服继续追问剩余地址细节，第 2 次应答: {address_input_round_2}
+- 地址分段回复计划: {address_input_rounds_text}
 - 当前已被要求提供地址信息的次数: {count_address_collection_prompts(transcript)}
 - 如果这轮正被要求补充地址信息，本轮应答: {next_address_input_value(scenario, transcript)}
 - 额外隐藏设定:
@@ -264,7 +285,7 @@ def build_user_agent_messages(
 5. 如果客服要求你在拨号盘上输入联系方式并以#号键结束，只输出本轮应输入的内容，不要附带任何解释。
 6. 如果客服用“号码是某个号码，对吗”这类话术核对号码，无论前面是否带“好的”，都根据事实回答对或不对。
 7. 如果客服用“跟您确认一下，地址是某个地址，对吗？”或“您的地址是某个地址，对吗？”这类话术核对地址，无论前面是否带“好的”，都要根据隐藏设定回答；如果地址正确，通常只简短表示肯定，不要重复完整地址；如果地址不对，就优先按“若客服核对了错误地址，你这一轮应答”来回复，这一轮可以只是表达否定，也可以顺带直接给更正地址。
-8. 如果客服第一次问地址，你可以先说大地址，也可以先说细地址；如果客服继续追问缺失部分，就按本轮应答内容补充，也可以直接给出完整地址。完整地址确认完后，如果客服再按固定话术核对地址，就只做简短确认。
+8. 如果客服问地址，你可以按隐藏设定分几轮逐步补充；客服继续追问缺失部分时，就只补当前还没说到的那部分，也可以在合适时直接给出完整地址。完整地址确认完后，如果客服再按固定话术核对地址，就只做简短确认。
 9. 如果客服问产品或者产品到货了没，就按隐藏设定回答，说话不需要太正式，口语化些；已经确认过“要安装/要维修”后，不要把同一句诉求又重复一遍，除非客服重新追问。
 10. 如果客服通知“工单已受理成功”并说明后续联系时间，这一轮通常只做简短确认回复。
 11. 如果客服要求你对本次通话按 1 到 5 打分，回复1-2。

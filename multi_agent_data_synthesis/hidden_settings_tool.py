@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from multi_agent_data_synthesis.address_utils import build_address_progressive_segments
 from multi_agent_data_synthesis.config import AppConfig
 from multi_agent_data_synthesis.dialogue_plans import decide_second_round_reply_strategy
 from multi_agent_data_synthesis.llm import OpenAIChatClient
@@ -273,7 +274,7 @@ class HiddenSettingsTool:
         system_prompt = f"""你是一个家电客服数据生成工具，负责给 user_agent 生成隐藏设定。
 
 任务约束：
-1. 只生成美的(家用){product_name}的中文客服场景。
+1. 只生成美的{product_name}的中文客服场景。
 2. 生成的内容必须是用户视角隐藏信息，供 user_agent 使用。
 3. 输出必须具体、自然、生活化，避免模板化和高相似复用。
 4. 电话、地址、用户画像、问题细节、预约时间、历史尝试等都要有变化。
@@ -479,8 +480,8 @@ class HiddenSettingsTool:
             return
 
         backup_owner = rng.choices(
-            population=["本人备用号码", "爱人", "父亲", "母亲", "儿子", "女儿"],
-            weights=[50, 10, 10, 10, 10, 10],
+            population=["本人备用号码", "爱人", "爸", "妈", "儿子", "女儿", "室友"],
+            weights=[20, 15, 15, 15, 12.5, 12.5, 10],
             k=1,
         )[0]
         backup_phone = self._generate_mobile_phone(rng, excluded={primary_phone})
@@ -539,6 +540,10 @@ class HiddenSettingsTool:
                         stale_address=service_known_address_value,
                         rng=rng,
                     )
+                    correction_address = self._maybe_compact_address_input(
+                        correction_address,
+                        rng,
+                    )
                     prefix = rng.choice(["不对，", "不是，", "不对，正确的是", "不是，正确的是"])
                     address_confirmation_no_reply = f"{prefix}{correction_address}。"
                 else:
@@ -553,14 +558,27 @@ class HiddenSettingsTool:
         should_force_full_address_after_known_mismatch = (
             service_knows_address and not service_known_address_matches_actual
         )
+        address_rounds = [actual_address]
         if should_force_full_address_after_known_mismatch:
+            address_rounds = [actual_address]
+        elif rng.random() < self.config.address_collection_followup_probability:
+            address_rounds = build_address_progressive_segments(actual_address, rng)
+
+        compacted_address_rounds = [
+            self._maybe_compact_address_input(round_text, rng)
+            for round_text in address_rounds
+        ]
+        if compacted_address_rounds:
+            address_round_1 = compacted_address_rounds[0]
+            address_round_2 = compacted_address_rounds[min(1, len(compacted_address_rounds) - 1)]
+            address_round_3 = compacted_address_rounds[min(2, len(compacted_address_rounds) - 1)]
+            address_round_4 = compacted_address_rounds[min(3, len(compacted_address_rounds) - 1)]
+        else:
+            compacted_address_rounds = [actual_address]
             address_round_1 = actual_address
             address_round_2 = actual_address
-        elif rng.random() < self.config.address_collection_followup_probability:
-            if rng.random() < 0.5:
-                address_round_1 = self._generate_partial_address(actual_address)
-            else:
-                address_round_1 = self._generate_detail_address(actual_address)
+            address_round_3 = actual_address
+            address_round_4 = actual_address
 
         candidate["hidden_context"].update(
             {
@@ -570,6 +588,9 @@ class HiddenSettingsTool:
                 "address_confirmation_no_reply": address_confirmation_no_reply,
                 "address_input_round_1": address_round_1,
                 "address_input_round_2": address_round_2,
+                "address_input_round_3": address_round_3,
+                "address_input_round_4": address_round_4,
+                "address_input_rounds": compacted_address_rounds,
             }
         )
 
@@ -704,19 +725,42 @@ class HiddenSettingsTool:
             lambda: f"{valid_phone[:-1]}#",
             lambda: f"{valid_phone}{rng.randint(0, 9)}#",
             lambda: f"2{valid_phone[1:]}#",
+            lambda: self._generate_digit_mismatch_phone_input(rng, valid_phone),
         ]
         weights = [
             max(0.0, self.config.phone_collection_invalid_short_probability),
             max(0.0, self.config.phone_collection_invalid_long_probability),
             max(0.0, self.config.phone_collection_invalid_pattern_probability),
+            max(0.0, self.config.phone_collection_invalid_digit_mismatch_probability),
         ]
         if sum(weights) <= 0:
-            weights = [1.0, 1.0, 1.0]
+            weights = [1.0, 1.0, 1.0, 1.0]
 
         candidate = rng.choices(variants, weights=weights, k=1)[0]()
-        if re.fullmatch(r"1[3-9]\d{9}#", candidate):
+        digits = re.sub(r"\D", "", candidate)
+        digit_difference_count = sum(
+            expected != actual for expected, actual in zip(valid_phone, digits)
+        )
+        is_digit_mismatch_variant = (
+            len(digits) == len(valid_phone)
+            and digits != valid_phone
+            and digit_difference_count in (1, 2)
+        )
+        if candidate == f"{valid_phone}#" or (
+            re.fullmatch(r"1[3-9]\d{9}#", candidate) and not is_digit_mismatch_variant
+        ):
             raise AssertionError(f"Generated phone input should be invalid: {candidate}")
         return candidate
+
+    @staticmethod
+    def _generate_digit_mismatch_phone_input(rng: random.Random, valid_phone: str) -> str:
+        digits = list(valid_phone)
+        mismatch_count = rng.choice((1, 2))
+        mismatch_indexes = rng.sample(range(3, len(digits)), k=mismatch_count)
+        for index in mismatch_indexes:
+            replacement_choices = [digit for digit in "0123456789" if digit != digits[index]]
+            digits[index] = rng.choice(replacement_choices)
+        return f"{''.join(digits)}#"
 
     @staticmethod
     def _generate_partial_address(address: str) -> str:
@@ -750,6 +794,68 @@ class HiddenSettingsTool:
                 if detail:
                     return detail
         return address[max(0, len(address) // 2) :].strip(" ，,。")
+
+    def _maybe_compact_address_input(self, address: str, rng: random.Random) -> str:
+        if not address:
+            return address
+        if rng.random() >= self.config.address_input_omit_province_city_suffix_probability:
+            return address
+        compact = self._omit_province_city_suffixes(address)
+        return compact or address
+
+    @staticmethod
+    def _omit_province_city_suffixes(address: str) -> str:
+        compact = str(address or "").strip()
+        if not compact:
+            return compact
+
+        provinces = (
+            "河北",
+            "山西",
+            "辽宁",
+            "吉林",
+            "黑龙江",
+            "江苏",
+            "浙江",
+            "安徽",
+            "福建",
+            "江西",
+            "山东",
+            "河南",
+            "湖北",
+            "湖南",
+            "广东",
+            "海南",
+            "四川",
+            "贵州",
+            "云南",
+            "陕西",
+            "甘肃",
+            "青海",
+            "台湾",
+        )
+        municipalities = ("北京", "上海", "天津", "重庆")
+
+        for municipality in municipalities:
+            if compact.startswith(f"{municipality}市"):
+                return f"{municipality}{compact[len(municipality) + 1:]}"
+
+        province_prefix = next(
+            (
+                province
+                for province in provinces
+                if compact.startswith(f"{province}省") or compact.startswith(province)
+            ),
+            "",
+        )
+        if province_prefix:
+            remainder = compact[len(province_prefix) :]
+            if remainder.startswith("省"):
+                remainder = remainder[1:]
+            remainder = re.sub(r"^([^市区县]{2,9})市", r"\1", remainder, count=1)
+            return f"{province_prefix}{remainder}"
+
+        return re.sub(r"^([^市区县]{2,9})市", r"\1", compact, count=1)
 
     @staticmethod
     def _generate_stale_address(address: str, rng: random.Random) -> str:
