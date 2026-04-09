@@ -19,14 +19,9 @@ if load_dotenv:
 
 LLMS = {
     "gpt-4o": {
-        "base_url": "https://aimpapi.midea.com/t-aigc/mip-chat-app/openai/standard/v1/chat/completions",
-        "api_key": "msk-32f9a642470a34097797176b81f814dd947a3cc868530c76d2b490db689f79ed",
-        "user": "guojian34"
-    },
-    "gpt-5.3-chat": {
-        "base_url": "https://aimpapi.midea.com/t-aigc/mip-chat-app/openai/standard/v1/chat/completions",
-        "api_key": "msk-e3034ea0ae3d04bc6ce8534cabed92d3a7029ccc85be32101e052a8b163e21a4",
-        "user": "guojian34"
+        "base_url": "",
+        "api_key": "",
+        "user": ""
     }
 }
 
