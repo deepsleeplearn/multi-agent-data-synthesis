@@ -36,27 +36,546 @@ VARIABLE_FIELDS = (
     "special_constraints",
 )
 
-COHERENT_REGION_OPTIONS: tuple[dict[str, Any], ...] = (
-    {"province": "广东省", "city": "广州市", "districts": ("天河区", "海珠区", "越秀区")},
-    {"province": "广东省", "city": "深圳市", "districts": ("南山区", "福田区", "宝安区")},
-    {"province": "浙江省", "city": "杭州市", "districts": ("西湖区", "余杭区", "拱墅区")},
-    {"province": "浙江省", "city": "宁波市", "districts": ("鄞州区", "海曙区")},
-    {"province": "江苏省", "city": "南京市", "districts": ("鼓楼区", "秦淮区")},
-    {"province": "江苏省", "city": "苏州市", "districts": ("吴中区", "工业园区")},
-    {"province": "山东省", "city": "济南市", "districts": ("历下区", "历城区")},
-    {"province": "山东省", "city": "青岛市", "districts": ("市南区", "崂山区")},
-    {"province": "河南省", "city": "郑州市", "districts": ("金水区", "中原区")},
-    {"province": "湖北省", "city": "武汉市", "districts": ("洪山区", "江汉区", "武昌区")},
-    {"province": "湖南省", "city": "长沙市", "districts": ("岳麓区", "芙蓉区")},
-    {"province": "四川省", "city": "成都市", "districts": ("武侯区", "高新区", "锦江区")},
-    {"province": "福建省", "city": "福州市", "districts": ("仓山区", "鼓楼区", "台江区")},
-    {"province": "安徽省", "city": "合肥市", "districts": ("蜀山区", "包河区")},
+
+def _build_region_options(region_map: dict[str, dict[str, tuple[str, ...]]]) -> tuple[dict[str, Any], ...]:
+    return tuple(
+        {"province": province, "city": city, "districts": districts}
+        for province, cities in region_map.items()
+        for city, districts in cities.items()
+    )
+
+
+COHERENT_REGION_CITY_DISTRICT_MAP: dict[str, dict[str, tuple[str, ...]]] = {
+    "河北省": {
+        "石家庄市": ("长安区", "桥西区", "裕华区"),
+        "唐山市": ("路北区", "路南区", "丰南区"),
+    },
+    "山西省": {
+        "太原市": ("小店区", "迎泽区", "万柏林区"),
+        "大同市": ("平城区", "云冈区", "新荣区"),
+    },
+    "辽宁省": {
+        "沈阳市": ("和平区", "皇姑区", "浑南区"),
+        "大连市": ("中山区", "甘井子区", "沙河口区"),
+    },
+    "吉林省": {
+        "长春市": ("朝阳区", "南关区", "绿园区"),
+        "吉林市": ("昌邑区", "船营区", "丰满区"),
+    },
+    "黑龙江省": {
+        "哈尔滨市": ("南岗区", "道里区", "香坊区"),
+        "齐齐哈尔市": ("龙沙区", "建华区", "铁锋区"),
+    },
+    "江苏省": {
+        "南京市": ("鼓楼区", "秦淮区", "建邺区"),
+        "苏州市": ("吴中区", "工业园区", "虎丘区"),
+    },
+    "浙江省": {
+        "杭州市": ("西湖区", "余杭区", "拱墅区"),
+        "宁波市": ("鄞州区", "海曙区", "江北区"),
+    },
+    "安徽省": {
+        "合肥市": ("蜀山区", "包河区", "庐阳区"),
+        "芜湖市": ("镜湖区", "弋江区", "鸠江区"),
+    },
+    "福建省": {
+        "福州市": ("仓山区", "鼓楼区", "台江区"),
+        "厦门市": ("思明区", "湖里区", "集美区"),
+    },
+    "江西省": {
+        "南昌市": ("东湖区", "西湖区", "红谷滩区"),
+        "赣州市": ("章贡区", "南康区", "赣县区"),
+    },
+    "山东省": {
+        "济南市": ("历下区", "历城区", "槐荫区"),
+        "青岛市": ("崂山区", "黄岛区", "李沧区"),
+    },
+    "河南省": {
+        "郑州市": ("金水区", "中原区", "二七区"),
+        "洛阳市": ("西工区", "洛龙区", "涧西区"),
+    },
+    "湖北省": {
+        "武汉市": ("洪山区", "江汉区", "武昌区"),
+        "宜昌市": ("西陵区", "伍家岗区", "夷陵区"),
+    },
+    "湖南省": {
+        "长沙市": ("岳麓区", "芙蓉区", "雨花区"),
+        "株洲市": ("天元区", "荷塘区", "石峰区"),
+    },
+    "广东省": {
+        "广州市": ("天河区", "海珠区", "越秀区"),
+        "深圳市": ("南山区", "福田区", "宝安区"),
+    },
+    "海南省": {
+        "海口市": ("龙华区", "美兰区", "秀英区"),
+        "三亚市": ("吉阳区", "天涯区", "海棠区"),
+    },
+    "四川省": {
+        "成都市": ("武侯区", "高新区", "锦江区"),
+        "绵阳市": ("涪城区", "游仙区", "安州区"),
+    },
+    "贵州省": {
+        "贵阳市": ("南明区", "云岩区", "观山湖区"),
+        "遵义市": ("汇川区", "红花岗区", "播州区"),
+    },
+    "云南省": {
+        "昆明市": ("五华区", "官渡区", "西山区"),
+        "曲靖市": ("麒麟区", "沾益区", "马龙区"),
+    },
+    "陕西省": {
+        "西安市": ("雁塔区", "未央区", "长安区"),
+        "宝鸡市": ("金台区", "渭滨区", "陈仓区"),
+    },
+    "甘肃省": {
+        "兰州市": ("城关区", "七里河区", "安宁区"),
+        "天水市": ("秦州区", "麦积区", "清水县"),
+    },
+    "青海省": {
+        "西宁市": ("城西区", "城东区", "城中区"),
+        "海东市": ("乐都区", "平安区", "民和回族土族自治县"),
+    },
+    "内蒙古": {
+        "呼和浩特市": ("新城区", "赛罕区", "回民区"),
+        "包头市": ("昆都仑区", "青山区", "东河区"),
+    },
+    "广西": {
+        "南宁市": ("青秀区", "兴宁区", "西乡塘区"),
+        "柳州市": ("城中区", "鱼峰区", "柳南区"),
+    },
+    "西藏": {
+        "拉萨市": ("城关区", "堆龙德庆区", "达孜区"),
+        "日喀则市": ("桑珠孜区", "南木林县", "江孜县"),
+    },
+    "宁夏": {
+        "银川市": ("金凤区", "兴庆区", "西夏区"),
+        "吴忠市": ("利通区", "红寺堡区", "盐池县"),
+    },
+    "新疆": {
+        "乌鲁木齐市": ("天山区", "沙依巴克区", "水磨沟区"),
+        "克拉玛依市": ("克拉玛依区", "独山子区", "白碱滩区"),
+    },
+}
+COHERENT_MUNICIPALITY_CITY_DISTRICT_MAP: dict[str, tuple[str, ...]] = {
+    "北京市": ("朝阳区", "海淀区", "丰台区"),
+    "上海市": ("浦东新区", "闵行区", "徐汇区"),
+    "天津市": ("南开区", "河西区", "滨海新区"),
+    "重庆市": ("渝北区", "渝中区", "沙坪坝区"),
+}
+COHERENT_REGION_OPTIONS: tuple[dict[str, Any], ...] = _build_region_options(
+    COHERENT_REGION_CITY_DISTRICT_MAP
 )
-COHERENT_MUNICIPALITY_OPTIONS: tuple[dict[str, Any], ...] = (
-    {"province": "", "city": "北京市", "districts": ("朝阳区", "海淀区")},
-    {"province": "", "city": "上海市", "districts": ("浦东新区", "闵行区")},
-    {"province": "", "city": "天津市", "districts": ("南开区", "河西区")},
-    {"province": "", "city": "重庆市", "districts": ("渝北区", "渝中区")},
+COHERENT_MUNICIPALITY_OPTIONS: tuple[dict[str, Any], ...] = tuple(
+    {"province": "", "city": city, "districts": districts}
+    for city, districts in COHERENT_MUNICIPALITY_CITY_DISTRICT_MAP.items()
+)
+SURNAME_OPTIONS: tuple[str, ...] = (
+    "赵",
+    "钱",
+    "孙",
+    "李",
+    "周",
+    "吴",
+    "郑",
+    "王",
+    "冯",
+    "陈",
+    "褚",
+    "卫",
+    "蒋",
+    "沈",
+    "韩",
+    "杨",
+    "朱",
+    "秦",
+    "尤",
+    "许",
+    "何",
+    "吕",
+    "施",
+    "张",
+    "孔",
+    "曹",
+    "严",
+    "华",
+    "金",
+    "魏",
+    "陶",
+    "姜",
+    "戚",
+    "谢",
+    "邹",
+    "喻",
+    "柏",
+    "水",
+    "窦",
+    "章",
+    "云",
+    "苏",
+    "潘",
+    "葛",
+    "奚",
+    "范",
+    "彭",
+    "郎",
+    "鲁",
+    "韦",
+    "昌",
+    "马",
+    "苗",
+    "凤",
+    "花",
+    "方",
+    "俞",
+    "任",
+    "袁",
+    "柳",
+    "酆",
+    "鲍",
+    "史",
+    "唐",
+    "费",
+    "廉",
+    "岑",
+    "薛",
+    "雷",
+    "贺",
+    "倪",
+    "汤",
+    "滕",
+    "殷",
+    "罗",
+    "毕",
+    "郝",
+    "邬",
+    "安",
+    "常",
+    "乐",
+    "于",
+    "时",
+    "傅",
+    "皮",
+    "卞",
+    "齐",
+    "康",
+    "伍",
+    "余",
+    "元",
+    "卜",
+    "顾",
+    "孟",
+    "平",
+    "黄",
+    "和",
+    "穆",
+    "萧",
+    "尹",
+    "姚",
+    "邵",
+    "湛",
+    "汪",
+    "祁",
+    "毛",
+    "禹",
+    "狄",
+    "米",
+    "贝",
+    "明",
+    "臧",
+    "计",
+    "伏",
+    "成",
+    "戴",
+    "谈",
+    "宋",
+    "茅",
+    "庞",
+    "熊",
+    "纪",
+    "舒",
+    "屈",
+    "项",
+    "祝",
+    "董",
+    "梁",
+    "杜",
+    "阮",
+    "蓝",
+    "闵",
+    "席",
+    "季",
+    "麻",
+    "强",
+    "贾",
+    "路",
+    "娄",
+    "危",
+    "江",
+    "童",
+    "颜",
+    "郭",
+    "梅",
+    "盛",
+    "林",
+    "刁",
+    "钟",
+    "徐",
+    "邱",
+    "骆",
+    "高",
+    "夏",
+    "蔡",
+    "田",
+    "樊",
+    "胡",
+    "凌",
+    "霍",
+    "虞",
+    "万",
+    "支",
+    "柯",
+    "昝",
+    "管",
+    "卢",
+    "莫",
+    "经",
+    "房",
+    "裘",
+    "缪",
+    "干",
+    "解",
+    "应",
+    "宗",
+    "丁",
+    "宣",
+    "贲",
+    "邓",
+    "郁",
+    "单",
+    "杭",
+    "洪",
+    "包",
+    "诸",
+    "左",
+    "石",
+    "崔",
+    "吉",
+    "钮",
+    "龚",
+    "程",
+    "嵇",
+    "邢",
+    "滑",
+    "裴",
+    "陆",
+    "荣",
+    "翁",
+    "荀",
+    "羊",
+    "於",
+    "惠",
+    "甄",
+    "曲",
+    "家",
+    "封",
+    "芮",
+    "羿",
+    "储",
+    "靳",
+    "汲",
+    "邴",
+    "糜",
+    "松",
+    "井",
+    "段",
+    "富",
+    "巫",
+    "乌",
+    "焦",
+    "巴",
+    "弓",
+    "牧",
+    "隗",
+    "山",
+    "谷",
+    "车",
+    "侯",
+    "宓",
+    "蓬",
+    "全",
+    "郗",
+    "班",
+    "仰",
+    "秋",
+    "仲",
+    "伊",
+    "宫",
+    "宁",
+    "仇",
+    "栾",
+    "暴",
+    "甘",
+    "厉",
+    "戎",
+    "祖",
+    "武",
+    "符",
+    "刘",
+    "景",
+    "詹",
+    "束",
+    "龙",
+    "叶",
+    "幸",
+    "司",
+    "韶",
+    "郜",
+    "黎",
+    "蓟",
+    "薄",
+    "印",
+    "宿",
+    "白",
+    "怀",
+    "蒲",
+    "台",
+    "从",
+    "鄂",
+    "索",
+    "咸",
+    "籍",
+    "赖",
+    "卓",
+    "蔺",
+    "屠",
+    "蒙",
+    "池",
+    "乔",
+    "阴",
+    "郁",
+    "胥",
+    "能",
+    "苍",
+    "双",
+    "闻",
+    "莘",
+    "党",
+    "翟",
+    "谭",
+    "贡",
+    "劳",
+    "逄",
+    "姬",
+    "申",
+    "扶",
+    "堵",
+    "冉",
+    "宰",
+    "郦",
+    "雍",
+    "郤",
+    "璩",
+    "桑",
+    "桂",
+    "濮",
+    "牛",
+    "寿",
+    "通",
+    "边",
+    "扈",
+    "燕",
+    "冀",
+    "郏",
+    "浦",
+    "尚",
+    "农",
+    "温",
+    "别",
+    "庄",
+    "晏",
+    "柴",
+    "瞿",
+    "阎",
+    "充",
+    "慕",
+    "连",
+    "茹",
+    "习",
+    "宦",
+    "艾",
+    "鱼",
+    "容",
+    "向",
+    "古",
+    "易",
+    "慎",
+    "戈",
+    "廖",
+    "庾",
+    "终",
+    "暨",
+    "居",
+    "衡",
+    "步",
+    "都",
+    "耿",
+    "满",
+    "弘",
+    "匡",
+    "国",
+    "文",
+    "寇",
+    "广",
+    "禄",
+    "阙",
+    "东郭",
+    "南门",
+    "呼延",
+    "归海",
+    "羊舌",
+    "赫连",
+    "澹台",
+    "皇甫",
+    "尉迟",
+    "公羊",
+    "公冶",
+    "宗政",
+    "濮阳",
+    "淳于",
+    "单于",
+    "太叔",
+    "申屠",
+    "公孙",
+    "仲孙",
+    "轩辕",
+    "令狐",
+    "钟离",
+    "宇文",
+    "长孙",
+    "慕容",
+    "鲜于",
+    "闾丘",
+    "司徒",
+    "司空",
+    "丌官",
+    "司寇",
+    "子车",
+    "颛孙",
+    "端木",
+    "巫马",
+    "公西",
+    "漆雕",
+    "乐正",
+    "壤驷",
+    "公良",
+    "拓跋",
+    "夹谷",
+    "宰父",
+    "谷梁",
+    "汝嫣",
+    "东门",
+    "西门",
+    "南宫",
+    "第五",
 )
 FEMALE_NAME_HINT_CHARS = frozenset("丽娜静敏艳娟婷颖雪倩芳琳洁欣怡蓉莹燕璐璇岚妍媛")
 MALE_NAME_HINT_CHARS = frozenset("强伟磊军勇涛超鹏杰峰斌刚浩东博飞健志明龙宁凯晨亮")
@@ -318,6 +837,43 @@ class HiddenSettingsTool:
             return await complete_json_async(**kwargs)
         return await asyncio.to_thread(self.client.complete_json, **kwargs)
 
+    @staticmethod
+    def _stable_prompt_seed(seed_text: str) -> int:
+        normalized = str(seed_text or "").strip()
+        if not normalized:
+            return 0
+        return sum((index + 1) * ord(char) for index, char in enumerate(normalized))
+
+    @classmethod
+    def _stable_sample_text_options(
+        cls,
+        options: tuple[str, ...],
+        seed_text: str,
+        count: int,
+    ) -> tuple[str, ...]:
+        unique_options = tuple(dict.fromkeys(str(option).strip() for option in options if str(option).strip()))
+        if count <= 0 or not unique_options:
+            return ()
+        if count >= len(unique_options):
+            return unique_options
+        rng = random.Random(cls._stable_prompt_seed(seed_text))
+        return tuple(rng.sample(list(unique_options), count))
+
+    @classmethod
+    def _sample_prompt_surname_examples(cls, scenario_id: str, count: int = 28) -> str:
+        return "、".join(cls._stable_sample_text_options(SURNAME_OPTIONS, f"{scenario_id}:surname", count))
+
+    @classmethod
+    def _sample_prompt_region_examples(cls, scenario_id: str, count: int = 18) -> str:
+        region_labels = tuple(
+            f"{option['province']}{option['city']}{rng.choice(tuple(option.get('districts', ()) or ('',)))}"
+            for rng, option in (
+                (random.Random(cls._stable_prompt_seed(f"{scenario_id}:region:{index}")), option)
+                for index, option in enumerate(COHERENT_REGION_OPTIONS + COHERENT_MUNICIPALITY_OPTIONS)
+            )
+        )
+        return "；".join(cls._stable_sample_text_options(region_labels, f"{scenario_id}:region-sample", count))
+
     def _build_messages(
         self,
         scenario: Scenario,
@@ -325,6 +881,8 @@ class HiddenSettingsTool:
         generation_plan: UserGenerationPlan,
     ) -> list[dict[str, str]]:
         product_name = str(scenario.product.category).strip() or "空气能热水器"
+        surname_examples = self._sample_prompt_surname_examples(scenario.scenario_id)
+        region_examples = self._sample_prompt_region_examples(scenario.scenario_id)
         system_prompt = f"""你是一个家电客服数据生成工具，负责给 user_agent 生成隐藏设定。
 
 任务约束：
@@ -335,7 +893,9 @@ class HiddenSettingsTool:
 5. 用户画像与说话方式要拆开写，二者都要具体，方便塑造人物。
 6. 大多数用户设定为普通家庭用户，文化程度和表达能力都比较一般，不要频繁生成过于精英、逻辑特别强或表达特别书面的角色。
 7. 说话方式可以自然体现轻微停顿、重复、表达不够顺或想到哪说到哪，但不要夸张到影响理解，也不要刻板化描写。
-8. 只返回一个 JSON 对象，不要解释。
+8. 用户姓名和姓氏必须匹配；单姓用户的 full_name 必须以该姓开头，复姓用户也必须用真实复姓开头。
+9. 姓氏和地址都要尽量打散，不要反复集中在“张、王、李、赵”和“广深杭苏”等少数高频选项。
+10. 只返回一个 JSON 对象，不要解释。
 
 输出 JSON 结构：
 {{
@@ -376,6 +936,7 @@ class HiddenSettingsTool:
 - 生成的内容必须适合中文客服通话
 - 用户信息必须完整，可直接用于后续对话
 - 地址必须是合理的中国地址
+- 地址地区必须在全国范围内随机取样，尽量覆盖不同省份、自治区、直辖市，不要反复只写东部沿海热门城市
 - 当前地址形态要求: {generation_plan.address_instruction}
 - 电话必须是 11 位中国大陆手机号
 - `hidden_context.gender` 必须填写为“男”或“女”
@@ -384,6 +945,9 @@ class HiddenSettingsTool:
 - 安装场景与故障场景要区分明显
 - 用户画像与说话方式都要具体，且不要写成同一句的重复改写
 - 大多数用户应更像普通来电用户，不要总写成创业者、高管、专家或表达特别流畅的人
+- 姓氏请在大池中随机分散采样，允许常见姓、次常见姓、少见姓、复姓混用；除非有特别理由，不要连续生成相似姓氏
+- 姓氏候选池示例（仅示例，不限于此）: {surname_examples}
+- 全国地址地区池示例（仅示例，要求覆盖全国随机采样）: {region_examples}
 - 本场景用户回复随机性要求: {generation_plan.reply_noise_instruction}
 - 如果收到“与历史样本相似度过高”的反馈，说明这次生成和历史记录太像，需要整体换一版内容
 
@@ -433,6 +997,10 @@ class HiddenSettingsTool:
             "hidden_context": normalized_hidden_context,
         }
 
+        self._validate_name_consistency(
+            normalized["customer"]["full_name"],
+            normalized["customer"]["surname"],
+        )
         self._validate_issue_description(
             normalized["request"]["issue"],
             normalized["request"]["request_type"],
@@ -457,6 +1025,15 @@ class HiddenSettingsTool:
         if not re.fullmatch(r"1[3-9]\d{9}", digits):
             raise ValueError("Generated hidden settings contain invalid phone number.")
         return digits
+
+    @staticmethod
+    def _validate_name_consistency(full_name: str, surname: str) -> None:
+        normalized_full_name = str(full_name or "").strip()
+        normalized_surname = str(surname or "").strip()
+        if not normalized_full_name or not normalized_surname:
+            raise ValueError("Generated hidden settings missing customer full_name or surname.")
+        if not normalized_full_name.startswith(normalized_surname):
+            raise ValueError("Generated hidden settings full_name must start with surname.")
 
     def _validate_issue_description(
         self,

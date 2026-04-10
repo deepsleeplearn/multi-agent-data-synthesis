@@ -11,6 +11,10 @@ from multi_agent_data_synthesis.address_utils import extract_address_components
 from multi_agent_data_synthesis.config import AppConfig
 from multi_agent_data_synthesis.dialogue_plans import decide_second_round_reply_strategy
 from multi_agent_data_synthesis.hidden_settings_tool import (
+    COHERENT_MUNICIPALITY_CITY_DISTRICT_MAP,
+    COHERENT_MUNICIPALITY_OPTIONS,
+    COHERENT_REGION_CITY_DISTRICT_MAP,
+    COHERENT_REGION_OPTIONS,
     HiddenSettingsRepository,
     HiddenSettingsTool,
     UserGenerationPlan,
@@ -829,6 +833,29 @@ class UserPromptTests(unittest.TestCase):
         self.assertIn("若允许，目标环节: address_collection", messages[1]["content"])
         self.assertIn("若允许，该环节最多可轻微答偏的轮数: 2", messages[1]["content"])
         self.assertIn("地址表达要符合“用户地址形态类型”", messages[1]["content"])
+
+    def test_build_messages_exposes_rich_surname_and_nationwide_region_guidance(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store_path = Path(temp_dir) / "hidden_settings_history.jsonl"
+            tool = HiddenSettingsTool(SequenceFakeClient([]), build_config(store_path))
+
+            messages = tool._build_messages(
+                build_base_scenario(),
+                rejection_feedback="",
+                generation_plan=UserGenerationPlan(
+                    address_style="standard_residential",
+                    address_instruction="生成标准小区/公寓住宅地址，通常包含小区、楼栋、单元、楼层或室号。",
+                    reply_noise_enabled=False,
+                    reply_noise_target="",
+                    reply_noise_rounds=0,
+                    reply_noise_instruction="整体正常配合客服，绝大多数轮次直接按问答题回答，不需要刻意答非所问。",
+                ),
+            )
+
+        self.assertIn("姓氏候选池示例（仅示例，不限于此）", messages[1]["content"])
+        self.assertIn("全国地址地区池示例（仅示例，要求覆盖全国随机采样）", messages[1]["content"])
+        self.assertIn("地址地区必须在全国范围内随机取样", messages[1]["content"])
+        self.assertIn("不要反复集中在“张、王、李、赵”和“广深杭苏”等少数高频选项", messages[0]["content"])
 
     def test_user_prompt_adds_hard_guardrail_after_repeated_surname_prompt(self):
         scenario = build_base_scenario()
@@ -1880,28 +1907,55 @@ class UserPromptTests(unittest.TestCase):
                 ["南海区桂城街道东信花园五期2栋3单元601室"],
             )
 
+    def test_region_option_pools_cover_all_mainland_province_level_regions(self):
+        expected_non_municipal_regions = {
+            "河北省",
+            "山西省",
+            "辽宁省",
+            "吉林省",
+            "黑龙江省",
+            "江苏省",
+            "浙江省",
+            "安徽省",
+            "福建省",
+            "江西省",
+            "山东省",
+            "河南省",
+            "湖北省",
+            "湖南省",
+            "广东省",
+            "海南省",
+            "四川省",
+            "贵州省",
+            "云南省",
+            "陕西省",
+            "甘肃省",
+            "青海省",
+            "内蒙古",
+            "广西",
+            "西藏",
+            "宁夏",
+            "新疆",
+        }
+        expected_municipalities = {"北京市", "上海市", "天津市", "重庆市"}
+
+        self.assertEqual(set(COHERENT_REGION_CITY_DISTRICT_MAP.keys()), expected_non_municipal_regions)
+        self.assertEqual(set(COHERENT_MUNICIPALITY_CITY_DISTRICT_MAP.keys()), expected_municipalities)
+        self.assertEqual(len(COHERENT_REGION_OPTIONS), len(expected_non_municipal_regions) * 2)
+        self.assertEqual(len(COHERENT_MUNICIPALITY_OPTIONS), len(expected_municipalities))
+
+        for province, cities in COHERENT_REGION_CITY_DISTRICT_MAP.items():
+            self.assertGreaterEqual(len(cities), 2, province)
+            for city, districts in cities.items():
+                self.assertGreaterEqual(len(districts), 3, city)
+
     def test_generate_region_stale_address_keeps_valid_province_city_pairing(self):
         stale_address = HiddenSettingsTool._generate_region_stale_address(
             "江苏省苏州市工业园区星湖街888号星辰花园8栋302室",
             random.Random(7),
         )
         components = extract_address_components(stale_address)
-        valid_pairs = {
-            ("广东省", "广州市"),
-            ("广东省", "深圳市"),
-            ("浙江省", "杭州市"),
-            ("浙江省", "宁波市"),
-            ("江苏省", "南京市"),
-            ("江苏省", "苏州市"),
-            ("山东省", "济南市"),
-            ("山东省", "青岛市"),
-            ("河南省", "郑州市"),
-            ("湖北省", "武汉市"),
-            ("湖南省", "长沙市"),
-            ("四川省", "成都市"),
-            ("福建省", "福州市"),
-            ("安徽省", "合肥市"),
-        }
+        valid_pairs = {(option["province"], option["city"]) for option in COHERENT_REGION_OPTIONS}
 
         self.assertIn((components.province, components.city), valid_pairs)
         self.assertNotEqual(stale_address, "江苏省苏州市工业园区星湖街888号星辰花园8栋302室")
