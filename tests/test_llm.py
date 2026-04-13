@@ -46,13 +46,17 @@ def build_config() -> AppConfig:
         address_collection_followup_probability=0.35,
         address_segmented_reply_probability=0.35,
         address_segment_rounds_weights={"2": 0.45, "3": 0.35, "4": 0.20},
-        address_segment_strategy_weights={
-            "province_city__district__locality__detail": 0.20,
-            "province_city_district__locality__detail": 0.30,
-            "province_city__district_locality__detail": 0.15,
-            "province_city__district__locality_detail": 0.10,
-            "province_city_district_locality__detail": 0.15,
-            "province_city_district__locality_detail": 0.10,
+        address_segment_2_strategy_weights={
+            "province_city_district_locality__detail": 0.6,
+            "province_city_district__locality_detail": 0.4,
+        },
+        address_segment_3_strategy_weights={
+            "province_city_district__locality__detail": 0.5454545454545454,
+            "province_city__district_locality__detail": 0.2727272727272727,
+            "province_city__district__locality_detail": 0.18181818181818182,
+        },
+        address_segment_4_strategy_weights={
+            "province_city__district__locality__detail": 1.0,
         },
         address_input_omit_province_city_suffix_probability=0.0,
         address_confirmation_direct_correction_probability=0.5,

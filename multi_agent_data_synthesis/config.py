@@ -46,13 +46,17 @@ DEFAULT_ADDRESS_SEGMENT_ROUNDS_WEIGHTS = {
     "3": 0.35,
     "4": 0.20,
 }
-DEFAULT_ADDRESS_SEGMENT_STRATEGY_WEIGHTS = {
-    "province_city__district__locality__detail": 0.20,
-    "province_city_district__locality__detail": 0.30,
-    "province_city__district_locality__detail": 0.15,
-    "province_city__district__locality_detail": 0.10,
-    "province_city_district_locality__detail": 0.15,
-    "province_city_district__locality_detail": 0.10,
+DEFAULT_ADDRESS_SEGMENT_2_STRATEGY_WEIGHTS = {
+    "province_city_district_locality__detail": 0.6,
+    "province_city_district__locality_detail": 0.4,
+}
+DEFAULT_ADDRESS_SEGMENT_3_STRATEGY_WEIGHTS = {
+    "province_city_district__locality__detail": 0.5454545454545454,
+    "province_city__district_locality__detail": 0.2727272727272727,
+    "province_city__district__locality_detail": 0.18181818181818182,
+}
+DEFAULT_ADDRESS_SEGMENT_4_STRATEGY_WEIGHTS = {
+    "province_city__district__locality__detail": 1.0,
 }
 DEFAULT_ADDRESS_KNOWN_MISMATCH_START_LEVEL_WEIGHTS = {
     "province": 0.05,
@@ -133,7 +137,9 @@ class AppConfig:
     address_collection_followup_probability: float
     address_segmented_reply_probability: float
     address_segment_rounds_weights: dict[str, float]
-    address_segment_strategy_weights: dict[str, float]
+    address_segment_2_strategy_weights: dict[str, float]
+    address_segment_3_strategy_weights: dict[str, float]
+    address_segment_4_strategy_weights: dict[str, float]
     address_input_omit_province_city_suffix_probability: float
     address_confirmation_direct_correction_probability: float
     user_reply_off_topic_probability: float
@@ -200,6 +206,51 @@ def _load_weight_map(
     return merged
 
 
+def _load_optional_weight_map(env_name: str) -> dict[str, float] | None:
+    raw = os.getenv(env_name, "").strip()
+    if not raw:
+        return None
+
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"{env_name} must be valid JSON.") from exc
+
+    if not isinstance(parsed, dict):
+        raise ValueError(f"{env_name} must be a JSON object.")
+
+    return {str(key): float(value) for key, value in parsed.items()}
+
+
+def _load_segment_strategy_weights(
+    *,
+    env_name: str,
+    default: dict[str, float],
+    legacy_values: dict[str, float] | None = None,
+) -> dict[str, float]:
+    override_values = _load_optional_weight_map(env_name)
+    if override_values:
+        total = sum(max(0.0, float(value)) for value in override_values.values())
+        if abs(total - 1.0) > 1e-6:
+            raise ValueError(f"{env_name} must sum to 1.0 within its segment choices.")
+        return {str(key): float(value) for key, value in override_values.items()}
+
+    if legacy_values:
+        filtered_legacy_values = {
+            key: float(value)
+            for key, value in legacy_values.items()
+            if key in default
+        }
+        total = sum(max(0.0, float(value)) for value in filtered_legacy_values.values())
+        if total > 0:
+            return {
+                key: max(0.0, float(value)) / total
+                for key, value in filtered_legacy_values.items()
+            }
+
+    return dict(default)
+
+
 def load_config() -> AppConfig:
     _refresh_env_from_file()
     default_model = os.getenv("OPENAI_MODEL", "gpt-4o").strip()
@@ -213,6 +264,9 @@ def load_config() -> AppConfig:
         raise ValueError("Missing OPENAI_BASE_URL. Set it in environment variables or .env.")
 
     user = os.getenv("OPENAI_USER", model_defaults.get("user", "")).strip()
+    legacy_segment_strategy_weights = _load_optional_weight_map(
+        "ADDRESS_SEGMENT_MERGE_STRATEGY_WEIGHTS"
+    )
 
     return AppConfig(
         openai_base_url=base_url,
@@ -285,9 +339,20 @@ def load_config() -> AppConfig:
             "ADDRESS_SEGMENT_ROUNDS_WEIGHTS",
             DEFAULT_ADDRESS_SEGMENT_ROUNDS_WEIGHTS,
         ),
-        address_segment_strategy_weights=_load_weight_map(
-            "ADDRESS_SEGMENT_MERGE_STRATEGY_WEIGHTS",
-            DEFAULT_ADDRESS_SEGMENT_STRATEGY_WEIGHTS,
+        address_segment_2_strategy_weights=_load_segment_strategy_weights(
+            env_name="ADDRESS_SEGMENT_2_STRATEGY_WEIGHTS",
+            default=DEFAULT_ADDRESS_SEGMENT_2_STRATEGY_WEIGHTS,
+            legacy_values=legacy_segment_strategy_weights,
+        ),
+        address_segment_3_strategy_weights=_load_segment_strategy_weights(
+            env_name="ADDRESS_SEGMENT_3_STRATEGY_WEIGHTS",
+            default=DEFAULT_ADDRESS_SEGMENT_3_STRATEGY_WEIGHTS,
+            legacy_values=legacy_segment_strategy_weights,
+        ),
+        address_segment_4_strategy_weights=_load_segment_strategy_weights(
+            env_name="ADDRESS_SEGMENT_4_STRATEGY_WEIGHTS",
+            default=DEFAULT_ADDRESS_SEGMENT_4_STRATEGY_WEIGHTS,
+            legacy_values=legacy_segment_strategy_weights,
         ),
         address_input_omit_province_city_suffix_probability=float(
             os.getenv("ADDRESS_INPUT_OMIT_PROVINCE_CITY_SUFFIX_PROBABILITY", "0.0")

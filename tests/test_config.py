@@ -23,7 +23,9 @@ class ConfigTests(unittest.TestCase):
                     "SECOND_ROUND_INCLUDE_ISSUE_PROBABILITY": "0.9",
                     "ADDRESS_SEGMENTED_REPLY_PROBABILITY": "0.8",
                     "ADDRESS_SEGMENT_ROUNDS_WEIGHTS": '{"2": 0.1, "3": 0.9, "4": 0.0}',
-                    "ADDRESS_SEGMENT_MERGE_STRATEGY_WEIGHTS": '{"province_city_district__locality__detail": 1.0}',
+                    "ADDRESS_SEGMENT_3_STRATEGY_WEIGHTS": '{"province_city_district__locality__detail": 1.0}',
+                    "ADDRESS_SEGMENT_2_STRATEGY_WEIGHTS": '{"province_city_district_locality__detail": 0.7, "province_city_district__locality_detail": 0.3}',
+                    "ADDRESS_SEGMENT_4_STRATEGY_WEIGHTS": '{"province_city__district__locality__detail": 1.0}',
                     "ADDRESS_KNOWN_MISMATCH_REWRITE_END_LEVEL_WEIGHTS": '{"building": 0.3, "room": 0.7}',
                     "USER_REPLY_OFF_TOPIC_TARGET_WEIGHTS": '{"address_collection": 0.6, "surname_collection": 0.4}',
                     "USER_REPLY_OFF_TOPIC_ROUNDS_WEIGHTS": '{"1": 0.7, "2": 0.3}',
@@ -42,13 +44,63 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(config.address_segmented_reply_probability, 0.8)
         self.assertEqual(config.address_segment_rounds_weights["3"], 0.9)
         self.assertEqual(
-            config.address_segment_strategy_weights["province_city_district__locality__detail"],
+            config.address_segment_3_strategy_weights["province_city_district__locality__detail"],
+            1.0,
+        )
+        self.assertEqual(
+            config.address_segment_2_strategy_weights["province_city_district_locality__detail"],
+            0.7,
+        )
+        self.assertEqual(
+            config.address_segment_4_strategy_weights["province_city__district__locality__detail"],
             1.0,
         )
         self.assertEqual(config.address_known_mismatch_rewrite_end_level_weights["room"], 0.7)
         self.assertEqual(config.user_reply_off_topic_target_weights["address_collection"], 0.6)
         self.assertEqual(config.user_reply_off_topic_rounds_weights["2"], 0.3)
         self.assertEqual(config.max_concurrency, 3)
+
+    def test_load_config_keeps_legacy_segment_strategy_env_as_fallback(self):
+        with patch.object(config_module, "load_dotenv", return_value=True):
+            with patch.dict(
+                os.environ,
+                {
+                    "OPENAI_MODEL": "gpt-4o",
+                    "OPENAI_BASE_URL": "https://example.com/v1/chat/completions",
+                    "OPENAI_API_KEY": "env-api-key",
+                    "ADDRESS_SEGMENT_MERGE_STRATEGY_WEIGHTS": '{"province_city_district__locality__detail": 0.9, "province_city_district__locality_detail": 0.8, "province_city__district__locality__detail": 0.7}',
+                },
+                clear=False,
+            ):
+                config = load_config()
+
+        self.assertEqual(
+            config.address_segment_3_strategy_weights["province_city_district__locality__detail"],
+            1.0,
+        )
+        self.assertEqual(
+            config.address_segment_2_strategy_weights["province_city_district__locality_detail"],
+            1.0,
+        )
+        self.assertEqual(
+            config.address_segment_4_strategy_weights["province_city__district__locality__detail"],
+            1.0,
+        )
+
+    def test_load_config_rejects_segment_strategy_distribution_that_does_not_sum_to_one(self):
+        with patch.object(config_module, "load_dotenv", return_value=True):
+            with patch.dict(
+                os.environ,
+                {
+                    "OPENAI_MODEL": "gpt-4o",
+                    "OPENAI_BASE_URL": "https://example.com/v1/chat/completions",
+                    "OPENAI_API_KEY": "env-api-key",
+                    "ADDRESS_SEGMENT_2_STRATEGY_WEIGHTS": '{"province_city_district_locality__detail": 0.7, "province_city_district__locality_detail": 0.4}',
+                },
+                clear=False,
+            ):
+                with self.assertRaisesRegex(ValueError, "ADDRESS_SEGMENT_2_STRATEGY_WEIGHTS must sum to 1.0"):
+                    load_config()
 
     def test_load_config_allows_custom_model_when_env_is_complete(self):
         with patch.object(config_module, "load_dotenv", return_value=True):

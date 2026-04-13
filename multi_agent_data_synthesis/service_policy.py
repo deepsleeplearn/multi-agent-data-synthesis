@@ -66,10 +66,10 @@ class ServicePolicyResult:
 class ServiceDialoguePolicy:
     FAULT_ACKNOWLEDGEMENT_PREFIX = "非常抱歉，给您添麻烦了，我这就安排是否上门维修"
 
-    SURNAME_PROMPT = "请问您贵姓"
+    SURNAME_PROMPT = "请问您贵姓？"
     CONTACTABLE_PROMPT = "请问您当前这个来电号码能联系到您吗？"
-    PHONE_KEYPAD_PROMPT = "请您在拨号盘上输入您的联系方式，并以#号键结束"
-    PHONE_KEYPAD_RETRY_PROMPT = "您输入的号码有误，请重新在拨号盘上输入您的联系方式，并以#号键结束"
+    PHONE_KEYPAD_PROMPT = "请您在拨号盘上输入您的联系方式，并以#号键结束。"
+    PHONE_KEYPAD_RETRY_PROMPT = "您输入的号码有误，请重新在拨号盘上输入您的联系方式，并以#号键结束。"
     PHONE_CONFIRMATION_TEMPLATE = "号码是{phone}，对吗？"
     FAULT_ISSUE_PROMPT = "请问{product}现在是出现了什么问题？"
     ADDRESS_PROMPT = "需要登记下您的地址，麻烦您完整的说下省、市、区、乡镇，精确到门牌号。"
@@ -82,11 +82,11 @@ class ServiceDialoguePolicy:
     PRODUCT_ARRIVAL_PROMPT = "请问{product}到货了没？"
     PRODUCT_MODEL_PROMPT = "请问产品型号方便提供一下吗？"
     # 每条话术支持配置为 [(文案, 权重), ...]，每次发送时使用 random.choices 按权重随机选择。
-    SURNAME_PROMPT: PromptConfig = [("请问您贵姓", 1.0)]
+    SURNAME_PROMPT: PromptConfig = [("请问您贵姓？", 1.0)]
     CONTACTABLE_PROMPT: PromptConfig = [("请问您当前这个来电号码能联系到您吗？", 1.0)]
-    PHONE_KEYPAD_PROMPT: PromptConfig = [("请您在拨号盘上输入您的联系方式，并以#号键结束", 1.0)]
+    PHONE_KEYPAD_PROMPT: PromptConfig = [("请您在拨号盘上输入您的联系方式，并以#号键结束。", 1.0)]
     PHONE_KEYPAD_RETRY_PROMPT: PromptConfig = [
-        ("您输入的号码有误，请重新在拨号盘上输入您的联系方式，并以#号键结束", 1.0)
+        ("您输入的号码有误，请重新在拨号盘上输入您的联系方式，并以#号键结束。", 1.0)
     ]
     PHONE_CONFIRMATION_TEMPLATE: PromptConfig = [("号码是{phone}，对吗？", 1.0)]
     FAULT_ISSUE_PROMPT: PromptConfig = [("请问{product}现在是出现了什么问题？", 1.0)]
@@ -1029,6 +1029,11 @@ class ServiceDialoguePolicy:
         )
         for pattern in prefix_patterns:
             cleaned = re.sub(pattern, "", cleaned)
+        cleaned = re.sub(
+            r"^(?:就在|就在那个|就是在|我在|在)\s*(?=[\u4e00-\u9fa5]{2,}(?:省|市|区|县|旗|镇|乡|街道))",
+            "",
+            cleaned,
+        )
         cleaned = re.split(r"[。！？!?]", cleaned, maxsplit=1)[0]
         cleaned = re.split(r"[，,]\s*(?:麻烦|另外|还有|辛苦|谢谢|尽快|催一下|师傅)", cleaned, maxsplit=1)[0]
         structured = cls._extract_structured_address_from_text(cleaned)
@@ -1359,7 +1364,7 @@ class ServiceDialoguePolicy:
     @classmethod
     def _extract_village_group_token(cls, address: str) -> str:
         normalized = cls._normalize_address_text(address)
-        match = re.search(r"([零一二三四五六七八九十两\d]+组)", normalized)
+        match = re.search(r"([零一二三四五六七八九十两\d]+(?:组|社|队))", normalized)
         return match.group(1) if match else ""
 
     @classmethod

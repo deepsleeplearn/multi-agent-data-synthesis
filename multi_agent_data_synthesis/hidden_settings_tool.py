@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from multi_agent_data_synthesis.address_utils import (
+    COMMUNITY_SUFFIXES,
     MUNICIPALITY_PREFIXES,
     build_address_progressive_segments,
     extract_address_components,
@@ -589,6 +590,9 @@ ADDRESS_LEVEL_ORDER = (
     "floor",
     "room",
 )
+ADDRESS_REQUIRED_LOCALITY_KEYWORDS = tuple(
+    dict.fromkeys((*COMMUNITY_SUFFIXES, "社区", "家园", "新村", "村", "屯", "组", "队"))
+)
 
 
 @dataclass
@@ -937,6 +941,7 @@ class HiddenSettingsTool:
 - 用户信息必须完整，可直接用于后续对话
 - 地址必须是合理的中国地址
 - 地址地区必须在全国范围内随机取样，尽量覆盖不同省份、自治区、直辖市，不要反复只写东部沿海热门城市
+- 地址必须至少落到小区/社区/村一级，不能只写“某医院隔壁”“某路口西南角”“后巷门面”这类纯地标或纯路口描述
 - 当前地址形态要求: {generation_plan.address_instruction}
 - 电话必须是 11 位中国大陆手机号
 - `hidden_context.gender` 必须填写为“男”或“女”
@@ -1074,10 +1079,18 @@ class HiddenSettingsTool:
         has_precise_detail = bool(components.building or components.unit or components.floor or components.room)
         has_house_number = bool(re.search(r"\d+\s*号(?!楼)", normalized))
         has_rural_detail = bool(re.search(r"(村|屯|组|队).*(\d+\s*号|[零一二三四五六七八九十两\d]+组)", normalized))
+        has_required_locality_anchor = bool(
+            components.community
+            or any(keyword in normalized for keyword in ADDRESS_REQUIRED_LOCALITY_KEYWORDS)
+        )
         has_poi_locality = bool(re.search(r"(医院|学校|酒店|饭店|园区|门店|商场|广场)", normalized))
 
         if not (has_locality or has_poi_locality):
             raise ValueError("Generated hidden settings address must include locality detail.")
+        if not has_required_locality_anchor:
+            raise ValueError(
+                "Generated hidden settings address must reach a community- or village-level locality."
+            )
         if not (has_precise_detail or has_house_number or has_rural_detail):
             raise ValueError("Generated hidden settings address must include precise locating detail.")
 
@@ -1121,6 +1134,7 @@ class HiddenSettingsTool:
             "- 请重新生成完整 JSON。\n"
             "- 手机号必须是 11 位中国大陆手机号，只保留号码本体，不要附带备注、空格或分隔符。\n"
             "- 地址必须足够完整，至少带省/市/区县和可定位到上门位置的细节；不要只写小区名、路名或片段地址。\n"
+            "- 地址必须至少落到小区/社区/村一级，不能只写医院隔壁、路口拐角、后巷门面这类纯地标描述。\n"
             "- 故障场景下，绝大多数 issue 只保留 1 个核心故障现象；只有极少数场景可写 2 个相关故障点。\n"
             "- 即使允许双故障点，也不要扩展到第 3 个问题，不要堆砌温度数据或过多后果描述。\n"
         )
@@ -1185,9 +1199,9 @@ class HiddenSettingsTool:
     def _address_instruction_for_style(address_style: str) -> str:
         instructions = {
             "standard_residential": "生成标准小区/公寓住宅地址，通常包含小区、楼栋、单元、楼层或室号。",
-            "house_number_only": "生成可定位但不一定有栋单元室的地址，优先使用路名/街区/社区/园区/沿街商铺 + 明确门牌号，例如“幸福家园134号”“沿街商铺28号”。",
-            "rural_group_number": "生成乡镇/村/组/号这类乡村地址，不要硬写成标准小区楼栋单元室。",
-            "landmark_poi": "生成围绕医院、饭店、酒店、学校、产业园、门店等地标的地址，但仍要能定位，最好同时带路名、门牌号或楼层位置。",
+            "house_number_only": "生成可定位但不一定有栋单元室的地址，但主体仍要落到小区/社区/家园/花园/村等一级名称，再补明确门牌号，例如“幸福家园134号”“康乐社区东门旁62号”。",
+            "rural_group_number": "生成乡镇/村/组/号这类乡村地址，必须明确到村一级或组一级，不要只写镇上某路口。",
+            "landmark_poi": "可以围绕医院、饭店、酒店、学校、产业园、门店等地标来描述，但主体仍必须落到小区/社区/村一级地址，地标只能作辅助定位，不要只写路口或某地标隔壁门面。",
         }
         return instructions.get(address_style, instructions["standard_residential"])
 
@@ -1247,7 +1261,7 @@ class HiddenSettingsTool:
             "opening_confirmation": f"允许在{round_scope}回应开场确认时轻微答偏，例如先确认再顺带补一句背景，但不要连续复读同一诉求；超过配置轮数后恢复正常简短确认。",
             "issue_description": f"允许在{round_scope}被问故障或安装诉求时先说得不完全到位，例如先说影响感受或场景，再补核心问题；超过配置轮数后要直接回答核心诉求。",
             "surname_collection": f"允许在{round_scope}被问姓氏时先用更生活化的答法，比如报全名或“我姓王，叫王家俊”，但不要扯到无关内容；超过配置轮数后直接给姓氏。",
-            "phone_contact_confirmation": f"允许在{round_scope}被问当前号码是否能联系时先给生活化解释，但最终还是要明确能不能联系；超过配置轮数后直接回答能或不能。",
+            "phone_contact_confirmation": f"允许在{round_scope}被问当前号码是否能联系时先给一句生活化解释，但当轮必须明确回答能或不能；不要提前说“待会输入号码”“等会再报号码”这类后续流程话。超过配置轮数后直接回答能或不能。",
             "phone_keypad_input": f"允许在{round_scope}被要求拨号盘输入号码时出现轻微不规范输入，但不能离题；超过配置轮数后严格只输出正确按键内容。",
             "phone_confirmation": f"允许在{round_scope}核对号码时先口语化确认或否认，但不要重复扯回别的话题；超过配置轮数后只简短回答对或不对。",
             "address_collection": f"允许在{round_scope}被问地址时先轻微答偏，例如只说到区域、先反问一句，或只补一部分地址；超过配置轮数后按地址计划正常补齐，不要反复复读同一句。",
@@ -1382,8 +1396,16 @@ class HiddenSettingsTool:
                         correction_address,
                         rng,
                     )
-                    prefix = rng.choice(["不对，", "不是，", "不对，正确的是", "不是，正确的是"])
-                    address_confirmation_no_reply = f"{prefix}{correction_address}。"
+                    address_confirmation_no_reply = rng.choice(
+                        [
+                            f"不对，应该是{correction_address}。",
+                            f"不是，应该是{correction_address}。",
+                            f"不对，是{correction_address}。",
+                            f"不是这个，是{correction_address}。",
+                            f"不对，改成{correction_address}。",
+                            f"不是，得是{correction_address}。",
+                        ]
+                    )
                 else:
                     address_confirmation_no_reply = rng.choice(
                         [
@@ -1404,7 +1426,9 @@ class HiddenSettingsTool:
                 actual_address,
                 rng,
                 round_weights=self.config.address_segment_rounds_weights,
-                strategy_weights=self.config.address_segment_strategy_weights,
+                segment_2_strategy_weights=self.config.address_segment_2_strategy_weights,
+                segment_3_strategy_weights=self.config.address_segment_3_strategy_weights,
+                segment_4_strategy_weights=self.config.address_segment_4_strategy_weights,
             )
 
         compacted_address_rounds = [

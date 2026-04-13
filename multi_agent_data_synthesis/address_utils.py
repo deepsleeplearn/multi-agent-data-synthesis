@@ -72,13 +72,17 @@ DEFAULT_ADDRESS_SEGMENT_ROUNDS_WEIGHTS: dict[str, float] = {
     "3": 0.35,
     "4": 0.20,
 }
-DEFAULT_ADDRESS_SEGMENT_STRATEGY_WEIGHTS: dict[str, float] = {
-    "province_city__district__locality__detail": 0.20,
-    "province_city_district__locality__detail": 0.30,
-    "province_city__district_locality__detail": 0.15,
-    "province_city__district__locality_detail": 0.10,
-    "province_city_district_locality__detail": 0.15,
-    "province_city_district__locality_detail": 0.10,
+DEFAULT_ADDRESS_SEGMENT_2_STRATEGY_WEIGHTS: dict[str, float] = {
+    "province_city_district_locality__detail": 0.6,
+    "province_city_district__locality_detail": 0.4,
+}
+DEFAULT_ADDRESS_SEGMENT_3_STRATEGY_WEIGHTS: dict[str, float] = {
+    "province_city_district__locality__detail": 0.5454545454545454,
+    "province_city__district_locality__detail": 0.2727272727272727,
+    "province_city__district__locality_detail": 0.18181818181818182,
+}
+DEFAULT_ADDRESS_SEGMENT_4_STRATEGY_WEIGHTS: dict[str, float] = {
+    "province_city__district__locality__detail": 1.0,
 }
 ADDRESS_SEGMENT_STRATEGIES: dict[str, tuple[tuple[int, ...], ...]] = {
     "province_city__district__locality__detail": ((0,), (1,), (2,), (3,)),
@@ -201,6 +205,19 @@ def extract_address_components(text: str) -> AddressComponents:
         if city_match:
             city = city_match.group(0)
             remainder = remainder[city_match.end() :]
+        elif province_prefix:
+            if re.fullmatch(r"[\u4e00-\u9fa5]{2,9}", remainder):
+                city = f"{remainder}市"
+                remainder = ""
+            else:
+                # Support colloquial province+city forms like "甘肃兰州七里河区".
+                suffixless_city_match = re.match(
+                    r"^([\u4e00-\u9fa5]{2,9}?)(?=[\u4e00-\u9fa5]{2,12}(?:(?<!小)区|县|旗))",
+                    remainder,
+                )
+                if suffixless_city_match:
+                    city = f"{suffixless_city_match.group(1)}市"
+                    remainder = remainder[suffixless_city_match.end() :]
 
     district = ""
     district_match = re.match(r"^[\u4e00-\u9fa5]{1,12}(?:(?<!小)区|县|旗)", remainder)
@@ -296,6 +313,10 @@ def comparable_component(kind: str, value: str) -> str:
     compact = normalize_address_text(value)
     if not compact:
         return ""
+    if kind == "province":
+        return re.sub(r"(省|市|自治区|特别行政区)$", "", compact)
+    if kind == "city":
+        return re.sub(r"市$", "", compact)
     if kind in {"building", "unit", "floor", "room"}:
         return _numeric_token(compact)
     return compact
@@ -335,7 +356,9 @@ def build_address_progressive_segments(
     rng: random.Random,
     *,
     round_weights: dict[str, float] | None = None,
-    strategy_weights: dict[str, float] | None = None,
+    segment_2_strategy_weights: dict[str, float] | None = None,
+    segment_3_strategy_weights: dict[str, float] | None = None,
+    segment_4_strategy_weights: dict[str, float] | None = None,
 ) -> list[str]:
     components = extract_address_components(address)
     groups = [
@@ -348,7 +371,11 @@ def build_address_progressive_segments(
         return [address]
 
     round_weights = round_weights or DEFAULT_ADDRESS_SEGMENT_ROUNDS_WEIGHTS
-    strategy_weights = strategy_weights or DEFAULT_ADDRESS_SEGMENT_STRATEGY_WEIGHTS
+    segment_strategy_weights = {
+        2: segment_2_strategy_weights or DEFAULT_ADDRESS_SEGMENT_2_STRATEGY_WEIGHTS,
+        3: segment_3_strategy_weights or DEFAULT_ADDRESS_SEGMENT_3_STRATEGY_WEIGHTS,
+        4: segment_4_strategy_weights or DEFAULT_ADDRESS_SEGMENT_4_STRATEGY_WEIGHTS,
+    }
     valid_strategies: dict[int, list[tuple[str, list[str]]]] = {}
     for name, strategy in ADDRESS_SEGMENT_STRATEGIES.items():
         segments = _build_segments_for_strategy(groups, strategy)
@@ -367,8 +394,9 @@ def build_address_progressive_segments(
 
     strategy_candidates = valid_strategies[target_round_count]
     strategy_choice_names = [name for name, _ in strategy_candidates]
+    selected_strategy_weights = segment_strategy_weights.get(target_round_count, {})
     strategy_choice_weights = [
-        max(0.0, float(strategy_weights.get(name, 0.0)))
+        max(0.0, float(selected_strategy_weights.get(name, 0.0)))
         for name in strategy_choice_names
     ]
     if sum(strategy_choice_weights) <= 0:

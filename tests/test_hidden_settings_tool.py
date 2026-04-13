@@ -56,7 +56,9 @@ def build_config(
     address_collection_followup_probability: float = 0.35,
     address_segmented_reply_probability: float | None = None,
     address_segment_rounds_weights: dict[str, float] | None = None,
-    address_segment_strategy_weights: dict[str, float] | None = None,
+    address_segment_2_strategy_weights: dict[str, float] | None = None,
+    address_segment_3_strategy_weights: dict[str, float] | None = None,
+    address_segment_4_strategy_weights: dict[str, float] | None = None,
     address_input_omit_province_city_suffix_probability: float = 0.0,
     address_confirmation_direct_correction_probability: float = 0.5,
     user_reply_off_topic_probability: float = 0.18,
@@ -71,14 +73,20 @@ def build_config(
         address_segmented_reply_probability = address_collection_followup_probability
     if address_segment_rounds_weights is None:
         address_segment_rounds_weights = {"2": 0.45, "3": 0.35, "4": 0.20}
-    if address_segment_strategy_weights is None:
-        address_segment_strategy_weights = {
-            "province_city__district__locality__detail": 0.20,
-            "province_city_district__locality__detail": 0.30,
-            "province_city__district_locality__detail": 0.15,
-            "province_city__district__locality_detail": 0.10,
-            "province_city_district_locality__detail": 0.15,
-            "province_city_district__locality_detail": 0.10,
+    if address_segment_2_strategy_weights is None:
+        address_segment_2_strategy_weights = {
+            "province_city_district_locality__detail": 0.6,
+            "province_city_district__locality_detail": 0.4,
+        }
+    if address_segment_3_strategy_weights is None:
+        address_segment_3_strategy_weights = {
+            "province_city_district__locality__detail": 0.5454545454545454,
+            "province_city__district_locality__detail": 0.2727272727272727,
+            "province_city__district__locality_detail": 0.18181818181818182,
+        }
+    if address_segment_4_strategy_weights is None:
+        address_segment_4_strategy_weights = {
+            "province_city__district__locality__detail": 1.0,
         }
     if address_known_mismatch_start_level_weights is None:
         address_known_mismatch_start_level_weights = {
@@ -157,7 +165,9 @@ def build_config(
         address_collection_followup_probability=address_collection_followup_probability,
         address_segmented_reply_probability=address_segmented_reply_probability,
         address_segment_rounds_weights=address_segment_rounds_weights,
-        address_segment_strategy_weights=address_segment_strategy_weights,
+        address_segment_2_strategy_weights=address_segment_2_strategy_weights,
+        address_segment_3_strategy_weights=address_segment_3_strategy_weights,
+        address_segment_4_strategy_weights=address_segment_4_strategy_weights,
         address_input_omit_province_city_suffix_probability=address_input_omit_province_city_suffix_probability,
         address_confirmation_direct_correction_probability=address_confirmation_direct_correction_probability,
         user_reply_off_topic_probability=user_reply_off_topic_probability,
@@ -365,7 +375,10 @@ class HiddenSettingsToolTests(unittest.TestCase):
     def test_normalize_generated_payload_rejects_multiple_fault_symptoms_by_default(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             store_path = Path(temp_dir) / "hidden_settings_history.jsonl"
-            tool = HiddenSettingsTool(SequenceFakeClient([]), build_config(store_path))
+            tool = HiddenSettingsTool(
+                SequenceFakeClient([]),
+                build_config(store_path, hidden_settings_multi_fault_probability=0.0),
+            )
 
             with self.assertRaisesRegex(ValueError, "usually describe only one fault symptom"):
                 tool._normalize_generated_payload(
@@ -373,7 +386,7 @@ class HiddenSettingsToolTests(unittest.TestCase):
                         full_name="李敏",
                         surname="李",
                         phone="13912345678",
-                        address="江苏省苏州市吴中区金枫路88号3幢1201室",
+                        address="江苏省苏州市吴中区金枫路金色家园88号3幢1201室",
                         persona="说话直接，比较关注老人洗澡热水是否稳定",
                         speech_style="说话简短，偶尔会直接打断补充重点",
                         issue="设备显示 E4 故障码，热水供应极不稳定。",
@@ -424,7 +437,7 @@ class HiddenSettingsToolTests(unittest.TestCase):
                     full_name="李敏",
                     surname="李",
                     phone="+86 139-1234-5678",
-                    address="江苏省苏州市吴中区金枫路88号3幢1201室",
+                    address="江苏省苏州市吴中区金枫路金色家园88号3幢1201室",
                     persona="说话直接，比较关注老人洗澡热水是否稳定",
                     speech_style="说话简短，偶尔会直接打断补充重点",
                     issue="家里的美的空气能热水器最近早晚水温不稳定，偶尔会突然变温",
@@ -465,6 +478,31 @@ class HiddenSettingsToolTests(unittest.TestCase):
                     "fault",
                 )
 
+    def test_normalize_generated_payload_rejects_landmark_only_address_without_community_or_village(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store_path = Path(temp_dir) / "hidden_settings_history.jsonl"
+            tool = HiddenSettingsTool(SequenceFakeClient([]), build_config(store_path))
+
+            with self.assertRaisesRegex(ValueError, "community- or village-level locality"):
+                tool._normalize_generated_payload(
+                    build_candidate(
+                        full_name="李敏",
+                        surname="李",
+                        phone="13912345678",
+                        address="贵州省遵义市汇川区深圳大道与延安路交汇处西南角贵州航天医院隔壁药房后巷3号门面",
+                        persona="说话直接，比较关注老人洗澡热水是否稳定",
+                        speech_style="说话简短，偶尔会直接打断补充重点",
+                        issue="家里的美的空气能热水器最近早晚水温不稳定，偶尔会突然变温",
+                        desired_resolution="希望尽快安排师傅上门检查温控和主机运行情况",
+                        availability="周五晚上七点后或者周日白天",
+                        emotion="有些着急但还算克制",
+                        urgency="中高",
+                        prior_attempts="重启过一次机器，没有改善",
+                        special_constraints="家里有老人，晚上更需要稳定热水",
+                    ),
+                    "fault",
+                )
+
     def test_normalize_generated_payload_keeps_explicit_gender(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             store_path = Path(temp_dir) / "hidden_settings_history.jsonl"
@@ -475,7 +513,7 @@ class HiddenSettingsToolTests(unittest.TestCase):
                     full_name="李敏",
                     surname="李",
                     phone="13912345678",
-                    address="江苏省苏州市吴中区金枫路88号3幢1201室",
+                    address="江苏省苏州市吴中区金枫路金色家园88号3幢1201室",
                     persona="普通住户，平时主要在家照顾老人和孩子。",
                     speech_style="表达比较日常，偶尔会重复一句确认下。",
                     issue="家里的美的空气能热水器最近早晚水温不稳定，偶尔会突然变温",
@@ -559,7 +597,7 @@ class HiddenSettingsToolTests(unittest.TestCase):
                             full_name="李敏",
                             surname="李",
                             phone="13912345678",
-                            address="江苏省苏州市吴中区金枫路88号3幢1201室",
+                            address="江苏省苏州市吴中区金枫路金色家园88号3幢1201室",
                             persona="说话直接，比较关注老人洗澡热水是否稳定",
                             speech_style="说话简短，偶尔会直接打断补充重点",
                             issue="家里的美的空气能热水器最近早晚水温不稳定，偶尔会突然变温",
@@ -599,7 +637,7 @@ class HiddenSettingsToolTests(unittest.TestCase):
                             full_name="李敏",
                             surname="李",
                             phone="电话 12345",
-                            address="江苏省苏州市吴中区金枫路88号3幢1201室",
+                            address="江苏省苏州市吴中区金枫路金色家园88号3幢1201室",
                             persona="说话直接，比较关注老人洗澡热水是否稳定",
                             speech_style="说话简短，偶尔会直接打断补充重点",
                             issue="家里的美的空气能热水器最近早晚水温不稳定，偶尔会突然变温",
@@ -614,7 +652,7 @@ class HiddenSettingsToolTests(unittest.TestCase):
                             full_name="周岚",
                             surname="周",
                             phone="13755556666",
-                            address="浙江省宁波市鄞州区天童南路818号2幢602室",
+                            address="浙江省宁波市鄞州区天童南路阳光花园818号2幢602室",
                             persona="语速偏快，希望一次说清楚，但愿意配合客服确认信息",
                             speech_style="语速偏快，表达流畅，会连续补充细节",
                             issue="空气能热水器白天还能用，晚上多人连续洗澡时热水明显不够，外机还会发出闷响",
@@ -646,7 +684,7 @@ class HiddenSettingsToolTests(unittest.TestCase):
                             full_name="李敏",
                             surname="李",
                             phone="13912345678",
-                            address="江苏省苏州市吴中区金枫路88号3幢1201室",
+                            address="江苏省苏州市吴中区金枫路金色家园88号3幢1201室",
                             persona="说话直接，比较关注老人洗澡热水是否稳定",
                             speech_style="说话简短，偶尔会直接打断补充重点",
                             issue="这个热水器最近总是显示E4故障码，热水不稳定，还有外机有点噪音。",
@@ -661,7 +699,7 @@ class HiddenSettingsToolTests(unittest.TestCase):
                             full_name="周岚",
                             surname="周",
                             phone="13755556666",
-                            address="浙江省宁波市鄞州区天童南路818号2幢602室",
+                            address="浙江省宁波市鄞州区天童南路阳光花园818号2幢602室",
                             persona="语速偏快，希望一次说清楚，但愿意配合客服确认信息",
                             speech_style="语速偏快，表达流畅，会连续补充细节",
                             issue="空气能热水器一直显示E4故障码。",
@@ -747,6 +785,7 @@ class UserPromptTests(unittest.TestCase):
 
         self.assertIn("当前客服在核对地址", messages[1]["content"])
         self.assertIn("不要在这一轮再重复故障、电话、型号或其他旧信息", messages[1]["content"])
+        self.assertIn("不必逐字复述", messages[1]["content"])
 
     def test_user_prompt_exposes_natural_contact_owner_label(self):
         scenario = build_base_scenario()
@@ -770,6 +809,64 @@ class UserPromptTests(unittest.TestCase):
 
         self.assertIn("可参考这个含义相近的口语称呼: 我老公", messages[1]["content"])
         self.assertIn("可以自然地用含义相近的口语称呼", messages[1]["content"])
+
+    def test_user_prompt_blocks_promising_later_phone_input_during_contactability_question(self):
+        scenario = build_base_scenario()
+        scenario.hidden_context["current_call_contactable"] = False
+        scenario.hidden_context["contact_phone_owner"] = "父亲"
+
+        messages = build_user_agent_messages(
+            scenario,
+            transcript=[
+                DialogueTurn(
+                    speaker="service",
+                    text="请问您当前这个来电号码能联系到您吗？",
+                    round_index=3,
+                )
+            ],
+            round_index=4,
+            second_round_reply_strategy="confirm_only",
+        )
+
+        self.assertIn("这一轮必须先明确回答“能联系”或“不能联系”", messages[1]["content"])
+        self.assertIn("不要说“待会输入号码”“等会再报号码”这类后续流程话", messages[1]["content"])
+        self.assertIn("当前客服在确认这个来电号码能否联系到你", messages[1]["content"])
+        self.assertIn("不要提前纠正地址", messages[1]["content"])
+
+    def test_user_prompt_blocks_address_correction_during_repeated_contactability_question(self):
+        scenario = build_base_scenario()
+        scenario.hidden_context["current_call_contactable"] = False
+        scenario.hidden_context["contact_phone_owner"] = "父亲"
+        scenario.hidden_context["service_known_address"] = True
+        scenario.hidden_context["service_known_address_matches_actual"] = False
+        scenario.hidden_context["service_known_address_value"] = "贵州省遵义市汇川区南岭社区华新建材城小区5栋3单元5楼201室"
+        scenario.hidden_context["service_known_address_rewrite_levels"] = ["unit"]
+
+        messages = build_user_agent_messages(
+            scenario,
+            transcript=[
+                DialogueTurn(
+                    speaker="service",
+                    text="请问您当前这个来电号码能联系到您吗？",
+                    round_index=4,
+                ),
+                DialogueTurn(
+                    speaker="user",
+                    text="刚才那个地址不对，应该是2单元。",
+                    round_index=4,
+                ),
+                DialogueTurn(
+                    speaker="service",
+                    text="请问您当前这个来电号码能联系到您吗？",
+                    round_index=5,
+                ),
+            ],
+            round_index=6,
+            second_round_reply_strategy="confirm_only",
+        )
+
+        self.assertIn("客服已第 2 次确认这个来电号码能否联系到你", messages[1]["content"])
+        self.assertIn("不要再跳去说地址纠错", messages[1]["content"])
 
     def test_user_prompt_exposes_gender_attribute(self):
         scenario = build_base_scenario()
@@ -875,6 +972,49 @@ class UserPromptTests(unittest.TestCase):
         self.assertIn("客服已第 2 次询问姓氏。你这一轮必须直接回答姓氏", messages[1]["content"])
         self.assertIn("如果上一轮你已经对同一个问题答偏了，这一轮不要复述上一轮自己说过的话", messages[1]["content"])
 
+    def test_user_prompt_guides_natural_surname_reply(self):
+        scenario = build_base_scenario()
+        scenario.customer.full_name = "王建业"
+        scenario.customer.surname = "王"
+
+        messages = build_user_agent_messages(
+            scenario,
+            transcript=[
+                DialogueTurn(speaker="service", text="好的，请问您贵姓？", round_index=3),
+            ],
+            round_index=4,
+            second_round_reply_strategy="confirm_only",
+        )
+
+        self.assertIn("优先自然回答姓氏相关信息，比如“我姓王”“免贵姓王”", messages[1]["content"])
+        self.assertIn("首次优先用自然口语，如“我姓王”“免贵姓王”“姓王”", messages[1]["content"])
+
+    def test_user_prompt_adds_hard_guardrail_after_repeated_address_prompt(self):
+        scenario = build_base_scenario()
+        scenario.customer.address = "贵州省遵义市汇川区深圳大道康乐社区62号"
+        scenario.hidden_context["address_input_rounds"] = [
+            "贵州省遵义市汇川区",
+            "深圳大道康乐社区62号",
+        ]
+
+        messages = build_user_agent_messages(
+            scenario,
+            transcript=[
+                DialogueTurn(
+                    speaker="service",
+                    text="好的，需要登记下您的地址，麻烦您完整的说下省、市、区、乡镇，精确到门牌号。",
+                    round_index=6,
+                ),
+                DialogueTurn(speaker="user", text="贵州省遵义市汇川区", round_index=6),
+                DialogueTurn(speaker="service", text="请问是几栋几单元几楼几号呢？", round_index=7),
+            ],
+            round_index=8,
+            second_round_reply_strategy="confirm_only",
+        )
+
+        self.assertIn("客服已第 2 次追问地址。你这一轮必须直接补当前缺失的地址信息", messages[1]["content"])
+        self.assertIn("优先按“贵州省遵义市汇川区深圳大道康乐社区62号”来答", messages[1]["content"])
+
     def test_next_address_input_value_does_not_skip_plan_after_off_topic_reply(self):
         scenario = build_base_scenario()
         scenario.customer.address = "江苏省扬州市宝应县安宜镇宝应碧桂园3幢5层502室"
@@ -961,7 +1101,7 @@ class UserPromptTests(unittest.TestCase):
                 full_name="李敏",
                 surname="李",
                 phone="13912345678",
-                address="江苏省苏州市吴中区金枫路88号3幢1201室",
+                address="江苏省苏州市吴中区金枫路金色家园88号3幢1201室",
                 persona="说话直接，比较关注老人洗澡热水是否稳定",
                 speech_style="说话简短，偶尔会直接打断补充重点",
                 issue="家里的美的空气能热水器最近早晚水温不稳定，偶尔会突然变温",
@@ -976,7 +1116,7 @@ class UserPromptTests(unittest.TestCase):
                 full_name="周岚",
                 surname="周",
                 phone="13755556666",
-                address="浙江省宁波市鄞州区天童南路818号2幢602室",
+                address="浙江省宁波市鄞州区天童南路阳光花园818号2幢602室",
                 persona="语速偏快，希望一次说清楚，但愿意配合客服确认信息",
                 speech_style="语速偏快，表达流畅，会连续补充细节",
                 issue="空气能热水器白天还能用，晚上多人连续洗澡时热水明显不够，外机还会发出闷响",
@@ -1049,7 +1189,7 @@ class UserPromptTests(unittest.TestCase):
                             full_name="李敏",
                             surname="李",
                             phone="13912345678",
-                            address="江苏省苏州市吴中区金枫路88号3幢1201室",
+                            address="江苏省苏州市吴中区金枫路金色家园88号3幢1201室",
                             persona="说话直接，比较关注老人洗澡热水是否稳定",
                             speech_style="说话简短，偶尔会直接打断补充重点",
                             issue="家里的美的空气能热水器最近早晚水温不稳定。",
@@ -1079,7 +1219,7 @@ class UserPromptTests(unittest.TestCase):
                             full_name="李敏",
                             surname="李",
                             phone="13912345678",
-                            address="江苏省苏州市吴中区金枫路88号3幢1201室",
+                            address="江苏省苏州市吴中区金枫路金色家园88号3幢1201室",
                             persona="说话直接，比较关注老人洗澡热水是否稳定",
                             speech_style="说话简短，偶尔会直接打断补充重点",
                             issue="家里的美的空气能热水器最近早晚水温不稳定。",
@@ -1109,7 +1249,7 @@ class UserPromptTests(unittest.TestCase):
                             full_name="李敏",
                             surname="李",
                             phone="13912345678",
-                            address="江苏省苏州市吴中区金枫路88号3幢1201室",
+                            address="江苏省苏州市吴中区金枫路金色家园88号3幢1201室",
                             persona="说话直接，比较关注老人洗澡热水是否稳定",
                             speech_style="说话简短，偶尔会直接打断补充重点",
                             issue="家里的美的空气能热水器最近早晚水温不稳定，偶尔会突然变温",
@@ -1142,7 +1282,7 @@ class UserPromptTests(unittest.TestCase):
                             full_name="赵欣",
                             surname="赵",
                             phone="13876543210",
-                            address="广东省佛山市顺德区大良街道南国路99号6栋2203室",
+                            address="广东省佛山市顺德区大良街道南国路99号康城花园6栋2203室",
                             persona="语气温和，但希望客服快一点登记完",
                             speech_style="整体简洁，确认信息时会按流程快速回答",
                             issue="新装的空气能热水器试机时发现制热速度偏慢，想尽快预约检查",
@@ -1269,7 +1409,7 @@ class UserPromptTests(unittest.TestCase):
                             full_name="赵欣",
                             surname="赵",
                             phone="13876543210",
-                            address="广东省佛山市顺德区大良街道南国路99号6栋2203室",
+                            address="广东省佛山市顺德区大良街道南国路99号康城花园6栋2203室",
                             persona="语气温和，但希望客服快一点登记完",
                             speech_style="整体简洁，确认信息时会按流程快速回答",
                             issue="新装的空气能热水器试机时发现制热速度偏慢，想尽快预约检查",
@@ -1308,7 +1448,7 @@ class UserPromptTests(unittest.TestCase):
                             full_name="赵欣",
                             surname="赵",
                             phone="13876543210",
-                            address="广东省佛山市顺德区大良街道南国路99号6栋2203室",
+                            address="广东省佛山市顺德区大良街道南国路99号康城花园6栋2203室",
                             persona="语气温和，但希望客服快一点登记完",
                             speech_style="整体简洁，确认信息时会按流程快速回答",
                             issue="新装的空气能热水器试机时发现制热速度偏慢，想尽快预约检查",
@@ -1348,7 +1488,7 @@ class UserPromptTests(unittest.TestCase):
                             full_name="赵欣",
                             surname="赵",
                             phone="13876543210",
-                            address="广东省佛山市顺德区大良街道南国路99号6栋2203室",
+                            address="广东省佛山市顺德区大良街道南国路99号康城花园6栋2203室",
                             persona="语气温和，但希望客服快一点登记完",
                             speech_style="整体简洁，确认信息时会按流程快速回答",
                             issue="新装的空气能热水器试机时发现制热速度偏慢，想尽快预约检查",
@@ -1410,13 +1550,10 @@ class UserPromptTests(unittest.TestCase):
                     address_collection_followup_probability=1.0,
                     address_segmented_reply_probability=1.0,
                     address_segment_rounds_weights={"2": 0.0, "3": 1.0, "4": 0.0},
-                    address_segment_strategy_weights={
+                    address_segment_3_strategy_weights={
                         "province_city_district__locality__detail": 1.0,
-                        "province_city__district__locality__detail": 0.0,
                         "province_city__district_locality__detail": 0.0,
                         "province_city__district__locality_detail": 0.0,
-                        "province_city_district_locality__detail": 0.0,
-                        "province_city_district__locality_detail": 0.0,
                     },
                 ),
             )
@@ -1661,6 +1798,8 @@ class UserPromptTests(unittest.TestCase):
             generated = tool.generate_for_scenario(build_base_scenario())
             reply = str(generated.hidden_context["address_confirmation_no_reply"])
             self.assertNotIn(reply, {"不对。", "不对，不是这个地址。", "不对，地址不对。", "不是这个地址。"})
+            self.assertNotIn("正确的是", reply)
+            self.assertNotIn("正确地址是", reply)
             self.assertTrue(reply.endswith("。"))
 
     def test_mismatched_known_address_direct_reply_can_follow_room_level(self):
@@ -2051,7 +2190,7 @@ class UserPromptTests(unittest.TestCase):
                                 "full_name": "赵欣",
                                 "surname": "赵",
                                 "phone": "13876543210",
-                                "address": "广东省佛山市顺德区大良街道南国路99号6栋2203室",
+                                "address": "广东省佛山市顺德区大良街道南国路99号康城花园6栋2203室",
                                 "persona": "说话随意一点，希望安装尽快安排",
                                 "speech_style": "说话随意，句子偏短，偶尔会省略主语",
                             },
@@ -2094,7 +2233,7 @@ if __name__ == "__main__":
                     full_name="李敏",
                     surname="李",
                     phone="13912345678",
-                    address="江苏省苏州市吴中区金枫路88号3幢1201室",
+                    address="江苏省苏州市吴中区金枫路金色家园88号3幢1201室",
                     persona="说话直接，比较关注老人洗澡热水是否稳定",
                     speech_style="说话简短，偶尔会直接打断补充重点",
                     issue="设备显示 E4 故障码，热水供应极不稳定。",

@@ -209,6 +209,12 @@ def build_topic_guardrail_note(transcript: list[DialogueTurn]) -> str:
         return "当前没有额外的话题限制。"
 
     last_service_text = last_turn.text
+    if ServiceDialoguePolicy.is_contactable_prompt(last_service_text):
+        return (
+            "当前客服在确认这个来电号码能否联系到你。你只需要先明确回答能联系或不能联系；"
+            "如果不能联系，可以顺带说留谁的号码，但不要提前纠正地址、不要报完整号码、"
+            "也不要跳去讲故障、型号或其他旧信息。"
+        )
     if ServiceDialoguePolicy.is_phone_confirmation_prompt(last_service_text):
         return (
             "当前客服在核对号码。你只需要回答对或不对，不要重复号码本身，"
@@ -238,7 +244,7 @@ def build_topic_guardrail_note(transcript: list[DialogueTurn]) -> str:
     return "当前没有额外的话题限制。"
 
 
-def build_repeat_prompt_guardrail_note(transcript: list[DialogueTurn]) -> str:
+def build_repeat_prompt_guardrail_note(scenario: Scenario, transcript: list[DialogueTurn]) -> str:
     if not transcript:
         return "当前没有额外的重复追问约束。"
 
@@ -251,10 +257,10 @@ def build_repeat_prompt_guardrail_note(transcript: list[DialogueTurn]) -> str:
         prompt_count = count_surname_prompts(transcript)
         if prompt_count >= 2:
             return (
-                f"客服已第 {prompt_count} 次询问姓氏。你这一轮必须直接回答姓氏，"
-                "不能继续答非所问，也不要重复上一轮自己说过的安装、维修或确认话术。"
+                f"客服已第 {prompt_count} 次询问姓氏。你这一轮必须直接回答姓氏相关信息，"
+                "可以简短说“我姓王”或直接说姓氏，不能继续答非所问，也不要重复上一轮自己说过的安装、维修或确认话术。"
             )
-        return "当前客服在问姓氏。你只回答姓氏，不要重复之前已经说过的诉求。"
+        return "当前客服在问姓氏。优先自然回答姓氏相关信息，比如“我姓王”“免贵姓王”，不要重复之前已经说过的诉求。"
 
     if ServiceDialoguePolicy.is_product_arrival_prompt(last_service_text):
         prompt_count = count_product_arrival_prompts(transcript)
@@ -265,6 +271,15 @@ def build_repeat_prompt_guardrail_note(transcript: list[DialogueTurn]) -> str:
             )
         return "当前客服在确认产品是否到货。你只围绕是否到货回答，不要重复安装诉求。"
 
+    if ServiceDialoguePolicy.is_contactable_prompt(last_service_text):
+        prompt_count = count_contactable_prompts(transcript)
+        if prompt_count >= 2:
+            return (
+                f"客服已第 {prompt_count} 次确认这个来电号码能否联系到你。你这一轮必须直接回答能联系或不能联系，"
+                "不要再跳去说地址纠错、故障细节、完整号码或上一轮原话。"
+            )
+        return "当前客服在确认这个来电号码能否联系到你。你只围绕能否联系回答，不要扯到地址纠错或其他旧话题。"
+
     if ServiceDialoguePolicy.is_product_model_prompt(last_service_text):
         prompt_count = count_product_model_prompts(transcript)
         if prompt_count >= 2:
@@ -273,6 +288,16 @@ def build_repeat_prompt_guardrail_note(transcript: list[DialogueTurn]) -> str:
                 "不要继续答非所问，也不要复读上一轮旧内容。"
             )
         return "当前客服在问型号。你只回答型号相关信息，不要展开旧话题。"
+
+    if ServiceDialoguePolicy.is_address_collection_prompt(last_service_text):
+        prompt_count = count_address_collection_prompts(transcript)
+        if prompt_count >= 2:
+            return (
+                f"客服已第 {prompt_count} 次追问地址。你这一轮必须直接补当前缺失的地址信息，"
+                f"优先按“{next_address_input_value(scenario, transcript)}”来答；"
+                "不要再说“刚刚那个地址应该挺清楚了”之类的重复话术。"
+            )
+        return "当前客服在追问地址。你只补当前还没说到的那部分地址，不要重复上一轮原话。"
 
     return "当前没有额外的重复追问约束。"
 
@@ -382,7 +407,7 @@ def build_user_agent_messages(
         else "只做简短确认，不继续补充故障或安装细节"
     )
     topic_guardrail_note = build_topic_guardrail_note(transcript)
-    repeat_prompt_guardrail_note = build_repeat_prompt_guardrail_note(transcript)
+    repeat_prompt_guardrail_note = build_repeat_prompt_guardrail_note(scenario, transcript)
     expression_mode_note = f"""
 第二轮回复策略补充要求：
 1. 当你是在直接回应客服开场确认时，必须严格执行本场景的固定策略，不要临场自行切换。
@@ -437,7 +462,7 @@ def build_user_agent_messages(
 - 若客服已知地址，该地址是否与真实地址一致: {service_known_address_matches_actual}
 - 若客服已知地址但地址不对，错误起始粒度: {service_known_address_mismatch_start_level}
 - 若客服已知地址但地址不对，需要重塑的地址粒度链路: {service_known_address_rewrite_levels_text}
-- 若客服核对了错误地址，你这一轮应答: {address_confirmation_no_reply}
+- 若客服核对了错误地址，这一轮可参考答法: {address_confirmation_no_reply}
 - 若客服第一次询问地址信息，第 1 次应答: {address_input_round_1}
 - 若客服继续追问剩余地址细节，第 2 次应答: {address_input_round_2}
 - 地址分段回复计划: {address_input_rounds_text}
@@ -460,11 +485,11 @@ def build_user_agent_messages(
 回复规则：
 1. 如果这一轮是在直接回应客服开场确认，严格按照“本场景第二轮回复策略”执行；不是这个场景时，再按客服实际追问自然回答。
 2. 故障场景下，默认只围绕隐藏设定中的 1 个故障点来描述；只有当隐藏设定本身已经明确给了 2 个相关故障点时，才可以一起提到，但不要再继续追加第 3 个问题或过多温度对比数据。
-3. 如果客服问“请问您贵姓”，无论前面是否带“好的”或其他安抚前缀，都只回答姓氏相关信息，不要重复之前已经说过的别的信息。
-4. 如果客服问当前来电号码能否联系到你，严格按照隐藏设定回答；如果不能联系，可以说明留谁的号码，但不要直接口述完整号码；表达上可以自然地用含义相近的口语称呼，不必拘泥于登记标签原词。
+3. 如果客服问“请问您贵姓”，无论前面是否带“好的”或其他安抚前缀，都只回答姓氏相关信息；首次优先用自然口语，如“我姓王”“免贵姓王”“姓王”，不要机械只蹦一个字；如果已经被重复追问两次及以上，就更直接简短。
+4. 如果客服问当前来电号码能否联系到你，严格按照隐藏设定回答；这一轮必须先明确回答“能联系”或“不能联系”。如果不能联系，可以顺带说明留谁的号码，但不要直接口述完整号码，也不要说“待会输入号码”“等会再报号码”这类后续流程话；表达上可以自然地用含义相近的口语称呼，不必拘泥于登记标签原词。
 5. 如果客服要求你在拨号盘上输入联系方式并以#号键结束，只输出本轮应输入的内容，不要附带任何解释。
 6. 如果客服用“号码是某个号码，对吗”这类话术核对号码，无论前面是否带“好的”，都根据事实回答对或不对。
-7. 如果客服用“跟您确认一下，地址是某个地址，对吗？”或“您的地址是某个地址，对吗？”这类话术核对地址，无论前面是否带“好的”，都要根据隐藏设定回答；如果地址正确，通常只简短表示肯定，不要重复完整地址；如果地址不对，就优先按“若客服核对了错误地址，你这一轮应答”来回复，这一轮可以只是表达否定，也可以顺带直接给更正地址。
+7. 如果客服用“跟您确认一下，地址是某个地址，对吗？”或“您的地址是某个地址，对吗？”这类话术核对地址，无论前面是否带“好的”，都要根据隐藏设定回答；如果地址正确，通常只简短表示肯定，不要重复完整地址；如果地址不对，就参考“若客服核对了错误地址，这一轮可参考答法”里的事实去否认或更正，但不必逐字复述那句话，可以自然地说成“应该是2单元”“不是，是4单元602室”“不对，改成5栋2单元”这类口语化表达。
 8. 如果客服问地址，你可以按隐藏设定分几轮逐步补充；客服继续追问缺失部分时，就只补当前还没说到的那部分，也可以在合适时直接给出完整地址。完整地址确认完后，如果客服再按固定话术核对地址，就只做简短确认。
 9. 如果客服问产品或者产品到货了没，就按隐藏设定回答，说话不需要太正式，口语化些；已经确认过“要安装/要维修”后，不要把同一句诉求又重复一遍，除非客服重新追问。
 10. 如果客服通知“工单已受理成功”并说明后续联系时间，这一轮通常只做简短确认回复。
