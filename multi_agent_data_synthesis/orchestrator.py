@@ -45,6 +45,8 @@ class DialogueOrchestrator:
             model=config.service_agent_model,
             temperature=config.default_temperature,
             ok_prefix_probability=config.service_ok_prefix_probability,
+            product_routing_enabled=config.product_routing_enabled,
+            product_routing_apply_probability=config.product_routing_apply_probability,
         )
 
     def generate_dialogue(self, scenario: Scenario) -> DialogueSample:
@@ -88,10 +90,20 @@ class DialogueOrchestrator:
                 speaker=SERVICE_SPEAKER,
                 text=opening_action["reply"],
                 round_index=1,
+                model_intent_inference_used=bool(
+                    opening_action.get("used_model_intent_inference", False)
+                ),
             )
         )
         if self.show_dialogue_progress:
-            await self._print_turn_async(SERVICE_SPEAKER, 1, opening_action["reply"])
+            await self._print_turn_async(
+                SERVICE_SPEAKER,
+                1,
+                opening_action["reply"],
+                used_model_intent_inference=bool(
+                    opening_action.get("used_model_intent_inference", False)
+                ),
+            )
 
         self._merge_slots(collected_slots, opening_action["slot_updates"], required_slots)
         self._merge_slots(
@@ -135,6 +147,9 @@ class DialogueOrchestrator:
                         speaker=SERVICE_SPEAKER,
                         text=service_action["reply"],
                         round_index=round_index,
+                        model_intent_inference_used=bool(
+                            service_action.get("used_model_intent_inference", False)
+                        ),
                     )
                 )
                 if self.show_dialogue_progress and service_action["reply"]:
@@ -142,6 +157,9 @@ class DialogueOrchestrator:
                         SERVICE_SPEAKER,
                         round_index,
                         service_action["reply"],
+                        used_model_intent_inference=bool(
+                            service_action.get("used_model_intent_inference", False)
+                        ),
                     )
 
                 ready_to_close = service_action["is_ready_to_close"]
@@ -211,8 +229,17 @@ class DialogueOrchestrator:
             print(f"Speech Style: {scenario.customer.speech_style or 'N/A'}")
 
     @staticmethod
-    def _print_turn(speaker: str, round_index: int, text: str) -> None:
-        print(f"[{round_index}] {display_speaker(speaker)}: {text}")
+    def _print_turn(
+        speaker: str,
+        round_index: int,
+        text: str,
+        *,
+        used_model_intent_inference: bool = False,
+    ) -> None:
+        round_label = str(round_index)
+        if speaker == SERVICE_SPEAKER and used_model_intent_inference:
+            round_label = f"{round_label}*"
+        print(f"[{round_label}] {display_speaker(speaker)}: {text}")
 
     @staticmethod
     def _print_dialogue_footer(sample: DialogueSample) -> None:
@@ -226,9 +253,21 @@ class DialogueOrchestrator:
         async with self._print_lock:
             self._print_dialogue_header(scenario, show_persona_profile=self.show_persona_profile)
 
-    async def _print_turn_async(self, speaker: str, round_index: int, text: str) -> None:
+    async def _print_turn_async(
+        self,
+        speaker: str,
+        round_index: int,
+        text: str,
+        *,
+        used_model_intent_inference: bool = False,
+    ) -> None:
         async with self._print_lock:
-            self._print_turn(speaker, round_index, text)
+            self._print_turn(
+                speaker,
+                round_index,
+                text,
+                used_model_intent_inference=used_model_intent_inference,
+            )
 
     async def _print_dialogue_footer_async(self, sample: DialogueSample) -> None:
         async with self._print_lock:

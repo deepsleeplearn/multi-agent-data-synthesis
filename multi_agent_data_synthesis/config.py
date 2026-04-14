@@ -103,6 +103,17 @@ DEFAULT_USER_REPLY_OFF_TOPIC_ROUNDS_WEIGHTS = {
 }
 
 
+def _load_bool(env_name: str, default: bool) -> bool:
+    raw = os.getenv(env_name, "").strip().lower()
+    if not raw:
+        return default
+    if raw in {"1", "true", "yes", "on"}:
+        return True
+    if raw in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError(f"{env_name} must be a boolean-like value.")
+
+
 @dataclass(frozen=True)
 class AppConfig:
     openai_base_url: str
@@ -120,6 +131,8 @@ class AppConfig:
     data_dir: Path
     output_dir: Path
     hidden_settings_store: Path
+    product_routing_enabled: bool
+    product_routing_apply_probability: float
     hidden_settings_similarity_threshold: float
     hidden_settings_duplicate_threshold: float
     hidden_settings_max_attempts: int
@@ -286,6 +299,10 @@ def load_config() -> AppConfig:
         data_dir=ROOT_DIR / "data",
         output_dir=ROOT_DIR / "outputs",
         hidden_settings_store=ROOT_DIR / "data" / "hidden_settings_history.jsonl",
+        product_routing_enabled=_load_bool("PRODUCT_ROUTING_ENABLED", True),
+        product_routing_apply_probability=float(
+            os.getenv("PRODUCT_ROUTING_APPLY_PROBABILITY", "1.0")
+        ),
         hidden_settings_similarity_threshold=float(
             os.getenv("HIDDEN_SETTINGS_SIMILARITY_THRESHOLD", "0.82")
         ),

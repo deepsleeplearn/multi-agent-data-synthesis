@@ -29,6 +29,8 @@ def build_config() -> AppConfig:
         data_dir=root,
         output_dir=root,
         hidden_settings_store=root / "hidden_settings_history.jsonl",
+        product_routing_enabled=True,
+        product_routing_apply_probability=1.0,
         hidden_settings_similarity_threshold=0.82,
         hidden_settings_duplicate_threshold=0.5,
         hidden_settings_max_attempts=3,

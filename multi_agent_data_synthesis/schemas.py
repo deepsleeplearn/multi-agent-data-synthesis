@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field, replace
 from typing import Any
 
-DEFAULT_PRODUCT_CATEGORY = "空气能热水器"
+DEFAULT_PRODUCT_CATEGORY = "空气能热水机"
 SERVICE_SPEAKER = "service"
 USER_SPEAKER = "user"
 SPEAKER_DISPLAY_NAMES = {
@@ -136,15 +136,21 @@ class DialogueTurn:
     speaker: str
     text: str
     round_index: int
+    model_intent_inference_used: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
     def to_display_dict(self) -> dict[str, Any]:
+        round_label = str(self.round_index)
+        if normalize_speaker(self.speaker) == SERVICE_SPEAKER and self.model_intent_inference_used:
+            round_label = f"{round_label}*"
         return {
             "speaker": display_speaker(self.speaker),
             "text": self.text,
             "round_index": self.round_index,
+            "round_label": round_label,
+            "model_intent_inference_used": self.model_intent_inference_used,
         }
 
 
@@ -165,7 +171,7 @@ class DialogueSample:
         data["transcript"] = display_transcript
         data["dialogue_process"] = display_transcript
         data["dialogue_text"] = "\n".join(
-            f"{turn['speaker']}: {turn['text']}" for turn in display_transcript
+            f"[{turn['round_label']}] {turn['speaker']}: {turn['text']}" for turn in display_transcript
         )
         data["related_info"] = {
             "product": data["scenario"]["product"],

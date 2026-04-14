@@ -20,6 +20,8 @@ class ConfigTests(unittest.TestCase):
                     "OPENAI_USER": "env-user",
                     "USER_AGENT_MODEL": "user-model",
                     "SERVICE_AGENT_MODEL": "service-model",
+                    "PRODUCT_ROUTING_ENABLED": "false",
+                    "PRODUCT_ROUTING_APPLY_PROBABILITY": "0.25",
                     "SECOND_ROUND_INCLUDE_ISSUE_PROBABILITY": "0.9",
                     "ADDRESS_SEGMENTED_REPLY_PROBABILITY": "0.8",
                     "ADDRESS_SEGMENT_ROUNDS_WEIGHTS": '{"2": 0.1, "3": 0.9, "4": 0.0}',
@@ -40,6 +42,8 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(config.user, "env-user")
         self.assertEqual(config.user_agent_model, "user-model")
         self.assertEqual(config.service_agent_model, "service-model")
+        self.assertFalse(config.product_routing_enabled)
+        self.assertEqual(config.product_routing_apply_probability, 0.25)
         self.assertEqual(config.second_round_include_issue_probability, 0.9)
         self.assertEqual(config.address_segmented_reply_probability, 0.8)
         self.assertEqual(config.address_segment_rounds_weights["3"], 0.9)

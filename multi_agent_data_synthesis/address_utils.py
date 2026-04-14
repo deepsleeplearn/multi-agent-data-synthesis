@@ -42,6 +42,7 @@ COMMUNITY_SUFFIXES = (
     "小区",
     "花园",
     "公寓",
+    "庭",
     "苑",
     "府",
     "里",
@@ -53,6 +54,9 @@ COMMUNITY_SUFFIXES = (
     "家园",
     "新村",
     "碧桂园",
+)
+COMMUNITY_SECTION_PATTERN = re.compile(
+    r"([A-Za-z0-9\u4e00-\u9fa5]{2,20}?(?:[一二三四五六七八九十\d]+区))"
 )
 CHINESE_DIGITS = {
     "零": 0,
@@ -67,6 +71,9 @@ CHINESE_DIGITS = {
     "八": 8,
     "九": 9,
 }
+PROVINCE_SUFFIX_PATTERN = re.compile(
+    r"^(省|壮族自治区|回族自治区|维吾尔自治区|自治区|特别行政区)"
+)
 DEFAULT_ADDRESS_SEGMENT_ROUNDS_WEIGHTS: dict[str, float] = {
     "2": 0.45,
     "3": 0.35,
@@ -131,6 +138,14 @@ def normalize_address_text(text: str) -> str:
     )
 
 
+def _strip_province_suffix(text: str) -> str:
+    stripped = str(text or "")
+    match = PROVINCE_SUFFIX_PATTERN.match(stripped)
+    if match:
+        return stripped[match.end() :]
+    return stripped
+
+
 def _compact_municipality_prefix(text: str) -> str:
     for municipality in MUNICIPALITY_PREFIXES:
         if text.startswith(f"{municipality}市"):
@@ -159,8 +174,7 @@ def compact_address_text(text: str) -> str:
     )
     if province_prefix:
         remainder = normalized[len(province_prefix) :]
-        if remainder.startswith("省"):
-            remainder = remainder[1:]
+        remainder = _strip_province_suffix(remainder)
         remainder = re.sub(r"^([^市区县]{2,9})市", r"\1", remainder, count=1)
         return f"{province_prefix}{remainder}"
 
@@ -186,6 +200,7 @@ def extract_address_components(text: str) -> AddressComponents:
             remainder = remainder[len(municipality) :]
             break
 
+    province_prefix = ""
     if not city:
         province_prefix = next(
             (
@@ -198,32 +213,61 @@ def extract_address_components(text: str) -> AddressComponents:
         if province_prefix:
             province = f"{province_prefix}省" if remainder.startswith(f"{province_prefix}省") else province_prefix
             remainder = remainder[len(province_prefix) :]
-            if remainder.startswith("省"):
-                remainder = remainder[1:]
+            remainder = _strip_province_suffix(remainder)
 
         city_match = re.match(r"^[\u4e00-\u9fa5]{2,9}市", remainder)
         if city_match:
             city = city_match.group(0)
             remainder = remainder[city_match.end() :]
         elif province_prefix:
-            if re.fullmatch(r"[\u4e00-\u9fa5]{2,9}", remainder):
-                city = f"{remainder}市"
-                remainder = ""
+            district_leading_match = re.match(
+                r"^([\u4e00-\u9fa5]{1,24}(?:(?<!小)区|县|旗))(.+)$",
+                remainder,
+            )
+            if district_leading_match:
+                city = ""
             else:
                 # Support colloquial province+city forms like "甘肃兰州七里河区".
                 suffixless_city_match = re.match(
-                    r"^([\u4e00-\u9fa5]{2,9}?)(?=[\u4e00-\u9fa5]{2,12}(?:(?<!小)区|县|旗))",
+                    r"^([\u4e00-\u9fa5]{2,9}?)(?=[\u4e00-\u9fa5]{1,12}(?:(?<!小)区|县|旗))",
                     remainder,
                 )
                 if suffixless_city_match:
                     city = f"{suffixless_city_match.group(1)}市"
                     remainder = remainder[suffixless_city_match.end() :]
+                elif re.fullmatch(r"[\u4e00-\u9fa5]{2,9}", remainder):
+                    city = f"{remainder}市"
+                    remainder = ""
+
+    if not city and not province_prefix:
+        district_only_match = re.fullmatch(r"[\u4e00-\u9fa5]{1,24}(?:(?<!小)区|县|旗)", remainder)
+        district_leading_match = re.match(
+            r"^([\u4e00-\u9fa5]{1,24}(?:(?<!小)区|县|旗))(.+)$",
+            remainder,
+        )
+        if (
+            not district_only_match
+            and not district_leading_match
+            and "自治县" not in remainder
+            and "自治旗" not in remainder
+        ):
+            suffixless_city_match = re.match(
+                r"^([\u4e00-\u9fa5]{2,4}?)(?=[\u4e00-\u9fa5]{1,12}(?:(?<!小)区|县|旗))",
+                remainder,
+            )
+            if suffixless_city_match:
+                city = f"{suffixless_city_match.group(1)}市"
+                remainder = remainder[suffixless_city_match.end() :]
 
     district = ""
-    district_match = re.match(r"^[\u4e00-\u9fa5]{1,12}(?:(?<!小)区|县|旗)", remainder)
+    district_match = re.match(r"^[\u4e00-\u9fa5]{1,24}?(?:(?<!小)区|县|旗)", remainder)
     if district_match:
-        district = district_match.group(0)
-        remainder = remainder[district_match.end() :]
+        candidate_district = district_match.group(0)
+        trailing_remainder = remainder[district_match.end() :]
+        is_numbered_section = bool(re.fullmatch(r"[\u4e00-\u9fa5]{1,20}[一二三四五六七八九十\d]+区", candidate_district))
+        if not (is_numbered_section and trailing_remainder):
+            district = candidate_district
+            remainder = trailing_remainder
 
     town = ""
     town_match = re.match(r"^[^镇乡街道]{1,12}(?:街道|镇|乡)", remainder)
@@ -245,10 +289,13 @@ def extract_address_components(text: str) -> AddressComponents:
     community_matches: list[str] = []
     for pattern in community_patterns:
         community_matches.extend(match.group(1) for match in re.finditer(pattern, community_search_text))
+    section_match = COMMUNITY_SECTION_PATTERN.search(community_search_text)
+    if section_match:
+        community_matches.append(section_match.group(1))
     if community_matches:
         community = sorted(community_matches, key=len)[-1]
 
-    building_match = re.search(r"([零一二三四五六七八九十两\d]+(?:号楼|栋|幢|座|楼))", remainder)
+    building_match = re.search(r"([A-Za-z零一二三四五六七八九十两\d]+(?:号楼|栋|幢|座|楼))", remainder)
     unit_match = re.search(r"(\d+单元)", remainder)
     floor_match = re.search(r"([零一二三四五六七八九十两\d]+层)", remainder)
     room_match = re.search(r"(\d{2,4}室)", remainder)
@@ -314,7 +361,7 @@ def comparable_component(kind: str, value: str) -> str:
     if not compact:
         return ""
     if kind == "province":
-        return re.sub(r"(省|市|自治区|特别行政区)$", "", compact)
+        return re.sub(r"(省|市|壮族自治区|回族自治区|维吾尔自治区|自治区|特别行政区)$", "", compact)
     if kind == "city":
         return re.sub(r"市$", "", compact)
     if kind in {"building", "unit", "floor", "room"}:

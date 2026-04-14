@@ -10,6 +10,7 @@ from multi_agent_data_synthesis.manual_test import (
     run_manual_test_session,
 )
 from multi_agent_data_synthesis.schemas import Scenario
+from multi_agent_data_synthesis.service_policy import ServicePolicyResult
 
 
 def build_scenario_payload(scenario_id: str) -> dict:
@@ -110,6 +111,43 @@ class ManualTestModuleTests(unittest.TestCase):
             self.assertEqual(len(saved["service_trace"]), 1)
             self.assertGreaterEqual(len(prompts), 2)
             self.assertTrue(any("测试结果已写入" in line for line in outputs))
+
+    def test_run_manual_test_session_marks_service_turn_when_model_intent_is_used(self):
+        class StubPolicy:
+            def __init__(self):
+                self.last_used_model_intent_inference = False
+                self.calls = 0
+
+            def respond(self, *, scenario, transcript, collected_slots, runtime_state):
+                self.calls += 1
+                self.last_used_model_intent_inference = True
+                return ServicePolicyResult(
+                    reply="请您在拨号盘上输入您的联系方式，并以#号键结束。",
+                    slot_updates={"phone_contactable": "no"},
+                    is_ready_to_close=False,
+                )
+
+        scenario = Scenario.from_dict(build_scenario_payload("manual_case_002"))
+        outputs: list[str] = []
+        replies = iter(["可能我那时有事，你联系我儿子吧", "/quit"])
+
+        def fake_input(prompt: str) -> str:
+            return next(replies)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_path = Path(temp_dir) / "manual_test_result.json"
+            payload = run_manual_test_session(
+                scenario,
+                output_path=output_path,
+                max_rounds=4,
+                policy=StubPolicy(),
+                input_func=fake_input,
+                print_func=outputs.append,
+            )
+
+            self.assertEqual(payload["service_trace"][0]["service_round_label"], "1*")
+            self.assertTrue(payload["service_trace"][0]["used_model_intent_inference"])
+            self.assertTrue(any("[1*] 客服:" in line for line in outputs))
 
 
 if __name__ == "__main__":

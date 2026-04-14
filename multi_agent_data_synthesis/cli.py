@@ -3,19 +3,23 @@ from __future__ import annotations
 import asyncio
 import argparse
 import json
+import random
 from pathlib import Path
 
 from multi_agent_data_synthesis.config import load_config
 from multi_agent_data_synthesis.exporter import write_json, write_jsonl
 from multi_agent_data_synthesis.hidden_settings_tool import HiddenSettingsTool
 from multi_agent_data_synthesis.llm import OpenAIChatClient
+from multi_agent_data_synthesis.agents import ServiceAgent
 from multi_agent_data_synthesis.manual_test import (
     default_manual_test_output_path,
     load_manual_test_scenario,
     run_manual_test_session,
 )
 from multi_agent_data_synthesis.orchestrator import DialogueOrchestrator
+from multi_agent_data_synthesis.product_routing import ensure_product_routing_plan
 from multi_agent_data_synthesis.scenario_factory import ScenarioFactory
+from multi_agent_data_synthesis.schemas import CustomerProfile, ServiceRequest
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -203,28 +207,154 @@ async def run_generate_hidden_settings_async(args: argparse.Namespace) -> None:
 
 
 def run_interactive_test(args: argparse.Namespace) -> None:
+    config = load_config()
     scenario = load_manual_test_scenario(
         args.scenario_file,
         scenario_id=args.scenario_id,
         scenario_index=args.scenario_index,
     )
-    scenario.hidden_context["interactive_test_freeform"] = True
-
     if args.auto_hidden_settings:
-        config = load_config()
         tool = HiddenSettingsTool(OpenAIChatClient(config), config)
         scenario = tool.generate_for_scenario(scenario)
-        scenario.hidden_context["interactive_test_freeform"] = True
-        ok_prefix_probability = config.service_ok_prefix_probability
-    else:
-        ok_prefix_probability = 0.7
+    elif _manual_test_requires_generated_hidden_settings(scenario):
+        scenario = _hydrate_manual_test_scenario_locally(scenario)
+    scenario.hidden_context["interactive_test_freeform"] = True
+    ensure_product_routing_plan(
+        scenario.hidden_context,
+        enabled=config.product_routing_enabled,
+        apply_probability=config.product_routing_apply_probability,
+        model_hint=scenario.product.model,
+    )
+    service_agent = ServiceAgent(
+        OpenAIChatClient(config),
+        model=config.service_agent_model,
+        temperature=config.default_temperature,
+        ok_prefix_probability=config.service_ok_prefix_probability,
+        product_routing_enabled=config.product_routing_enabled,
+        product_routing_apply_probability=config.product_routing_apply_probability,
+    )
 
     output_path = args.output or default_manual_test_output_path(scenario.scenario_id)
     run_manual_test_session(
         scenario,
         output_path=output_path,
         max_rounds=args.max_rounds,
-        ok_prefix_probability=ok_prefix_probability,
+        ok_prefix_probability=config.service_ok_prefix_probability,
+        policy=service_agent.policy,
+    )
+
+
+def _manual_test_requires_generated_hidden_settings(scenario) -> bool:
+    unknown_markers = {"", "未知", "unknown", "n/a", "na", "null", "none"}
+
+    def has_known_value(value: str) -> bool:
+        return str(value or "").strip().lower() not in unknown_markers
+
+    customer = scenario.customer
+    request = scenario.request
+    required_customer_values = (
+        customer.full_name,
+        customer.surname,
+        customer.phone,
+        customer.address,
+        customer.persona,
+        customer.speech_style,
+    )
+    required_request_values = (
+        request.issue,
+        request.desired_resolution,
+        request.availability,
+    )
+    if not all(has_known_value(value) for value in required_customer_values + required_request_values):
+        return True
+    if not has_known_value(str(scenario.hidden_context.get("current_call_contactable", ""))):
+        return True
+    return False
+
+
+def _hydrate_manual_test_scenario_locally(scenario):
+    seed = sum((index + 1) * ord(char) for index, char in enumerate(scenario.scenario_id))
+    rng = random.Random(seed)
+
+    customer_options = (
+        {
+            "full_name": "张丽",
+            "surname": "张",
+            "phone": "13800138001",
+            "address": "上海市浦东新区锦绣路1888弄6号1202室",
+            "persona": "上班族，表达比较直接，倾向按客服流程一步步确认。",
+            "speech_style": "说话简短清楚，偶尔带一点口头语。",
+        },
+        {
+            "full_name": "王强",
+            "surname": "王",
+            "phone": "13900139002",
+            "address": "杭州市余杭区五常大道666号3幢1单元802室",
+            "persona": "家用用户，希望尽快把问题登记清楚，不喜欢反复确认。",
+            "speech_style": "说话偏口语化，确认信息时比较利索。",
+        },
+        {
+            "full_name": "郭建国",
+            "surname": "郭",
+            "phone": "13773341553",
+            "address": "江苏省扬州市宝应县安宜镇宝应碧桂园3幢5层502室",
+            "persona": "普通家庭用户，比较配合客服，但不希望流程拖太久。",
+            "speech_style": "表达自然，必要时会补半句说明。",
+        },
+    )
+    request_type = scenario.request.request_type
+    customer_seed = customer_options[rng.randrange(len(customer_options))]
+
+    if request_type == "installation":
+        request_seed = {
+            "issue": "新买的空气能热水机已经送到家了，想约师傅上门安装。",
+            "desired_resolution": "先把安装工单登记好，等后续联系确认时间。",
+            "availability": "这周六上午或者周日下午都可以。",
+            "product_arrived": "yes",
+        }
+    else:
+        request_seed = {
+            "issue": "最近空气能热水器加热比较慢，洗澡时水温还有点忽冷忽热，想报修。",
+            "desired_resolution": "尽快安排售后上门检查机器问题。",
+            "availability": "工作日晚上七点后或者周末白天都可以。",
+            "product_arrived": "",
+        }
+
+    hidden_context = dict(scenario.hidden_context)
+    hidden_context.update(
+        {
+            "current_call_contactable": True,
+            "contact_phone_owner": "本人当前来电",
+            "contact_phone_owner_spoken_label": "我这个号码",
+            "contact_phone": customer_seed["phone"],
+            "phone_input_attempts_required": 0,
+            "phone_input_round_1": f"{customer_seed['phone']}#",
+            "phone_input_round_2": f"{customer_seed['phone']}#",
+            "phone_input_round_3": f"{customer_seed['phone']}#",
+            "service_known_address": False,
+            "service_known_address_value": "",
+            "service_known_address_matches_actual": False,
+            "address_input_round_1": customer_seed["address"],
+            "address_input_round_2": customer_seed["address"],
+            "address_input_round_3": customer_seed["address"],
+            "address_input_round_4": customer_seed["address"],
+            "address_input_rounds": [customer_seed["address"]],
+            "gender": hidden_context.get("gender", "男"),
+            "second_round_reply_strategy": hidden_context.get("second_round_reply_strategy", "confirm_only"),
+        }
+    )
+    if request_seed["product_arrived"]:
+        hidden_context["product_arrived"] = request_seed["product_arrived"]
+
+    return scenario.with_generated_hidden_settings(
+        customer=CustomerProfile(**customer_seed),
+        request=ServiceRequest(
+            request_type=request_type,
+            issue=request_seed["issue"],
+            desired_resolution=request_seed["desired_resolution"],
+            availability=request_seed["availability"],
+        ),
+        hidden_context=hidden_context,
     )
 
 

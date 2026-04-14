@@ -180,6 +180,8 @@ OPENAI_USER=<optional-user-id>
 ```dotenv
 USER_AGENT_MODEL=<model-for-user-agent>
 SERVICE_AGENT_MODEL=<model-for-service-agent>
+PRODUCT_ROUTING_ENABLED=true
+PRODUCT_ROUTING_APPLY_PROBABILITY=1.0
 ```
 
 ### 2. 生成对话数据
@@ -385,6 +387,8 @@ pytest -q tests/test_validator.py
 
 - `SERVICE_OK_PREFIX_PROBABILITY`：客服回复前缀“好的，”的概率
 - `SECOND_ROUND_INCLUDE_ISSUE_PROBABILITY`：用户第 2 轮是否顺带补充问题描述的概率
+- `PRODUCT_ROUTING_ENABLED`：是否启用“产品归属识别”中间路由
+- `PRODUCT_ROUTING_APPLY_PROBABILITY`：启用后单个样本命中中间路由的概率
 - `INSTALLATION_REQUEST_PROBABILITY`：扩样时安装类场景的采样概率
 
 ### 电话与地址采集控制
@@ -412,6 +416,12 @@ pytest -q tests/test_validator.py
 - 命中某个段数后，再从对应的 `ADDRESS_SEGMENT_{N}_STRATEGY_WEIGHTS` 中按条件概率采样具体合并策略。
 - 每个 `ADDRESS_SEGMENT_{N}_STRATEGY_WEIGHTS` 内部都应当是完整概率分布，元素和必须为 `1`。
 - 旧变量 `ADDRESS_SEGMENT_MERGE_STRATEGY_WEIGHTS` 仍兼容，但仅建议作为迁移过渡使用。
+
+### 产品归属中间路由
+
+- 该路由会插在“开场确认诉求”之后、“报修问故障 / 报装问到货”之前。
+- 路由各分支由概率采样，用户每一步答法也由计划控制，生成后写入 `hidden_context.product_routing_plan`。
+- 即使没有开启 `--auto-hidden-settings`，只要 `PRODUCT_ROUTING_ENABLED=true` 且命中 `PRODUCT_ROUTING_APPLY_PROBABILITY`，运行时也会自动补齐这段中间流程。
 
 ### 隐藏设定去重控制
 

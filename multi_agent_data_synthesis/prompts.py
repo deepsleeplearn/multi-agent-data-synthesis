@@ -6,6 +6,7 @@ from multi_agent_data_synthesis.dialogue_plans import (
     SECOND_ROUND_REPLY_CONFIRM_WITH_ISSUE,
     normalize_second_round_reply_strategy,
 )
+from multi_agent_data_synthesis.product_routing import product_routing_instruction_for_prompt
 from multi_agent_data_synthesis.service_policy import ServiceDialoguePolicy
 from multi_agent_data_synthesis.schemas import (
     SLOT_DESCRIPTIONS,
@@ -231,6 +232,12 @@ def build_topic_guardrail_note(transcript: list[DialogueTurn]) -> str:
             "当前客服在核对地址。地址正确就只简短确认；地址不对就否定并按需要更正地址。"
             "不要在这一轮再重复故障、电话、型号或其他旧信息。"
         )
+    if ServiceDialoguePolicy.is_address_collection_prompt(last_service_text):
+        return (
+            "当前客服在收集地址。你只说当前需要补充的地址信息本体；"
+            "不要补充路线指引、附近地标、怎么走、门口标识、停车说明、‘你懂的’这类口头补充。"
+            "除非这些内容本身就是正式地址的一部分，否则不要说。"
+        )
     if ServiceDialoguePolicy.is_closing_notice_prompt(last_service_text):
         return (
             "当前客服是在通知工单已受理并准备收尾。你通常只简短确认即可，比如“好的”“知道了”。"
@@ -300,6 +307,34 @@ def build_repeat_prompt_guardrail_note(scenario: Scenario, transcript: list[Dial
         return "当前客服在追问地址。你只补当前还没说到的那部分地址，不要重复上一轮原话。"
 
     return "当前没有额外的重复追问约束。"
+
+
+def build_product_routing_note(transcript: list[DialogueTurn], scenario: Scenario) -> str:
+    step = product_routing_instruction_for_prompt(transcript, scenario.hidden_context)
+    if not step:
+        return "当前没有产品归属中间路由限制。"
+
+    answer_value = str(step.get("answer_value", "")).strip() or "无"
+    answer_instruction = str(step.get("answer_instruction", "")).strip() or "围绕当前路由节点自然回答。"
+    answer_key = str(step.get("answer_key", "")).strip() or "unknown"
+    capacity_note = ""
+    if answer_key.startswith("capacity."):
+        capacity_note = (
+            " 如果是在回答容量或匹数，通常只说自己更确定的一个维度，"
+            "优先只说升数或匹数其中一个，不要把两个都报出来。"
+        )
+    return (
+        "当前客服正在执行产品归属识别中间路由。"
+        f"你这一轮必须满足当前节点语义：{answer_instruction}"
+        f" 当前节点标签：{answer_key}。"
+        f" 参考事实：{answer_value}。"
+        " 特别注意：如果问题里出现“公寓”，它只指用户自己居住的公寓住房。"
+        " 具体句子必须由你现场自然生成，要像真实用户临场说话一样自由表达；"
+        "不要机械照抄参考事实，不要套固定模板，也不要只回一个被提示过的标准短句；"
+        "可以带自然口头语、犹豫、补半句、换种说法，只要核心事实不变即可。"
+        f"{capacity_note}"
+        " 同时不要跳到故障、地址、电话等其他话题。"
+    )
 
 
 def build_user_agent_messages(
@@ -408,6 +443,7 @@ def build_user_agent_messages(
     )
     topic_guardrail_note = build_topic_guardrail_note(transcript)
     repeat_prompt_guardrail_note = build_repeat_prompt_guardrail_note(scenario, transcript)
+    product_routing_note = build_product_routing_note(transcript, scenario)
     expression_mode_note = f"""
 第二轮回复策略补充要求：
 1. 当你是在直接回应客服开场确认时，必须严格执行本场景的固定策略，不要临场自行切换。
@@ -424,6 +460,9 @@ def build_user_agent_messages(
 
 重复追问约束：
 {repeat_prompt_guardrail_note}
+
+产品归属中间路由约束：
+{product_routing_note}
 """.strip()
     user_prompt = f"""当前是第 {round_index} 轮。
 
@@ -501,6 +540,10 @@ def build_user_agent_messages(
 16. 地址表达要符合“用户地址形态类型”：标准住宅地址可以自然说栋/单元/室；门牌号型地址可以只说到多少号；乡村组号型地址可以说到村、组、号；地标型地址可以自然提到医院、饭店、酒店、园区、学校、门店等，但仍要给出足够定位的信息。
 17. 对非电话、非地址槽位，如果客服已经第 2 次或更多次重复追问同一项，这一轮必须直接回答该槽位，不能继续答非所问。
 18. 如果上一轮你已经对同一个问题答偏了，这一轮不要复述上一轮自己说过的话，要直接回答当前问题。
+19. 如果当前处于产品归属中间路由节点，你必须严格满足该节点语义，但具体表述要尽可能像真实用户自由发挥，允许自然口头语和个人表达习惯；不要把系统给你的参考事实原样硬拷贝成固定模板句，也不要把前面已经说过的故障现象再重复一遍。
+20. 如果客服在问品牌、系列、型号、用途、场所、楼盘配套、楼盘时间、容量或匹数，你都应当优先“表达自己的话”，而不是追求最短标准答案；前提是不要偏离当前问题要求的事实边界。尤其回答容量或匹数时，通常只说自己更确定的一个维度，优先说升数或匹数其中一个。
+21. 输出文本要符合 ASR 转写风格，不要使用“...”或“……”来表示停顿；如果要体现停顿，只能用自然口语词或逗号，不能出现省略号字符。
+22. 如果客服当前是在收集地址，你只说地址信息本体，不要加入“在小卖部旁边”“红绿灯往南走”“你知道的”这类路线、地标、解释性补充，除非这些词本身就是正式地址的一部分。
 
 请直接给出 JSON。"""
     return [

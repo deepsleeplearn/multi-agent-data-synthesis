@@ -3,7 +3,7 @@
     "scenario_id": "midea_heat_pump_fault_001",
     "product": {
       "brand": "美的",
-      "category": "空气能热水器",
+      "category": "空气能热水机",
       "model": "未知",
       "purchase_channel": "未知"
     },
@@ -41,7 +41,7 @@
     "scenario_id": "midea_heat_pump_installation_001",
     "product": {
       "brand": "美的",
-      "category": "空气能热水器",
+      "category": "空气能热水机",
       "model": "未知",
       "purchase_channel": "未知"
     },

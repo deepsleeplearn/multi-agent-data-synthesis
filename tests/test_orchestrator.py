@@ -30,6 +30,8 @@ def build_config() -> AppConfig:
         data_dir=root,
         output_dir=root,
         hidden_settings_store=root / "hidden_settings_history.jsonl",
+        product_routing_enabled=True,
+        product_routing_apply_probability=1.0,
         hidden_settings_similarity_threshold=0.82,
         hidden_settings_duplicate_threshold=0.5,
         hidden_settings_max_attempts=3,
@@ -145,6 +147,27 @@ class StubUserAgent:
         return {"reply": "好的。", "call_complete": True}
 
 
+class StubServiceAgent:
+    def build_initial_user_utterance(self, scenario: Scenario) -> str:
+        return "美的空气能热水器需要维修"
+
+    def respond(self, *, scenario: Scenario, transcript: list, collected_slots: dict, runtime_state) -> dict:
+        service_turns = [turn for turn in transcript if turn.speaker == SERVICE_SPEAKER]
+        if not service_turns:
+            return {
+                "reply": "您好，很高兴为您服务，请问是美的空气能热水器需要维修吗？",
+                "slot_updates": {},
+                "is_ready_to_close": False,
+                "used_model_intent_inference": False,
+            }
+        return {
+            "reply": "请您在拨号盘上输入您的联系方式，并以#号键结束。",
+            "slot_updates": {"phone_contactable": "no"},
+            "is_ready_to_close": False,
+            "used_model_intent_inference": True,
+        }
+
+
 class DialogueOrchestratorTests(unittest.IsolatedAsyncioTestCase):
     async def test_generate_dialogue_starts_with_user_and_exports_chinese_labels(self):
         orchestrator = DialogueOrchestrator(build_config())
@@ -163,6 +186,18 @@ class DialogueOrchestratorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(exported["transcript"][0]["text"], "美的空气能热水器需要维修")
         self.assertIn("客服:", exported["dialogue_text"])
         self.assertIn("用户:", exported["dialogue_text"])
+
+    async def test_generate_dialogue_marks_service_round_when_model_intent_is_used(self):
+        orchestrator = DialogueOrchestrator(build_config())
+        orchestrator.user_agent = StubUserAgent()
+        orchestrator.service_agent = StubServiceAgent()
+
+        sample = await orchestrator.generate_dialogue_async(build_scenario())
+        exported = sample.to_dict()
+
+        self.assertEqual(exported["transcript"][3]["round_label"], "2*")
+        self.assertTrue(exported["transcript"][3]["model_intent_inference_used"])
+        self.assertIn("[2*] 客服:", exported["dialogue_text"])
 
 
 if __name__ == "__main__":

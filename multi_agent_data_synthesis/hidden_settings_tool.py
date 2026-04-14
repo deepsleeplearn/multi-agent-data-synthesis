@@ -18,6 +18,7 @@ from multi_agent_data_synthesis.address_utils import (
 from multi_agent_data_synthesis.config import AppConfig
 from multi_agent_data_synthesis.dialogue_plans import decide_second_round_reply_strategy
 from multi_agent_data_synthesis.llm import OpenAIChatClient
+from multi_agent_data_synthesis.product_routing import ensure_product_routing_plan
 from multi_agent_data_synthesis.schemas import CustomerProfile, Scenario, ServiceRequest
 
 
@@ -720,6 +721,7 @@ class HiddenSettingsTool:
                 continue
             self._attach_user_generation_plan(candidate, generation_plan)
             self._attach_second_round_reply_plan(scenario.scenario_id, candidate)
+            self._attach_product_routing_plan(scenario, candidate)
             self._attach_contact_plan(scenario.scenario_id, candidate)
             self._attach_address_plan(scenario.scenario_id, candidate)
             self._attach_installation_plan(candidate)
@@ -1294,6 +1296,16 @@ class HiddenSettingsTool:
             self.config.second_round_include_issue_probability,
         )
 
+    def _attach_product_routing_plan(self, scenario: Scenario, candidate: dict[str, Any]) -> None:
+        hidden_context = candidate["hidden_context"]
+        ensure_product_routing_plan(
+            hidden_context,
+            enabled=self.config.product_routing_enabled,
+            apply_probability=self.config.product_routing_apply_probability,
+            model_hint=scenario.product.model,
+            rng=random.Random(),
+        )
+
     def _attach_contact_plan(self, scenario_id: str, candidate: dict[str, Any]) -> None:
         rng = random.Random()
         current_call_contactable = (
@@ -1767,7 +1779,11 @@ class HiddenSettingsTool:
             start_level,
             rng,
         )
-        stale_address = self._generate_stale_address_from_level(actual_address, start_level, rng)
+        stale_address = self._generate_stale_address_for_levels(
+            actual_address,
+            rewrite_levels or [start_level],
+            rng,
+        )
         correction_value = self._address_text_from_levels(actual_address, rewrite_levels)
         if stale_address == actual_address or not correction_value:
             fallback_stale = self._generate_stale_address(actual_address, rng)
@@ -1800,6 +1816,19 @@ class HiddenSettingsTool:
             rewrite_levels,
             rewrite_levels[-1] if rewrite_levels else start_level,
         )
+
+    def _generate_stale_address_for_levels(
+        self,
+        actual_address: str,
+        levels: list[str],
+        rng: random.Random,
+    ) -> str:
+        stale_address = actual_address
+        for level in levels:
+            next_stale = self._generate_stale_address_from_level(stale_address, level, rng)
+            if next_stale != stale_address:
+                stale_address = next_stale
+        return stale_address
 
     def _choose_address_mismatch_start_level(
         self,
@@ -1839,7 +1868,7 @@ class HiddenSettingsTool:
         ]
         if not available_levels:
             return [start_level]
-        if start_level in {"province", "city", "district"}:
+        if start_level in {"province", "city", "district", "locality"}:
             return available_levels
 
         weights = self.config.address_known_mismatch_rewrite_end_level_weights
@@ -2078,6 +2107,12 @@ class HiddenSettingsTool:
                 for option in COHERENT_REGION_OPTIONS
                 if option["province"] != components.province or option["city"] != components.city
             ]
+            if components.province.endswith("省"):
+                options = [
+                    option
+                    for option in options
+                    if str(option.get("province", "")).endswith("省")
+                ] or options
         else:
             options = [
                 option

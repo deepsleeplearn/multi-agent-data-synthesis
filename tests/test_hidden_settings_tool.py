@@ -148,6 +148,8 @@ def build_config(
         data_dir=store_path.parent,
         output_dir=store_path.parent,
         hidden_settings_store=store_path,
+        product_routing_enabled=True,
+        product_routing_apply_probability=1.0,
         hidden_settings_similarity_threshold=0.82,
         hidden_settings_duplicate_threshold=0.5,
         hidden_settings_max_attempts=3,
@@ -2045,6 +2047,75 @@ class UserPromptTests(unittest.TestCase):
                 generated.hidden_context["address_input_rounds"],
                 ["南海区桂城街道东信花园五期2栋3单元601室"],
             )
+            self.assertNotIn("东信花园五期2栋3单元601室", generated.hidden_context["service_known_address_value"])
+
+    def test_locality_level_known_address_mismatch_rewrites_full_suffix(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store_path = Path(temp_dir) / "hidden_settings_history.jsonl"
+            tool = HiddenSettingsTool(
+                SequenceFakeClient(
+                    [
+                        build_candidate(
+                            full_name="赵欣",
+                            surname="赵",
+                            phone="13876543210",
+                            address="甘肃省兰州市城关区五泉街道福寿小区8号楼2单元1202室",
+                            persona="语气温和，但希望客服快一点登记完",
+                            speech_style="整体简洁，确认信息时会按流程快速回答",
+                            issue="空气能热水器制热太慢，想尽快安排检查",
+                            desired_resolution="尽快安排人员上门确认机器情况",
+                            availability="周日下午两点后",
+                            emotion="有些担心",
+                            urgency="中",
+                            prior_attempts="暂时还没有自行处理",
+                            special_constraints="白天家里只有老人，最好周末联系",
+                        )
+                    ]
+                ),
+                build_config(
+                    store_path,
+                    service_known_address_probability=1.0,
+                    service_known_address_matches_probability=0.0,
+                    address_confirmation_direct_correction_probability=1.0,
+                    address_known_mismatch_start_level_weights={
+                        "province": 0.0,
+                        "city": 0.0,
+                        "district": 0.0,
+                        "locality": 1.0,
+                        "building": 0.0,
+                        "unit": 0.0,
+                        "floor": 0.0,
+                        "room": 0.0,
+                    },
+                    address_known_mismatch_rewrite_end_level_weights={
+                        "province": 0.0,
+                        "city": 0.0,
+                        "district": 0.0,
+                        "locality": 1.0,
+                        "building": 0.0,
+                        "unit": 0.0,
+                        "floor": 0.0,
+                        "room": 0.0,
+                    },
+                ),
+            )
+
+            generated = tool.generate_for_scenario(build_installation_scenario())
+
+            self.assertEqual(generated.hidden_context["service_known_address_mismatch_start_level"], "locality")
+            self.assertEqual(
+                generated.hidden_context["service_known_address_rewrite_levels"],
+                ["locality", "building", "unit", "room"],
+            )
+            self.assertEqual(
+                generated.hidden_context["service_known_address_correction_value"],
+                "五泉街道福寿小区8号楼2单元1202室",
+            )
+            self.assertEqual(
+                generated.hidden_context["address_input_rounds"],
+                ["五泉街道福寿小区8号楼2单元1202室"],
+            )
+            self.assertNotIn("福寿小区8号楼2单元1202室", generated.hidden_context["service_known_address_value"])
 
     def test_region_option_pools_cover_all_mainland_province_level_regions(self):
         expected_non_municipal_regions = {

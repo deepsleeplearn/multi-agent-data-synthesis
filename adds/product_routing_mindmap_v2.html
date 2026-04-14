@@ -1,0 +1,463 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>产品归属识别流程导图</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;600&display=swap');
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg: #f7f6f2;
+    --surface: #ffffff;
+    --border: #e4e2d9;
+    --text: #1a1917;
+    --text-muted: #6b6860;
+    --text-hint: #9c9890;
+    --q-bg: #eef4ff;
+    --q-border: #b8d0f8;
+    --q-text: #1a4fa0;
+    --q-sub: #3a6bc4;
+    --ok-bg: #eaf6f0;
+    --ok-border: #7ed6aa;
+    --ok-text: #0f6b44;
+    --lou-bg: #f0eeff;
+    --lou-border: #b8aef5;
+    --lou-text: #3d2fa0;
+    --hum-bg: #fff3ee;
+    --hum-border: #f5b89a;
+    --hum-text: #8f3210;
+    --line: #d5d2c8;
+    --ans-bg: #faf9f6;
+    --ans-border: #dedad2;
+    --root-bg: #1a1917;
+    --root-text: #f7f6f2;
+  }
+
+  body {
+    font-family: 'Noto Sans SC', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    padding: 32px 24px 48px;
+    font-size: 13px;
+    line-height: 1.5;
+    min-height: 100vh;
+  }
+
+  h1 {
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--text);
+    margin-bottom: 20px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--border);
+    letter-spacing: 0.02em;
+  }
+
+  .legend {
+    display: flex;
+    gap: 14px;
+    margin-bottom: 24px;
+    flex-wrap: wrap;
+  }
+  .legend-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    color: var(--text-muted);
+  }
+  .legend-dot {
+    width: 10px; height: 10px;
+    border-radius: 3px;
+  }
+  .legend-dot.q   { background: var(--q-bg);   border: 1px solid var(--q-border); }
+  .legend-dot.ans { background: var(--ans-bg);  border: 1px solid var(--ans-border); }
+  .legend-dot.ok  { background: var(--ok-bg);   border: 1px solid var(--ok-border); }
+  .legend-dot.lou { background: var(--lou-bg);  border: 1px solid var(--lou-border); }
+  .legend-dot.hum { background: var(--hum-bg);  border: 1px solid var(--hum-border); }
+
+  .node-wrap { display: flex; flex-direction: column; }
+  .node-row  { display: flex; align-items: flex-start; }
+
+  .connector-block {
+    display: flex;
+    flex-direction: column;
+    padding-left: 24px;
+    margin-top: 4px;
+  }
+  .connector-line {
+    display: flex;
+    align-items: flex-start;
+    position: relative;
+    padding-left: 20px;
+    margin-bottom: 4px;
+  }
+  .connector-line::before {
+    content: '';
+    position: absolute;
+    left: 0; top: 0; bottom: 0;
+    width: 1px;
+    background: var(--line);
+  }
+  .connector-line:last-child::before { bottom: 50%; }
+  .connector-line::after {
+    content: '';
+    position: absolute;
+    left: 0; top: 50%;
+    width: 18px; height: 1px;
+    background: var(--line);
+  }
+
+  .label {
+    display: inline-flex;
+    flex-direction: column;
+    gap: 3px;
+    padding: 6px 10px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: var(--surface);
+    cursor: default;
+    max-width: 680px;
+    transition: opacity .15s;
+  }
+  .label.has-children { cursor: pointer; }
+  .label.has-children:hover { opacity: .8; }
+
+  .label.root { background: var(--root-bg); border-color: var(--root-bg); }
+  .label.q    { background: var(--q-bg);   border-color: var(--q-border); }
+  .label.ans  { background: var(--ans-bg); border-color: var(--ans-border); }
+  .label.r    { background: var(--surface); border-color: var(--border); }
+
+  .label-head {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+  }
+  .toggle-icon {
+    font-size: 9px;
+    color: var(--text-hint);
+    transition: transform .18s;
+    flex-shrink: 0;
+  }
+  .label.root .toggle-icon { color: #888; }
+  .toggle-icon.open { transform: rotate(90deg); }
+
+  .label-title {
+    font-weight: 500;
+    font-size: 13px;
+    color: var(--text);
+  }
+  .label.root .label-title { color: var(--root-text); }
+  .label.q    .label-title { color: var(--q-text); }
+
+  .label-sub {
+    font-size: 11px;
+    color: var(--q-sub);
+    font-style: italic;
+    padding-left: 15px;
+    border-left: 2px solid var(--q-border);
+    margin-top: 2px;
+    line-height: 1.6;
+  }
+
+  .pill {
+    display: inline-block;
+    font-size: 11px;
+    font-weight: 500;
+    padding: 2px 8px;
+    border-radius: 4px;
+    white-space: nowrap;
+  }
+  .pill.ok  { background: var(--ok-bg);  color: var(--ok-text);  border: 1px solid var(--ok-border); }
+  .pill.lou { background: var(--lou-bg); color: var(--lou-text); border: 1px solid var(--lou-border); }
+  .pill.hum { background: var(--hum-bg); color: var(--hum-text); border: 1px solid var(--hum-border); }
+
+  .collapsed > .connector-block { display: none; }
+
+  .expand-all-btn {
+    font-size: 12px;
+    color: var(--q-text);
+    background: var(--q-bg);
+    border: 1px solid var(--q-border);
+    border-radius: 5px;
+    padding: 4px 12px;
+    cursor: pointer;
+    margin-bottom: 20px;
+    transition: opacity .15s;
+  }
+  .expand-all-btn:hover { opacity: .75; }
+</style>
+</head>
+<body>
+
+<h1>产品归属识别流程导图</h1>
+
+<div class="legend">
+  <div class="legend-item"><div class="legend-dot q"></div>询问话术节点</div>
+  <div class="legend-item"><div class="legend-dot ans"></div>用户回答分支</div>
+  <div class="legend-item"><div class="legend-dot ok"></div>家用 + 可直接确认机型</div>
+  <div class="legend-item"><div class="legend-dot lou"></div>楼宇 + 可直接确认机型</div>
+  <div class="legend-item"><div class="legend-dot hum"></div>转人工</div>
+</div>
+
+<button class="expand-all-btn" onclick="toggleAll()">展开全部</button>
+
+<div id="root"></div>
+
+<script>
+/* ── 询问楼盘配套 子树（复用片段，两处完全相同） ── */
+function peitao() {
+  return {
+    label: "询问是否楼盘配套", cls: "q",
+    sub: "请问是您自己购买的，还是楼盘配套赠送的呢？",
+    children: [
+      { label: "自己购买 / 不知道", cls: "r", result: { text: "家用 + 可直接确认机型", type: "ok" } },
+      {
+        label: "楼盘配套赠送", cls: "r",
+        children: [
+          {
+            label: "询问购房 / 交房时间", cls: "q",
+            sub: "请问是21年之前的楼盘，还是之后的呢？",
+            children: [
+              { label: "21年之前", cls: "r", result: { text: "家用 + 可直接确认机型", type: "ok" } },
+              { label: "21年之后", cls: "r", result: { text: "楼宇 + 可直接确认机型", type: "lou" } }
+            ]
+          }
+        ]
+      }
+    ]
+  };
+}
+
+/* ── 「不清楚」 子树（用途不清楚 → 询问场所 → ...） ── */
+function buqingchu() {
+  return {
+    label: "不清楚用途", cls: "r",
+    children: [
+      {
+        label: "询问使用场所", cls: "q",
+        sub: "请问是在家庭、别墅、公寓或理发店使用的吗？",
+        children: [
+          {
+            label: "是 / 不清楚", cls: "r",
+            children: [ peitao() ]
+          },
+          {
+            /* 否 → 直接楼宇（原 JSON 此处无 peitao，否定直接结束） */
+            /* 实际 JSON 「用户表示否定」 不在此分支，仅肯定/不清楚有子树 */
+            /* 补全：否定 → 楼宇 */
+            label: "否", cls: "r",
+            result: { text: "楼宇 + 可直接确认机型", type: "lou" }
+          }
+        ]
+      }
+    ]
+  };
+}
+
+const data = {
+  label: "询问品牌或系列", cls: "root",
+  sub: "请问您的空气能是什么品牌或系列呢？",
+  children: [
+
+    /* ── 分支A：说出品牌/系列 ── */
+    {
+      label: "说出品牌 / 系列", cls: "ans",
+      children: [
+        { label: "COLMO", cls: "r", result: { text: "家用 + 可直接确认机型", type: "ok" } },
+        { label: "酷风 / 小天鹅", cls: "r", result: { text: "转人工", type: "hum" } },
+        { label: "真暖 / 真省 / 雪焰 / 暖家 / 煤改电 / 真享", cls: "r", result: { text: "家用 + 可直接确认机型", type: "ok" } },
+        { label: "烈焰", cls: "r", result: { text: "楼宇 + 可直接确认机型", type: "lou" } }
+      ]
+    },
+
+    /* ── 分支B：提供型号 ── */
+    {
+      label: "提供型号", cls: "ans",
+      children: [
+        {
+          label: "根据型号查得用途", cls: "q",
+          sub: "根据用户提供的型号查对应用途",
+          children: [
+            {
+              label: "查得：家用", cls: "r",
+              children: [ peitao() ]
+            },
+            {
+              label: "查得：楼宇", cls: "r",
+              result: { text: "楼宇 + 可直接确认机型", type: "lou" }
+            }
+          ]
+        }
+      ]
+    },
+
+    /* ── 分支C：不知道 / 提供不了 ── */
+    {
+      label: "不知道 / 提供不了", cls: "ans",
+      children: [
+        {
+          label: "询问机器用途", cls: "q",
+          sub: "请问是生活用水加采暖使用，还是单独生活用水，或者单独采暖的呢？",
+          children: [
+
+            /* C-1 采暖 */
+            {
+              label: "采暖", cls: "r",
+              children: [
+                {
+                  label: "询问使用场所", cls: "q",
+                  sub: "请问是在家庭、别墅、公寓或理发店使用的吗？",
+                  children: [
+                    { label: "是", cls: "r", result: { text: "家用 + 可直接确认机型", type: "ok" } },
+                    { label: "否 / 不清楚", cls: "r", result: { text: "楼宇 + 可直接确认机型", type: "lou" } }
+                  ]
+                }
+              ]
+            },
+
+            /* C-2 不清楚（完整展开） */
+            buqingchu(),
+
+            /* C-3 洗澡 / 生活用水 */
+            {
+              label: "洗澡 / 生活用水", cls: "r",
+              children: [
+                {
+                  label: "询问容量或匹数", cls: "q",
+                  sub: "请问机器是多少升的，或者多少匹数的呢？",
+                  children: [
+                    {
+                      label: "750L以上 / 72/3P及以上", cls: "r",
+                      result: { text: "楼宇 + 可直接确认机型", type: "lou" }
+                    },
+                    {
+                      label: "750L以下 / 72/3P以下", cls: "r",
+                      children: [ peitao() ]
+                    },
+                    {
+                      /* 不清楚容量 → 回到「不清楚用途」流程（完整展开，不用箭头） */
+                      label: "不清楚容量", cls: "r",
+                      children: [
+                        {
+                          label: "询问使用场所", cls: "q",
+                          sub: "请问是在家庭、别墅、公寓或理发店使用的吗？",
+                          children: [
+                            {
+                              label: "是 / 不清楚", cls: "r",
+                              children: [ peitao() ]
+                            },
+                            {
+                              label: "否", cls: "r",
+                              result: { text: "楼宇 + 可直接确认机型", type: "lou" }
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+
+            /* C-4 两个用途都有 */
+            {
+              label: "两个用途都有（生活用水 + 采暖）", cls: "r",
+              result: { text: "楼宇 + 可直接确认机型", type: "lou" }
+            }
+
+          ]
+        }
+      ]
+    }
+
+  ]
+};
+
+/* ── 渲染函数 ── */
+function build(node, isRoot) {
+  const wrap = document.createElement('div');
+  wrap.className = 'node-wrap' + (isRoot ? '' : ' collapsed');
+
+  const lbl = document.createElement('div');
+  lbl.className = 'label ' + (node.cls || 'r');
+
+  const hasChildren = node.children && node.children.length > 0;
+  if (hasChildren) lbl.classList.add('has-children');
+
+  const head = document.createElement('div');
+  head.className = 'label-head';
+
+  if (hasChildren) {
+    const tog = document.createElement('span');
+    tog.className = 'toggle-icon' + (isRoot ? ' open' : '');
+    tog.textContent = '▶';
+    head.appendChild(tog);
+    lbl.addEventListener('click', () => {
+      wrap.classList.toggle('collapsed');
+      tog.classList.toggle('open', !wrap.classList.contains('collapsed'));
+    });
+  }
+
+  const title = document.createElement('span');
+  title.className = 'label-title';
+  title.textContent = node.label;
+  head.appendChild(title);
+
+  if (node.result) {
+    const pill = document.createElement('span');
+    pill.className = 'pill ' + node.result.type;
+    pill.textContent = node.result.text;
+    head.appendChild(pill);
+  }
+
+  lbl.appendChild(head);
+
+  if (node.sub) {
+    const sub = document.createElement('div');
+    sub.className = 'label-sub';
+    sub.textContent = '「' + node.sub + '」';
+    lbl.appendChild(sub);
+  }
+
+  const row = document.createElement('div');
+  row.className = 'node-row';
+  row.appendChild(lbl);
+  wrap.appendChild(row);
+
+  if (hasChildren) {
+    const block = document.createElement('div');
+    block.className = 'connector-block';
+    node.children.forEach(child => {
+      const line = document.createElement('div');
+      line.className = 'connector-line';
+      line.appendChild(build(child, false));
+      block.appendChild(line);
+    });
+    wrap.appendChild(block);
+  }
+
+  return wrap;
+}
+
+document.getElementById('root').appendChild(build(data, true));
+
+/* ── 展开全部 / 收起全部 ── */
+let expanded = false;
+function toggleAll() {
+  expanded = !expanded;
+  document.querySelectorAll('.node-wrap').forEach(w => {
+    w.classList.toggle('collapsed', !expanded);
+  });
+  document.querySelectorAll('.toggle-icon').forEach(t => {
+    t.classList.toggle('open', expanded);
+  });
+  document.querySelector('.expand-all-btn').textContent = expanded ? '收起全部' : '展开全部';
+}
+</script>
+</body>
+</html>

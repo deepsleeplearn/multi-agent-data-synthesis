@@ -58,10 +58,11 @@ def run_manual_test_session(
     output_path: Path,
     max_rounds: int | None = None,
     ok_prefix_probability: float = 0.7,
+    policy: ServiceDialoguePolicy | None = None,
     input_func: InputFunc = input,
     print_func: PrintFunc = print,
 ) -> dict[str, Any]:
-    policy = ServiceDialoguePolicy(ok_prefix_probability=ok_prefix_probability)
+    resolved_policy = policy or ServiceDialoguePolicy(ok_prefix_probability=ok_prefix_probability)
     runtime_state = ServiceRuntimeState()
     transcript: list[DialogueTurn] = []
     required_slots = effective_required_slots(scenario)
@@ -94,7 +95,7 @@ def run_manual_test_session(
                 user_text = None
                 break
 
-            normalized = str(raw or "").strip()
+            normalized = str(raw or "").strip().replace(" ", "")
             if not normalized:
                 print_func("输入不能为空。输入 /help 查看可用命令。")
                 continue
@@ -130,7 +131,7 @@ def run_manual_test_session(
             )
         )
 
-        service_result = policy.respond(
+        service_result = resolved_policy.respond(
             scenario=scenario,
             transcript=transcript,
             collected_slots=collected_slots,
@@ -150,13 +151,19 @@ def run_manual_test_session(
                 round_index=round_index,
             )
         )
-        print_func(f"[{round_index}] {display_speaker(SERVICE_SPEAKER)}: {service_result.reply}")
+        used_model_intent_inference = bool(
+            getattr(resolved_policy, "last_used_model_intent_inference", False)
+        )
+        service_round_label = f"{round_index}{'*' if used_model_intent_inference else ''}"
+        print_func(f"[{service_round_label}] {display_speaker(SERVICE_SPEAKER)}: {service_result.reply}")
 
         trace.append(
             {
                 "round_index": round_index,
                 "user_text": user_text,
                 "service_reply": service_result.reply,
+                "service_round_label": service_round_label,
+                "used_model_intent_inference": used_model_intent_inference,
                 "slot_updates": dict(service_result.slot_updates),
                 "collected_slots_snapshot": dict(collected_slots),
                 "runtime_state_snapshot": asdict(runtime_state),
