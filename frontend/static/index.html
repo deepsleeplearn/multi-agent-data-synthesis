@@ -144,9 +144,12 @@
     <div id="review-modal" class="modal-shell hidden" aria-hidden="true">
         <div class="modal-backdrop"></div>
         <section class="modal-card" role="dialog" aria-modal="true" aria-labelledby="review-title">
-            <div class="section-heading compact">
-                <p class="eyebrow">Review</p>
-                <h2 id="review-title">本次测试评审</h2>
+            <div class="modal-header">
+                <div class="section-heading compact">
+                    <p class="eyebrow">Review</p>
+                    <h2 id="review-title">本次测试评审</h2>
+                </div>
+                <button id="review-close-btn" class="modal-close-btn" type="button" aria-label="取消提交并关闭评审窗口">×</button>
             </div>
             <p id="review-summary" class="section-copy">请标记当前测试流程是否正确。</p>
 

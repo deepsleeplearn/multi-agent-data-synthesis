@@ -373,6 +373,39 @@ class FrontendServerTests(unittest.TestCase):
 
         self.assertEqual(review_response.status_code, 400)
 
+    def test_review_dismiss_endpoint_allows_closing_review_modal_without_submission(self):
+        self._login()
+        start_payload = self.client.post(
+            "/api/session/start",
+            json={"scenario_id": "frontend_case"},
+        ).json()
+        session_id = start_payload["session_id"]
+        self.client.post(
+            "/api/session/respond",
+            json={"session_id": session_id, "text": "/quit"},
+        )
+
+        dismiss_response = self.client.post(
+            "/api/session/review/dismiss",
+            json={"session_id": session_id},
+        )
+
+        self.assertEqual(dismiss_response.status_code, 200)
+        dismiss_payload = dismiss_response.json()
+        self.assertEqual(dismiss_payload["session_id"], session_id)
+        self.assertEqual(dismiss_payload["username"], "tester")
+        self.assertFalse(dismiss_payload["review_required"])
+        self.assertTrue(frontend_server.sessions[session_id]["review_dismissed"])
+
+    def test_frontend_static_files_include_review_close_control(self):
+        index_response = self.client.get("/")
+        self.assertEqual(index_response.status_code, 200)
+        self.assertIn('id="review-close-btn"', index_response.text)
+
+        app_response = self.client.get("/static/app.js")
+        self.assertEqual(app_response.status_code, 200)
+        self.assertIn("/api/session/review/dismiss", app_response.text)
+
 
 if __name__ == "__main__":
     unittest.main()

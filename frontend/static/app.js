@@ -16,6 +16,7 @@ const loginButton = document.getElementById('login-btn');
 const authUserName = document.getElementById('auth-user-name');
 const authUserMeta = document.getElementById('auth-user-meta');
 const reviewModal = document.getElementById('review-modal');
+const reviewCloseButton = document.getElementById('review-close-btn');
 const reviewSummary = document.getElementById('review-summary');
 const reviewErrorFields = document.getElementById('review-error-fields');
 const failedFlowStageSelect = document.getElementById('failed-flow-stage');
@@ -83,6 +84,7 @@ function resetReviewState() {
     failedFlowStageSelect.value = '';
     reviewNotes.value = '';
     reviewSubmitButton.disabled = false;
+    reviewCloseButton.disabled = false;
 }
 
 function selectedCorrectnessValue() {
@@ -332,6 +334,7 @@ async function submitReview() {
     }
 
     reviewSubmitButton.disabled = true;
+    reviewCloseButton.disabled = true;
     try {
         const data = await apiFetch('/api/session/review', {
             method: 'POST',
@@ -355,6 +358,36 @@ async function submitReview() {
         updateInputAvailability(false);
     } catch (error) {
         reviewSubmitButton.disabled = false;
+        reviewCloseButton.disabled = false;
+        appendTerminalLine(`[系统错误] ${error.message}`, 'error');
+    }
+}
+
+async function dismissReview() {
+    if (!currentSessionId || !reviewPending) {
+        resetReviewState();
+        updateInputAvailability(!sessionClosed);
+        return;
+    }
+
+    reviewSubmitButton.disabled = true;
+    reviewCloseButton.disabled = true;
+    try {
+        const data = await apiFetch('/api/session/review/dismiss', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ session_id: currentSessionId }),
+        });
+
+        appendTerminalLine(
+            `[系统] 已取消本次评审提交，session_id=${data.session_id}，username=${data.username}。`,
+            'system',
+        );
+        resetReviewState();
+        updateInputAvailability(false);
+    } catch (error) {
+        reviewSubmitButton.disabled = false;
+        reviewCloseButton.disabled = false;
         appendTerminalLine(`[系统错误] ${error.message}`, 'error');
     }
 }
@@ -485,6 +518,7 @@ document.getElementById('start-session-btn').onclick = startSession;
 document.getElementById('end-session-btn').onclick = forceEndSession;
 document.getElementById('send-btn').onclick = sendMessage;
 document.getElementById('review-submit-btn').onclick = submitReview;
+document.getElementById('review-close-btn').onclick = dismissReview;
 document.querySelectorAll('input[name="review-correctness"]').forEach((input) => {
     input.addEventListener('change', syncReviewErrorFields);
 });
