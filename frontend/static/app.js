@@ -4,6 +4,8 @@ let currentSlotKeys = [];
 let nextRoundIndex = 1;
 let sessionClosed = true;
 let reviewPending = false;
+let reviewAvailable = false;
+let reviewContext = null;
 let authenticatedUser = null;
 
 const authGate = document.getElementById('auth-gate');
@@ -17,6 +19,7 @@ const authUserName = document.getElementById('auth-user-name');
 const authUserMeta = document.getElementById('auth-user-meta');
 const reviewModal = document.getElementById('review-modal');
 const reviewCloseButton = document.getElementById('review-close-btn');
+const reviewToggleButton = document.getElementById('review-toggle-btn');
 const reviewSummary = document.getElementById('review-summary');
 const reviewErrorFields = document.getElementById('review-error-fields');
 const failedFlowStageSelect = document.getElementById('failed-flow-stage');
@@ -65,17 +68,38 @@ function updateInputAvailability(enabled) {
     const input = document.getElementById('user-input');
     const button = document.getElementById('send-btn');
     const endButton = document.getElementById('end-session-btn');
-    const canInteract = enabled && !reviewPending && Boolean(authenticatedUser);
+    const canInteract = enabled && !reviewPending && !isReviewModalVisible() && Boolean(authenticatedUser);
     input.disabled = !canInteract;
     button.disabled = !canInteract;
     endButton.disabled = !currentSessionId || sessionClosed || !authenticatedUser;
     if (canInteract) input.focus();
 }
 
-function resetReviewState() {
-    reviewPending = false;
+function isReviewModalVisible() {
+    return !reviewModal.classList.contains('hidden');
+}
+
+function hideReviewModal() {
     reviewModal.classList.add('hidden');
     reviewModal.setAttribute('aria-hidden', 'true');
+}
+
+function showReviewModal() {
+    reviewModal.classList.remove('hidden');
+    reviewModal.setAttribute('aria-hidden', 'false');
+}
+
+function updateReviewToggleButton() {
+    const shouldShow = reviewAvailable && !isReviewModalVisible();
+    reviewToggleButton.classList.toggle('hidden', !shouldShow);
+    reviewToggleButton.disabled = !shouldShow;
+}
+
+function resetReviewState() {
+    reviewPending = false;
+    reviewAvailable = false;
+    reviewContext = null;
+    hideReviewModal();
     document.querySelectorAll('input[name="review-correctness"]').forEach((input) => {
         input.checked = false;
     });
@@ -85,6 +109,7 @@ function resetReviewState() {
     reviewNotes.value = '';
     reviewSubmitButton.disabled = false;
     reviewCloseButton.disabled = false;
+    updateReviewToggleButton();
 }
 
 function selectedCorrectnessValue() {
@@ -96,9 +121,11 @@ function syncReviewErrorFields() {
     reviewErrorFields.classList.toggle('hidden', !isIncorrect);
 }
 
-function openReviewModal(data) {
+function openReviewModal(data, { blocking = true } = {}) {
     if (!data.review_required || !currentSessionId) return;
-    reviewPending = true;
+    reviewPending = blocking;
+    reviewAvailable = true;
+    reviewContext = data;
     reviewSummary.textContent = data.status === 'completed'
         ? `会话已正常结束。Session ID: ${currentSessionId}。请标记当前测试流程是否正确。`
         : `会话已结束。Session ID: ${currentSessionId}。请标记当前测试流程是否正确，并在有问题时指出出错流程。`;
@@ -110,9 +137,17 @@ function openReviewModal(data) {
         failedFlowStageSelect.appendChild(element);
     });
     reviewPersistCheckbox.checked = Boolean(data.persist_to_db_default);
-    reviewModal.classList.remove('hidden');
-    reviewModal.setAttribute('aria-hidden', 'false');
+    showReviewModal();
     syncReviewErrorFields();
+    updateReviewToggleButton();
+}
+
+function prepareOptionalReview(data) {
+    if (!data.review_required || !currentSessionId) return;
+    reviewPending = false;
+    reviewAvailable = true;
+    reviewContext = data;
+    updateReviewToggleButton();
 }
 
 function updateScenarioHeader(scenario) {
@@ -363,38 +398,31 @@ async function submitReview() {
     }
 }
 
-async function dismissReview() {
-    if (!currentSessionId || !reviewPending) {
-        resetReviewState();
-        updateInputAvailability(!sessionClosed);
+function dismissReview() {
+    if (!reviewAvailable) {
+        hideReviewModal();
+        updateReviewToggleButton();
         return;
     }
 
-    reviewSubmitButton.disabled = true;
-    reviewCloseButton.disabled = true;
-    try {
-        const data = await apiFetch('/api/session/review/dismiss', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ session_id: currentSessionId }),
-        });
+    hideReviewModal();
+    updateReviewToggleButton();
+    appendTerminalLine(
+        reviewPending
+            ? '[系统] 已关闭评审窗口，可点击“打开评审”继续提交。'
+            : '[系统] 已关闭评审窗口，如需提交可点击“打开评审”。',
+        'system',
+    );
+}
 
-        appendTerminalLine(
-            `[系统] 已取消本次评审提交，session_id=${data.session_id}，username=${data.username}。`,
-            'system',
-        );
-        resetReviewState();
-        updateInputAvailability(false);
-    } catch (error) {
-        reviewSubmitButton.disabled = false;
-        reviewCloseButton.disabled = false;
-        appendTerminalLine(`[系统错误] ${error.message}`, 'error');
-    }
+function reopenReviewModal() {
+    if (!reviewAvailable || !reviewContext) return;
+    openReviewModal(reviewContext, { blocking: reviewPending });
 }
 
 async function startSession() {
     if (reviewPending) {
-        appendTerminalLine('请先完成上一条测试记录的评审。', 'error');
+        appendTerminalLine('请先完成上一条测试记录的评审；如已关闭弹窗，可点击“打开评审”继续。', 'error');
         return;
     }
     if (!selectedScenario) {
@@ -469,7 +497,13 @@ async function forceEndSession() {
         updateInspector(data.collected_slots, data.runtime_state);
         sessionClosed = Boolean(data.session_closed);
         updateInputAvailability(!sessionClosed);
-        if (sessionClosed) openReviewModal(data);
+        if (sessionClosed) {
+            if (data.status === 'transferred') {
+                prepareOptionalReview(data);
+            } else {
+                openReviewModal(data);
+            }
+        }
     } catch (error) {
         appendTerminalLine(`[系统错误] ${error.message}`, 'error');
     }
@@ -506,7 +540,13 @@ async function sendMessage() {
 
         sessionClosed = Boolean(data.session_closed);
         updateInputAvailability(!sessionClosed);
-        if (sessionClosed) openReviewModal(data);
+        if (sessionClosed) {
+            if (data.status === 'transferred') {
+                prepareOptionalReview(data);
+            } else {
+                openReviewModal(data);
+            }
+        }
     } catch (error) {
         appendTerminalLine(`[系统错误] ${error.message}`, 'error');
     }
@@ -519,6 +559,7 @@ document.getElementById('end-session-btn').onclick = forceEndSession;
 document.getElementById('send-btn').onclick = sendMessage;
 document.getElementById('review-submit-btn').onclick = submitReview;
 document.getElementById('review-close-btn').onclick = dismissReview;
+document.getElementById('review-toggle-btn').onclick = reopenReviewModal;
 document.querySelectorAll('input[name="review-correctness"]').forEach((input) => {
     input.addEventListener('change', syncReviewErrorFields);
 });

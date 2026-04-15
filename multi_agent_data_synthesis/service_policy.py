@@ -17,6 +17,7 @@ from multi_agent_data_synthesis.address_utils import (
     normalize_address_text,
 )
 from multi_agent_data_synthesis.product_routing import (
+    ROUTING_RESULT_HUMAN,
     allowed_product_routing_answer_keys,
     default_unknown_product_routing_answer_key,
     get_product_routing_steps,
@@ -75,10 +76,13 @@ class ServicePolicyResult:
     reply: str
     slot_updates: dict[str, str]
     is_ready_to_close: bool
+    close_status: str = ""
+    close_reason: str = ""
 
 
 class ServiceDialoguePolicy:
     FAULT_ACKNOWLEDGEMENT_PREFIX = "非常抱歉，给您添麻烦了，我这就安排是否上门维修"
+    HUMAN_HANDOFF_REPLY = "请稍等，正在为您转接人工服务。"
 
     SURNAME_PROMPT = "请问您贵姓？"
     CONTACTABLE_PROMPT = "请问您当前这个来电号码能联系到您吗？"
@@ -184,6 +188,13 @@ class ServiceDialoguePolicy:
         required_slots = effective_required_slots(scenario)
         merged_slots = dict(collected_slots)
         merged_slots.update(slot_updates)
+        if self._should_transfer_to_human(last_user_turn.text):
+            return self._handoff_to_human(
+                scenario=scenario,
+                runtime_state=runtime_state,
+                slot_updates=slot_updates,
+                reason="user_requested_human",
+            )
 
         if runtime_state.expected_contactable_confirmation:
             return self._handle_contactable_confirmation(
@@ -290,6 +301,13 @@ class ServiceDialoguePolicy:
         slot_updates: dict[str, str] = {}
         if "request_type" in collected_slots and not collected_slots["request_type"].strip():
             slot_updates["request_type"] = scenario.request.request_type
+        if self._should_transfer_to_human(user_text):
+            return self._handoff_to_human(
+                scenario=scenario,
+                runtime_state=runtime_state,
+                slot_updates=slot_updates,
+                reason="user_requested_human",
+            )
 
         return ServicePolicyResult(
             reply=self._build_opening_prompt(scenario),
@@ -901,6 +919,13 @@ class ServiceDialoguePolicy:
                 slot_updates=slot_updates,
                 result=result,
             )
+            if slot_updates.get("product_routing_result", "").strip() == ROUTING_RESULT_HUMAN:
+                return self._handoff_to_human(
+                    scenario=scenario,
+                    runtime_state=runtime_state,
+                    slot_updates=slot_updates,
+                    reason="product_routing_human",
+                )
             merged_slots = dict(collected_slots)
             merged_slots.update(slot_updates)
             next_slot = self._next_slot_to_request(merged_slots, effective_required_slots(scenario))
@@ -1013,13 +1038,18 @@ class ServiceDialoguePolicy:
                     user_text,
                     user_round_index=user_round_index,
                     force_model=force_model,
+                    request_type=scenario.request.request_type,
                 )
                 if opening_intent == "issue_detail":
-                    slot_updates["issue_description"] = self._resolve_issue_description(
+                    issue_description = self._resolve_issue_description(
                         user_text,
                         user_round_index=user_round_index,
+                        request_type=scenario.request.request_type,
                         use_model=(scenario.request.request_type == "fault"),
+                        strict_model=force_model,
                     )
+                    if issue_description:
+                        slot_updates["issue_description"] = issue_description
                 elif (
                     scenario.request.request_type == "installation"
                     and opening_intent == "yes"
@@ -1029,11 +1059,15 @@ class ServiceDialoguePolicy:
                 previous_service_signature,
                 self._format_prompt_config(self.FAULT_ISSUE_PROMPT, product=self._product_name(scenario)),
             ):
-                slot_updates["issue_description"] = self._resolve_issue_description(
+                issue_description = self._resolve_issue_description(
                     user_text,
                     user_round_index=user_round_index,
+                    request_type=scenario.request.request_type,
                     use_model=(scenario.request.request_type == "fault"),
+                    strict_model=(scenario.request.request_type == "fault"),
                 )
+                if issue_description:
+                    slot_updates["issue_description"] = issue_description
 
         if (
             "request_type" in collected_slots
@@ -1489,14 +1523,13 @@ class ServiceDialoguePolicy:
         *,
         user_round_index: int = 0,
         force_model: bool = False,
+        request_type: str = "fault",
     ) -> str:
-        if force_model:
-            forced_intent = self._classify_opening_intent_with_model(
+        if force_model and self.opening_intent_inference_callback is not None:
+            return self._classify_opening_intent_with_model(
                 text,
                 user_round_index=user_round_index,
             )
-            if forced_intent:
-                return forced_intent
 
         compact = re.sub(r"[，。！？、,.!\s]", "", str(text or ""))
         yes_no = self._classify_yes_no(text)
@@ -1504,15 +1537,16 @@ class ServiceDialoguePolicy:
             return "no"
         if yes_no == "yes" and not self._strip_opening_affirmation_noise(compact):
             return yes_no
-        if len(compact) > 6 and self._opening_response_contains_issue_detail(text):
+        if len(compact) > 6 and self._opening_response_contains_issue_detail(text, request_type=request_type):
             return "issue_detail"
         if yes_no == "yes":
             return "yes"
 
-        return self._classify_opening_intent_with_model(
+        inferred_intent = self._classify_opening_intent_with_model(
             text,
             user_round_index=user_round_index,
         )
+        return inferred_intent
 
     def _classify_opening_intent_with_model(
         self,
@@ -1566,18 +1600,24 @@ class ServiceDialoguePolicy:
         text: str,
         *,
         user_round_index: int = 0,
+        request_type: str = "fault",
         use_model: bool = False,
+        strict_model: bool = False,
     ) -> str:
         issue_description = str(text or "").strip()
         if not issue_description:
             return ""
-        if use_model:
+        if use_model and self.issue_description_extraction_callback is not None:
             extracted_issue_description = self._extract_issue_description_with_model(
                 issue_description,
                 user_round_index=user_round_index,
             )
             if extracted_issue_description:
                 return extracted_issue_description
+            if strict_model:
+                return ""
+        if request_type == "fault" and not self._contains_specific_fault_detail(issue_description):
+            return ""
         return issue_description
 
     @staticmethod
@@ -1633,7 +1673,12 @@ class ServiceDialoguePolicy:
         return residual
 
     @classmethod
-    def _opening_response_contains_issue_detail(cls, text: str) -> bool:
+    def _opening_response_contains_issue_detail(
+        cls,
+        text: str,
+        *,
+        request_type: str = "fault",
+    ) -> bool:
         normalized = (text or "").strip()
         if not normalized:
             return False
@@ -1652,7 +1697,101 @@ class ServiceDialoguePolicy:
             return False
         if cls._classify_yes_no(normalized) == "yes" and len(compact) <= 6:
             return False
+        if request_type == "fault":
+            return cls._contains_specific_fault_detail(normalized)
         return True
+
+    @classmethod
+    def _contains_specific_fault_detail(cls, text: str) -> bool:
+        compact = cls._strip_opening_affirmation_noise(
+            re.sub(r"[，。！？、,.!\s]", "", str(text or ""))
+        )
+        if not compact:
+            return False
+        if cls._is_product_info_only_statement(compact):
+            return False
+
+        specific_patterns = (
+            r"不加热",
+            r"不制热",
+            r"没热水",
+            r"没有热水",
+            r"加热(?:特别|很|太|比较)?慢",
+            r"升温(?:特别|很|太|比较)?慢",
+            r"烧水(?:特别|很|太|比较)?慢",
+            r"忽冷忽热",
+            r"时冷时热",
+            r"冷热不均",
+            r"温度(?:不稳|不稳定|上不去|太低|偏低)",
+            r"水温(?:不稳|不稳定|上不去|太低|偏低)",
+            r"出水(?:太少|很小|变小|不大)",
+            r"花洒出水(?:会)?变小",
+            r"水压.*(?:太小|很小|变小|不稳|不稳定)",
+            r"水量.*(?:太小|很小|变小)",
+            r"漏水",
+            r"渗水",
+            r"滴水",
+            r"漏电",
+            r"异响",
+            r"噪音(?:很大|特别大|大)",
+            r"很吵",
+            r"特别吵",
+            r"不启动",
+            r"启动不了",
+            r"启动不起来",
+            r"无法启动",
+            r"开不了机",
+            r"开机不了",
+            r"不通电",
+            r"没反应",
+            r"不工作",
+            r"不能用",
+            r"用不了",
+            r"跳闸",
+            r"停机",
+            r"报码",
+            r"报错",
+            r"报警",
+            r"故障码",
+            r"显示.*(?:e\d+|f\d+|p\d+)",
+            r"(压缩机|主板|风机|水泵|传感器|阀门|面板|显示屏|控制器).*坏",
+            r"洗澡.*(?:忽冷忽热|水小|没热水|不热|不爽)",
+        )
+        if any(re.search(pattern, compact, flags=re.IGNORECASE) for pattern in specific_patterns):
+            return True
+
+        generic_fault_tokens = (
+            "坏了",
+            "坏掉",
+            "坏掉了",
+            "有问题",
+            "出问题",
+            "有故障",
+            "故障了",
+            "不行了",
+        )
+        if any(token in compact for token in generic_fault_tokens):
+            return False
+
+        return False
+
+    @classmethod
+    def _is_product_info_only_statement(cls, text: str) -> bool:
+        residual = str(text or "")
+        if not residual:
+            return False
+        cleanup_patterns = (
+            r"[零一二三四五六七八九十百千万两\d]+\s*(?:升|匹|p|P|l|L)",
+            r"(空气能热水机|空气能热水器|空气能|热水器|热水机|机器|机子|产品|设备)",
+            r"(品牌|系列|型号|机型)",
+            r"(家用机|商用机|楼宇机|分体机|一体机)",
+            r"(美的|小天鹅|华凌|COLMO|colmo)",
+            r"(一个|一台|一套|这个|这个是|这是|这种|那种|款|个|台|套|的)",
+        )
+        for pattern in cleanup_patterns:
+            residual = re.sub(pattern, "", residual, flags=re.IGNORECASE)
+        residual = re.sub(r"[啊呀呢吧哦额呃嗯]", "", residual)
+        return not residual
 
     @staticmethod
     def _contact_phone_owner(scenario: Scenario) -> str:
@@ -2476,6 +2615,15 @@ class ServiceDialoguePolicy:
         partial_address_candidate: str,
         candidate: str,
     ) -> bool:
+        generic_non_address_patterns = (
+            r"前面.*(?:小区|地址|地方).*(?:错|不对)",
+            r"后面.*(?:小区|地址|地方).*(?:错|不对)",
+            r"老家那个地址",
+            r"那个地址",
+        )
+        if any(re.search(pattern, user_text or "") for pattern in generic_non_address_patterns):
+            return False
+
         observed_candidate = cls._merge_address_candidate(
             partial_address_candidate,
             cls._prepare_address_for_confirmation(user_text),
@@ -2484,6 +2632,13 @@ class ServiceDialoguePolicy:
             return False
 
         observed_components = extract_address_components(observed_candidate)
+        if not (
+            observed_components.has_admin_region
+            or observed_components.town
+            or observed_components.has_precise_detail
+            or cls._has_nonstandard_address_detail(observed_candidate)
+        ):
+            return False
         candidate_components = extract_address_components(candidate)
         observed_has_site_locality = bool(observed_components.road or observed_components.community)
         observed_has_detail = bool(
@@ -3185,6 +3340,16 @@ class ServiceDialoguePolicy:
                 ),
             )
 
+        merged_slots = dict(collected_slots)
+        merged_slots.update(slot_updates)
+        if merged_slots.get("product_routing_result", "").strip() == ROUTING_RESULT_HUMAN:
+            return self._handoff_to_human(
+                scenario=scenario,
+                runtime_state=runtime_state,
+                slot_updates=slot_updates,
+                reason="product_routing_human",
+            )
+
         if scenario.request.request_type == "installation" and not runtime_state.product_arrival_checked:
             return self._start_product_arrival_confirmation(
                 scenario=scenario,
@@ -3298,4 +3463,80 @@ class ServiceDialoguePolicy:
             reply=reply,
             slot_updates=slot_updates,
             is_ready_to_close=False,
+        )
+
+    @classmethod
+    def _should_transfer_to_human(cls, text: str) -> bool:
+        normalized = re.sub(r"\s+", "", text or "")
+        if not normalized:
+            return False
+        negative_patterns = (
+            "不用转人工",
+            "先不用转人工",
+            "不需要转人工",
+            "不用人工",
+            "不需要人工",
+        )
+        if any(pattern in normalized for pattern in negative_patterns):
+            return False
+
+        direct_tokens = (
+            "转人工",
+            "转接人工",
+            "人工客服",
+            "人工服务",
+            "真人客服",
+            "人工坐席",
+        )
+        if any(token in normalized for token in direct_tokens):
+            return True
+
+        patterns = (
+            r"(给我|帮我|麻烦)?转(到)?人工",
+            r"(给我|帮我|麻烦)?接人工",
+            r"我要人工",
+            r"我要找人工",
+            r"我要转人工",
+            r"转人工吧",
+            r"找人工(客服|服务)?",
+        )
+        return any(re.search(pattern, normalized) for pattern in patterns)
+
+    @staticmethod
+    def _reset_runtime_state_for_terminal_close(runtime_state: ServiceRuntimeState) -> None:
+        runtime_state.expected_contactable_confirmation = False
+        runtime_state.awaiting_phone_keypad_input = False
+        runtime_state.expected_phone_number_confirmation = False
+        runtime_state.pending_phone_number_confirmation = ""
+        runtime_state.expected_address_confirmation = False
+        runtime_state.expected_product_arrival_confirmation = False
+        runtime_state.pending_address_confirmation = ""
+        runtime_state.awaiting_full_address = False
+        runtime_state.partial_address_candidate = ""
+        runtime_state.last_address_followup_prompt = ""
+        runtime_state.expected_product_routing_response = False
+        runtime_state.product_routing_completed = True
+        runtime_state.awaiting_closing_ack = False
+        runtime_state.awaiting_satisfaction_rating = False
+
+    def _handoff_to_human(
+        self,
+        *,
+        scenario: Scenario,
+        runtime_state: ServiceRuntimeState,
+        slot_updates: dict[str, str],
+        reason: str,
+    ) -> ServicePolicyResult:
+        self._reset_runtime_state_for_terminal_close(runtime_state)
+        updated_slot_updates = self._with_product_routing_result_slot(
+            scenario=scenario,
+            slot_updates=slot_updates,
+            result=ROUTING_RESULT_HUMAN,
+        )
+        return ServicePolicyResult(
+            reply=self.HUMAN_HANDOFF_REPLY,
+            slot_updates=updated_slot_updates,
+            is_ready_to_close=True,
+            close_status="transferred",
+            close_reason=reason,
         )

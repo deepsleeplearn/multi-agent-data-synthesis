@@ -384,6 +384,11 @@ select:focus {
     color: var(--terminal-user);
 }
 
+.status-badge.transferred {
+    background: rgba(252, 211, 77, 0.16);
+    color: var(--terminal-system);
+}
+
 .status-badge.aborted,
 .status-badge.incomplete,
 .status-badge.error {

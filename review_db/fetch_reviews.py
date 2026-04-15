@@ -143,7 +143,22 @@ def _known_address_line(payload: dict[str, Any]) -> str:
     return f"已知地址: {known_address}"
 
 
-def format_review_record_as_cli(record: dict[str, Any]) -> str:
+def _final_slots_lines(payload: dict[str, Any]) -> list[str]:
+    collected_slots = payload.get("collected_slots", {})
+    if not isinstance(collected_slots, dict) or not collected_slots:
+        return []
+
+    lines = [
+        "",
+        f"最终槽位: {json.dumps(collected_slots, ensure_ascii=False, indent=2)}",
+    ]
+    missing_slots = payload.get("missing_slots", [])
+    if isinstance(missing_slots, list) and missing_slots:
+        lines.append(f"仍缺失槽位: {json.dumps(missing_slots, ensure_ascii=False)}")
+    return lines
+
+
+def format_review_record_as_cli(record: dict[str, Any], *, show_final_slots: bool = False) -> str:
     payload = record.get("review_payload", {})
     scenario = payload.get("scenario", {}) if isinstance(payload, dict) else {}
     product = scenario.get("product", {}) if isinstance(scenario, dict) else {}
@@ -196,6 +211,8 @@ def format_review_record_as_cli(record: dict[str, Any]) -> str:
     aborted_reason = str(record.get("aborted_reason", "")).strip()
     if status == "completed":
         lines.append("--- 会话已完成 ---")
+    elif status == "transferred":
+        lines.append("--- 已转接人工，会话结束 ---")
     elif status == "incomplete" or aborted_reason == "round_limit_reached":
         lines.append("--- 已达到最大轮次，会话结束 ---")
     elif status == "aborted":
@@ -219,15 +236,23 @@ def format_review_record_as_cli(record: dict[str, Any]) -> str:
             ]
         )
 
+    if show_final_slots and isinstance(payload, dict):
+        lines.extend(_final_slots_lines(payload))
+
     return "\n".join(lines)
 
 
-def format_review_records(records: list[dict[str, Any]], *, output_format: str = "json") -> str:
+def format_review_records(
+    records: list[dict[str, Any]],
+    *,
+    output_format: str = "json",
+    show_final_slots: bool = False,
+) -> str:
     if output_format == "cli":
         rendered_records: list[str] = []
         show_separator = len(records) > 1
         for index, record in enumerate(records, start=1):
-            content = format_review_record_as_cli(record)
+            content = format_review_record_as_cli(record, show_final_slots=show_final_slots)
             if show_separator:
                 content = f"===== 记录 {index}/{len(records)} =====\n{content}"
             rendered_records.append(content)
@@ -250,6 +275,11 @@ def main() -> None:
         default="json",
         help="输出格式：json 为结构化结果，cli 为还原终端样式输出",
     )
+    parser.add_argument(
+        "--show-final-slots",
+        action="store_true",
+        help="仅在 cli 输出时，额外打印会话结束时的最终槽位信息",
+    )
     args = parser.parse_args()
 
     records = fetch_manual_test_reviews(
@@ -257,7 +287,13 @@ def main() -> None:
         session_id=args.session_id,
         limit=args.limit or None,
     )
-    print(format_review_records(records, output_format=args.format))
+    print(
+        format_review_records(
+            records,
+            output_format=args.format,
+            show_final_slots=bool(args.show_final_slots),
+        )
+    )
 
 
 if __name__ == "__main__":

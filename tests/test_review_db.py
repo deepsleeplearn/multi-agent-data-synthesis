@@ -240,6 +240,11 @@ class ReviewDbFetchTests(unittest.TestCase):
                                 "failed_flow_stage": "address_collection",
                                 "notes": "地址确认有误",
                             },
+                            "collected_slots": {
+                                "issue_description": "热水器坏了",
+                                "product_routing_result": "楼宇 + 可直接确认机型",
+                            },
+                            "missing_slots": ["address"],
                             "transcript": [
                                 {
                                     "speaker": "用户",
@@ -273,6 +278,36 @@ class ReviewDbFetchTests(unittest.TestCase):
         self.assertIn("[1*] 客服: 请问您家的详细地址是？", cli_output)
         self.assertIn("评审结果: 错误", cli_output)
         self.assertIn("出错流程: address_collection", cli_output)
+        self.assertNotIn("最终槽位:", cli_output)
+
+    def test_format_review_record_as_cli_can_optionally_append_final_slots(self):
+        record = {
+            "session_id": "session-1",
+            "scenario_id": "case-1",
+            "username": "tester",
+            "status": "incomplete",
+            "aborted_reason": "round_limit_reached",
+            "review_payload": {
+                "scenario": {
+                    "product": {"brand": "美的", "category": "空气能热水机", "model": "KF66"},
+                    "request": {"request_type": "fault"},
+                },
+                "collected_slots": {
+                    "issue_description": "加热很慢",
+                    "product_routing_result": "楼宇 + 可直接确认机型",
+                },
+                "missing_slots": ["address"],
+                "transcript": [],
+            },
+            "transcript": [],
+        }
+
+        cli_output = format_review_record_as_cli(record, show_final_slots=True)
+
+        self.assertIn("最终槽位:", cli_output)
+        self.assertIn('"issue_description": "加热很慢"', cli_output)
+        self.assertIn('"product_routing_result": "楼宇 + 可直接确认机型"', cli_output)
+        self.assertIn('仍缺失槽位: ["address"]', cli_output)
 
     def test_format_review_records_keeps_json_default_and_supports_cli_mode(self):
         record = {
@@ -286,6 +321,10 @@ class ReviewDbFetchTests(unittest.TestCase):
                     "product": {"brand": "美的", "category": "空气能热水机", "model": "KF66"},
                     "request": {"request_type": "fault"},
                 },
+                "collected_slots": {
+                    "issue_description": "加热很慢",
+                    "product_routing_result": "楼宇 + 可直接确认机型",
+                },
                 "transcript": [],
             },
             "transcript": [],
@@ -293,10 +332,13 @@ class ReviewDbFetchTests(unittest.TestCase):
 
         json_output = format_review_records([record])
         cli_output = format_review_records([record], output_format="cli")
+        cli_with_slots_output = format_review_records([record], output_format="cli", show_final_slots=True)
 
         self.assertIn('"session_id": "session-1"', json_output)
         self.assertIn("Session ID: session-1", cli_output)
         self.assertIn("[无对话内容]", cli_output)
+        self.assertNotIn("最终槽位:", cli_output)
+        self.assertIn("最终槽位:", cli_with_slots_output)
 
 
 if __name__ == "__main__":

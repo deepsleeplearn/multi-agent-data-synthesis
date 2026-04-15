@@ -206,14 +206,21 @@ def run_manual_test_session(
                 "collected_slots_snapshot": dict(collected_slots),
                 "runtime_state_snapshot": asdict(runtime_state),
                 "is_ready_to_close": service_result.is_ready_to_close,
+                "close_status": service_result.close_status,
+                "close_reason": service_result.close_reason,
             }
         )
 
+        if service_result.close_status == "transferred":
+            status = "transferred"
+            aborted_reason = service_result.close_reason
+            print_func("--- 已转接人工，会话结束 ---")
+            break
         if service_result.is_ready_to_close and _all_required_slots_filled(collected_slots, required_slots):
             status = "completed"
             break
 
-    if status not in {"completed", "aborted"}:
+    if status not in {"completed", "aborted", "transferred"}:
         status = "incomplete"
         if rounds_limit > 0 and transcript:
             aborted_reason = "round_limit_reached"

@@ -373,38 +373,40 @@ class FrontendServerTests(unittest.TestCase):
 
         self.assertEqual(review_response.status_code, 400)
 
-    def test_review_dismiss_endpoint_allows_closing_review_modal_without_submission(self):
+    def test_frontend_static_files_include_review_close_control(self):
+        index_response = self.client.get("/")
+        self.assertEqual(index_response.status_code, 200)
+        self.assertIn('id="review-close-btn"', index_response.text)
+        self.assertIn('id="review-toggle-btn"', index_response.text)
+
+        app_response = self.client.get("/static/app.js")
+        self.assertEqual(app_response.status_code, 200)
+        self.assertIn("打开评审", app_response.text)
+        self.assertNotIn("/api/session/review/dismiss", app_response.text)
+
+    def test_user_requested_human_handoff_closes_session_and_keeps_review_flow(self):
         self._login()
         start_payload = self.client.post(
             "/api/session/start",
             json={"scenario_id": "frontend_case"},
         ).json()
         session_id = start_payload["session_id"]
-        self.client.post(
+
+        reply_response = self.client.post(
             "/api/session/respond",
-            json={"session_id": session_id, "text": "/quit"},
+            json={"session_id": session_id, "text": "帮我转人工"},
         )
 
-        dismiss_response = self.client.post(
-            "/api/session/review/dismiss",
-            json={"session_id": session_id},
-        )
-
-        self.assertEqual(dismiss_response.status_code, 200)
-        dismiss_payload = dismiss_response.json()
-        self.assertEqual(dismiss_payload["session_id"], session_id)
-        self.assertEqual(dismiss_payload["username"], "tester")
-        self.assertFalse(dismiss_payload["review_required"])
-        self.assertTrue(frontend_server.sessions[session_id]["review_dismissed"])
-
-    def test_frontend_static_files_include_review_close_control(self):
-        index_response = self.client.get("/")
-        self.assertEqual(index_response.status_code, 200)
-        self.assertIn('id="review-close-btn"', index_response.text)
-
-        app_response = self.client.get("/static/app.js")
-        self.assertEqual(app_response.status_code, 200)
-        self.assertIn("/api/session/review/dismiss", app_response.text)
+        self.assertEqual(reply_response.status_code, 200)
+        reply_payload = reply_response.json()
+        self.assertEqual(reply_payload["status"], "transferred")
+        self.assertTrue(reply_payload["session_closed"])
+        self.assertEqual(reply_payload["service_turn"]["text"], "请稍等，正在为您转接人工服务。")
+        self.assertIn("--- 已转接人工，会话结束 ---", reply_payload["output_lines"])
+        self.assertEqual(reply_payload["close_status"], "transferred")
+        self.assertEqual(reply_payload["close_reason"], "user_requested_human")
+        self.assertEqual(reply_payload["collected_slots"]["product_routing_result"], "转人工")
+        self.assertTrue(reply_payload["review_required"])
 
 
 if __name__ == "__main__":

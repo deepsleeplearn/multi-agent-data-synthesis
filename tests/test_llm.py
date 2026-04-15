@@ -171,7 +171,7 @@ class OpenAIChatClientTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "JSON root must be an object"):
             client._parse_response(response)
 
-    def test_complete_builds_aimp_headers_and_payload(self):
+    def test_complete_builds_gpt4o_compatible_aimp_headers_and_payload(self):
         client = RecordingChatClient(
             [
                 {
@@ -207,7 +207,40 @@ class OpenAIChatClientTests(unittest.TestCase):
                 "messages": [{"role": "user", "content": "你好"}],
                 "temperature": 0.4,
                 "max_tokens": 256,
-                "enable_thinking": True,
+            },
+        )
+
+    def test_complete_supports_additional_payload_for_gpt4o(self):
+        client = RecordingChatClient(
+            [
+                {
+                    "choices": [
+                        {
+                            "message": {
+                                "content": "模型输出",
+                            }
+                        }
+                    ]
+                }
+            ]
+        )
+
+        client.complete(
+            model="gpt-4o",
+            messages=[{"role": "user", "content": "你好"}],
+            temperature=0.4,
+            additional_payload={"top_p": 0.7, "presence_penalty": 0.2},
+        )
+
+        request = client.sent_requests[0]
+        self.assertEqual(
+            request["payload"],
+            {
+                "model": "gpt-4o",
+                "messages": [{"role": "user", "content": "你好"}],
+                "temperature": 0.4,
+                "top_p": 0.7,
+                "presence_penalty": 0.2,
             },
         )
 

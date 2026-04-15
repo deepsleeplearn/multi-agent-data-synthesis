@@ -71,6 +71,7 @@ class OpenAIChatClient:
         temperature: float | None,
         max_tokens: int | None,
         enable_thinking: bool = False,
+        additional_payload: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         profile = self._request_profile_for_model(model)
         payload: dict[str, Any] = {
@@ -102,6 +103,9 @@ class OpenAIChatClient:
 
             if self._requires_qwen_model_path(model):
                 payload["model"] = f"/model/{model}"
+
+        if isinstance(additional_payload, dict):
+            payload.update(additional_payload)
 
         return payload
 
@@ -309,6 +313,7 @@ class OpenAIChatClient:
         temperature: float | None = None,
         max_tokens: int | None = None,
         enable_thinking: bool = False,
+        additional_payload: dict[str, Any] | None = None,
     ) -> str:
         payload = self._build_payload(
             model=model,
@@ -316,6 +321,7 @@ class OpenAIChatClient:
             temperature=temperature,
             max_tokens=max_tokens,
             enable_thinking=enable_thinking,
+            additional_payload=additional_payload,
         )
         response = self._send_request(headers=self._build_headers(model), payload=payload)
         return self._extract_message_content(response)
@@ -328,6 +334,7 @@ class OpenAIChatClient:
         temperature: float | None = None,
         max_tokens: int | None = None,
         enable_thinking: bool = False,
+        additional_payload: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         text = self.complete(
             model=model,
@@ -335,6 +342,7 @@ class OpenAIChatClient:
             temperature=temperature,
             max_tokens=max_tokens,
             enable_thinking=enable_thinking,
+            additional_payload=additional_payload,
         )
         try:
             return extract_json_object(text)
@@ -351,6 +359,7 @@ class OpenAIChatClient:
                 temperature=temperature,
                 max_tokens=max_tokens,
                 enable_thinking=enable_thinking,
+                additional_payload=additional_payload,
             )
             return extract_json_object(retry_text)
 
@@ -362,6 +371,7 @@ class OpenAIChatClient:
         temperature: float | None = None,
         max_tokens: int | None = None,
         enable_thinking: bool = False,
+        additional_payload: dict[str, Any] | None = None,
     ) -> str:
         payload = self._build_payload(
             model=model,
@@ -369,6 +379,7 @@ class OpenAIChatClient:
             temperature=temperature,
             max_tokens=max_tokens,
             enable_thinking=enable_thinking,
+            additional_payload=additional_payload,
         )
         response = await self._send_request_async(
             headers=self._build_headers(model),
@@ -384,6 +395,7 @@ class OpenAIChatClient:
         temperature: float | None = None,
         max_tokens: int | None = None,
         enable_thinking: bool = False,
+        additional_payload: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         text = await self.complete_async(
             model=model,
@@ -391,6 +403,7 @@ class OpenAIChatClient:
             temperature=temperature,
             max_tokens=max_tokens,
             enable_thinking=enable_thinking,
+            additional_payload=additional_payload,
         )
         try:
             return extract_json_object(text)
@@ -407,5 +420,6 @@ class OpenAIChatClient:
                 temperature=temperature,
                 max_tokens=max_tokens,
                 enable_thinking=enable_thinking,
+                additional_payload=additional_payload,
             )
             return extract_json_object(retry_text)

@@ -120,10 +120,6 @@ class ReviewSessionRequest(BaseModel):
     persist_to_db: bool = False
 
 
-class DismissReviewRequest(BaseModel):
-    session_id: str
-
-
 def _scenario_file() -> Path:
     return config.data_dir / "seed_scenarios.json"
 
@@ -409,11 +405,7 @@ def _mark_session_closed(
 
 def _review_prompt_payload(session: dict[str, Any]) -> dict[str, Any]:
     return {
-        "review_required": (
-            session["status"] != "active"
-            and not bool(session.get("review_submitted", False))
-            and not bool(session.get("review_dismissed", False))
-        ),
+        "review_required": session["status"] != "active" and not bool(session.get("review_submitted", False)),
         "review_options": FLOW_REVIEW_OPTIONS,
         "persist_to_db_default": bool(session.get("session_config", {}).get("persist_to_db", False)),
     }
@@ -665,7 +657,6 @@ def start_session(
             "started_at": _utc_now_iso(),
             "ended_at": "",
             "review_submitted": False,
-            "review_dismissed": False,
             "session_config": {
                 "scenario_id": scenario.scenario_id,
                 "known_address": _sanitize_manual_user_text(req.known_address),
@@ -830,11 +821,20 @@ def respond(
             "collected_slots_snapshot": dict(collected_slots),
             "runtime_state_snapshot": asdict(runtime_state),
             "is_ready_to_close": service_result.is_ready_to_close,
+            "close_status": getattr(service_result, "close_status", ""),
+            "close_reason": getattr(service_result, "close_reason", ""),
         }
     )
 
     output_lines: list[str] = []
-    if service_result.is_ready_to_close and _all_required_slots_filled(collected_slots, required_slots):
+    if getattr(service_result, "close_status", "") == "transferred":
+        _mark_session_closed(
+            session,
+            status="transferred",
+            aborted_reason=getattr(service_result, "close_reason", ""),
+        )
+        output_lines.append("--- 已转接人工，会话结束 ---")
+    elif service_result.is_ready_to_close and _all_required_slots_filled(collected_slots, required_slots):
         _mark_session_closed(session, status="completed")
         output_lines.append("--- 会话已完成 ---")
     elif round_index >= rounds_limit:
@@ -851,6 +851,8 @@ def respond(
         "session_closed": session["status"] != "active",
         "next_round_index": _next_round_index(transcript),
         "is_ready_to_close": service_result.is_ready_to_close,
+        "close_status": getattr(service_result, "close_status", ""),
+        "close_reason": getattr(service_result, "close_reason", ""),
         **_review_prompt_payload(session),
     }
 
@@ -884,7 +886,6 @@ def review_session(
             raise HTTPException(status_code=500, detail=f"写入 SQLite 失败: {exc}") from exc
 
     session["review_submitted"] = True
-    session["review_dismissed"] = False
     session["review"] = {
         "username": current_user["username"],
         "is_correct": bool(req.is_correct),
@@ -899,24 +900,6 @@ def review_session(
         "username": current_user["username"],
         "persisted_to_db": bool(req.persist_to_db),
         "db_path": str(SESSION_REVIEW_DB_PATH) if req.persist_to_db else "",
-        "review_required": False,
-    }
-
-
-@app.post("/api/session/review/dismiss")
-def dismiss_review(
-    req: DismissReviewRequest,
-    current_user: dict[str, str] = Depends(_require_authenticated_user),
-):
-    session = _session_state(req.session_id)
-    if session["status"] == "active":
-        raise HTTPException(status_code=409, detail="当前会话尚未结束，不能取消评审。")
-
-    session["review_dismissed"] = True
-    return {
-        "ok": True,
-        "session_id": req.session_id,
-        "username": current_user["username"],
         "review_required": False,
     }
 

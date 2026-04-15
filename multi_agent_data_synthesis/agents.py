@@ -559,6 +559,9 @@ class ServiceAgent:
 2. 只输出 yes、no、issue_detail 或 unknown。
 3. 像“是滴、是呀、是啊、嗯呐、对滴”这类口语肯定，通常是 yes，不算 issue_detail。
 4. 只有用户明确说出故障现象、报错、安装诉求细节时，才判为 issue_detail。
+5. “维修”“报修”“需要修”“坏了”“有问题”这类泛泛表达，本身不算 issue_detail。
+5. 仅有品牌、系列、型号、容量、匹数、楼宇/家用等产品信息，不算 issue_detail。
+6. “东西坏了”“热水器坏了”“有问题”这类泛泛表述，不算 issue_detail；必须有具体故障现象才算。
 
 输出 JSON：
 {
@@ -591,6 +594,9 @@ class ServiceAgent:
 2. 去掉“是的、是滴、对的、嗯嗯、侬好、麻烦了”这类确认、寒暄、语气词和无关评价。
 3. 保留和客服登记相关的核心问题描述，尽量短而完整。
 4. 如果用户原话里没有可提取的有效故障/诉求描述，就返回空字符串。
+5. 像“东西坏了”“热水器坏了”“有问题”这类泛泛故障表述不算有效故障描述，返回空字符串。
+6. 只有品牌、系列、型号、容量、匹数等产品信息时，也返回空字符串。
+7. 如果用户明确说了具体现象，比如“不加热”“出水不热”“开到 80 度烧两小时才 40 度”“忽冷忽热”“漏水”“噪音大”，要提炼出核心故障描述，不要返回空字符串。
 
 输出 JSON：
 {
@@ -690,6 +696,8 @@ class ServiceAgent:
             "reply": result.reply,
             "slot_updates": result.slot_updates,
             "is_ready_to_close": result.is_ready_to_close,
+            "close_status": result.close_status,
+            "close_reason": result.close_reason,
             "used_model_intent_inference": self.policy.last_used_model_intent_inference,
         }
 

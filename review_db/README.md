@@ -7,4 +7,5 @@
 ```bash
 python -m review_db.fetch_reviews outputs/frontend_manual_test.sqlite3 --limit 20
 python -m review_db.fetch_reviews outputs/frontend_manual_test.sqlite3 --session-id <session_id>
+python -m review_db.fetch_reviews outputs/frontend_manual_test.sqlite3 --format cli --show-final-slots
 ```

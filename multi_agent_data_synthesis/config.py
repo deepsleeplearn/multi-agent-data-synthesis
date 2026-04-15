@@ -36,6 +36,9 @@ DEFAULT_MODEL_REQUEST_PROFILES = {
         "include_enable_thinking": True,
         "enable_thinking_param": "enable_thinking",
     },
+    "gpt-4o": {
+        "include_enable_thinking": False,
+    },
     "gpt-5.3-chat": {
         "include_temperature": False,
         "include_max_tokens": False,

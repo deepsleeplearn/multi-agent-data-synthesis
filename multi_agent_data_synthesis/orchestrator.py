@@ -115,7 +115,10 @@ class DialogueOrchestrator:
         )
 
         ready_to_close = opening_action["is_ready_to_close"]
-        if not (ready_to_close and self._all_required_slots_filled(collected_slots, required_slots)):
+        forced_close_status = str(opening_action.get("close_status", "")).strip()
+        if not forced_close_status and not (
+            ready_to_close and self._all_required_slots_filled(collected_slots, required_slots)
+        ):
             for round_index in range(2, rounds_limit + 1):
                 user_action = await self.user_agent.respond_async(
                     scenario=scenario,
@@ -165,13 +168,19 @@ class DialogueOrchestrator:
                     )
 
                 ready_to_close = service_action["is_ready_to_close"]
+                forced_close_status = str(service_action.get("close_status", "")).strip()
+                if forced_close_status:
+                    break
                 if ready_to_close and self._all_required_slots_filled(collected_slots, required_slots):
                     break
 
         missing_slots = [
             slot for slot in required_slots if not collected_slots.get(slot, "").strip()
         ]
-        status = "completed" if ready_to_close and not missing_slots else "incomplete"
+        if forced_close_status:
+            status = forced_close_status
+        else:
+            status = "completed" if ready_to_close and not missing_slots else "incomplete"
 
         sample = DialogueSample(
             scenario_id=scenario.scenario_id,
