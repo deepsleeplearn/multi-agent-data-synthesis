@@ -10,6 +10,7 @@ from multi_agent_data_synthesis.schemas import (
     DialogueSample,
     DialogueTurn,
     Scenario,
+    SUPPLEMENTARY_COLLECTED_SLOTS,
     SERVICE_SPEAKER,
     USER_SPEAKER,
     display_speaker,
@@ -60,10 +61,11 @@ class DialogueOrchestrator:
         transcript: list[DialogueTurn] = []
         required_slots = effective_required_slots(scenario)
         collected_slots = {slot: "" for slot in required_slots}
-        collected_slots.setdefault("phone_contactable", "")
-        collected_slots.setdefault("phone_contact_owner", "")
-        collected_slots.setdefault("phone_collection_attempts", "")
-        collected_slots.setdefault("product_arrived", "")
+        for slot in SUPPLEMENTARY_COLLECTED_SLOTS:
+            collected_slots.setdefault(slot, "")
+        collected_slots["product_routing_result"] = str(
+            scenario.hidden_context.get("product_routing_result", "")
+        ).strip()
         ready_to_close = False
         rounds_limit = scenario.max_turns or self.config.max_rounds
         runtime_state = ServiceRuntimeState()
@@ -90,9 +92,6 @@ class DialogueOrchestrator:
                 speaker=SERVICE_SPEAKER,
                 text=opening_action["reply"],
                 round_index=1,
-                model_intent_inference_used=bool(
-                    opening_action.get("used_model_intent_inference", False)
-                ),
             )
         )
         if self.show_dialogue_progress:
@@ -100,16 +99,15 @@ class DialogueOrchestrator:
                 SERVICE_SPEAKER,
                 1,
                 opening_action["reply"],
-                used_model_intent_inference=bool(
-                    opening_action.get("used_model_intent_inference", False)
-                ),
             )
+        if opening_action.get("used_model_intent_inference", False):
+            transcript[-2].model_intent_inference_used = True
 
         self._merge_slots(collected_slots, opening_action["slot_updates"], required_slots)
         self._merge_slots(
             collected_slots,
             opening_action["slot_updates"],
-            ["phone_contactable", "phone_contact_owner", "phone_collection_attempts", "product_arrived"],
+            list(SUPPLEMENTARY_COLLECTED_SLOTS),
         )
 
         ready_to_close = opening_action["is_ready_to_close"]
@@ -140,26 +138,22 @@ class DialogueOrchestrator:
                 self._merge_slots(
                     collected_slots,
                     service_action["slot_updates"],
-                    ["phone_contactable", "phone_contact_owner", "phone_collection_attempts", "product_arrived"],
+                    list(SUPPLEMENTARY_COLLECTED_SLOTS),
                 )
                 transcript.append(
                     DialogueTurn(
                         speaker=SERVICE_SPEAKER,
                         text=service_action["reply"],
                         round_index=round_index,
-                        model_intent_inference_used=bool(
-                            service_action.get("used_model_intent_inference", False)
-                        ),
                     )
                 )
+                if service_action.get("used_model_intent_inference", False):
+                    transcript[-2].model_intent_inference_used = True
                 if self.show_dialogue_progress and service_action["reply"]:
                     await self._print_turn_async(
                         SERVICE_SPEAKER,
                         round_index,
                         service_action["reply"],
-                        used_model_intent_inference=bool(
-                            service_action.get("used_model_intent_inference", False)
-                        ),
                     )
 
                 ready_to_close = service_action["is_ready_to_close"]

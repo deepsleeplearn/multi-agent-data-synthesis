@@ -30,7 +30,7 @@
       "request_type",
       "availability"
     ],
-    "max_turns": 20,
+    "max_turns": 32,
     "tags": [
       "fault",
       "midea",

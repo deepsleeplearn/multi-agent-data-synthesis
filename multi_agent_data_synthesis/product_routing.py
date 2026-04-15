@@ -11,7 +11,7 @@ ROUTING_RESULT_HOME = "家用 + 可直接确认机型"
 ROUTING_RESULT_BUILDING = "楼宇 + 可直接确认机型"
 ROUTING_RESULT_HUMAN = "转人工"
 
-PROMPT_BRAND_OR_SERIES = "请问您的空气能是什么品牌或系列呢？"
+PROMPT_BRAND_OR_SERIES = "请问您的空气能是什么具体品牌或系列呢？"
 PROMPT_USAGE_PURPOSE = "请问是生活用水加采暖使用，还是单独生活用水，或者单独采暖的呢？"
 PROMPT_USAGE_SCENE = "请问是在家庭、别墅、公寓或理发店使用的吗？"
 PROMPT_PURCHASE_OR_PROPERTY = "请问是您自己购买的，还是楼盘配套赠送的呢？"
@@ -645,6 +645,33 @@ def _classify_capacity_threshold(text: str, *, unit: str, threshold: int) -> str
     return "capacity.unknown"
 
 
+def _extract_property_year_value(text: str) -> int | None:
+    normalized = re.sub(r"\s+", "", _normalize_text(text))
+    if not normalized:
+        return None
+
+    for match in re.finditer(r"(20\d{2})年?", normalized):
+        year = int(match.group(1))
+        if 2000 <= year <= 2099:
+            return year
+
+    for match in re.finditer(r"(?<!\d)(\d{2})年?", normalized):
+        year = int(match.group(1))
+        if 0 <= year <= 99:
+            return 2000 + year
+
+    for match in re.finditer(r"([零一二两三四五六七八九十百]{1,4})年", normalized):
+        year = _simple_chinese_number_to_int(match.group(1))
+        if year is None:
+            continue
+        if 0 <= year <= 99:
+            return 2000 + year
+        if 2000 <= year <= 2099:
+            return year
+
+    return None
+
+
 def infer_product_routing_answer_key(prompt_key: str, user_text: str) -> str:
     for compact in _product_routing_text_variants(user_text):
         if prompt_key == "brand_or_series":
@@ -711,6 +738,9 @@ def infer_product_routing_answer_key(prompt_key: str, user_text: str) -> str:
                 return "property_year.after_2021"
             if "2021" in compact or "21年" in compact:
                 return "property_year.after_2021" if any(token in compact for token in ("之后", "以后")) else "property_year.before_2021"
+            explicit_year = _extract_property_year_value(compact)
+            if explicit_year is not None:
+                return "property_year.before_2021" if explicit_year < 2021 else "property_year.after_2021"
             continue
     return ""
 

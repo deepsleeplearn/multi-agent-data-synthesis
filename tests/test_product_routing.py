@@ -165,6 +165,21 @@ class ProductRoutingPlanTests(unittest.TestCase):
 
         self.assertEqual(answer_key, "purchase.property_bundle")
 
+    def test_infer_product_routing_answer_key_maps_specific_two_digit_property_year(self):
+        answer_key = infer_product_routing_answer_key("property_year", "19年的楼盘")
+
+        self.assertEqual(answer_key, "property_year.before_2021")
+
+    def test_infer_product_routing_answer_key_maps_specific_four_digit_property_year(self):
+        answer_key = infer_product_routing_answer_key("property_year", "2018年交付的")
+
+        self.assertEqual(answer_key, "property_year.before_2021")
+
+    def test_infer_product_routing_answer_key_maps_specific_post_2021_property_year(self):
+        answer_key = infer_product_routing_answer_key("property_year", "22年的")
+
+        self.assertEqual(answer_key, "property_year.after_2021")
+
 
 class ProductRoutingServicePolicyTests(unittest.TestCase):
     def test_service_policy_inserts_routing_between_opening_and_fault_question(self):
@@ -263,9 +278,10 @@ class ProductRoutingServicePolicyTests(unittest.TestCase):
             runtime_state=state,
         )
         self.assertEqual(post_routing.reply, "请问空气能热水器现在是出现了什么问题？")
+        self.assertEqual(post_routing.slot_updates["product_routing_result"], ROUTING_RESULT_BUILDING)
         self.assertTrue(state.product_routing_completed)
 
-    def test_service_policy_does_not_prepend_fault_ack_before_first_routing_question(self):
+    def test_service_policy_prepends_fault_ack_before_first_routing_question(self):
         plan = {
             "enabled": True,
             "result": ROUTING_RESULT_BUILDING,
@@ -313,7 +329,10 @@ class ProductRoutingServicePolicyTests(unittest.TestCase):
             runtime_state=state,
         )
 
-        self.assertEqual(result.reply, "请问您的空气能是什么品牌或系列呢？")
+        self.assertEqual(
+            result.reply,
+            "非常抱歉，给您添麻烦了，我这就安排是否上门维修，请问您的空气能是什么具体品牌或系列呢？",
+        )
 
     def test_service_policy_reroutes_unknown_usage_purpose_to_usage_scene(self):
         plan = {

@@ -6,6 +6,8 @@ import unittest
 from pathlib import Path
 
 from multi_agent_data_synthesis.manual_test import (
+    _manual_command_token,
+    _sanitize_manual_user_text,
     load_manual_test_scenario,
     run_manual_test_session,
 )
@@ -56,6 +58,14 @@ def build_scenario_payload(scenario_id: str) -> dict:
 
 
 class ManualTestModuleTests(unittest.TestCase):
+    def test_sanitize_manual_user_text_removes_abnormal_unicode_whitespace(self):
+        sanitized = _sanitize_manual_user_text("  阳光锦城\u30003\u00a0号楼\u200b2 单元\r\n402  ")
+
+        self.assertEqual(sanitized, "阳光锦城 3 号楼2 单元 402")
+
+    def test_manual_command_token_tolerates_whitespace_noise(self):
+        self.assertEqual(_manual_command_token(" \u3000/ state \n"), "/state")
+
     def test_load_manual_test_scenario_prefers_scenario_id(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             scenario_file = Path(temp_dir) / "scenarios.json"
@@ -145,9 +155,12 @@ class ManualTestModuleTests(unittest.TestCase):
                 print_func=outputs.append,
             )
 
-            self.assertEqual(payload["service_trace"][0]["service_round_label"], "1*")
+            self.assertEqual(payload["service_trace"][0]["user_round_label"], "1*")
+            self.assertEqual(payload["service_trace"][0]["service_round_label"], "1")
             self.assertTrue(payload["service_trace"][0]["used_model_intent_inference"])
-            self.assertTrue(any("[1*] 客服:" in line for line in outputs))
+            self.assertEqual(payload["transcript"][0]["round_label"], "1*")
+            self.assertTrue(any("[1*] 用户:" in line for line in outputs))
+            self.assertTrue(any("[1] 客服:" in line for line in outputs))
 
     def test_run_manual_test_session_can_skip_file_write(self):
         scenario = Scenario.from_dict(build_scenario_payload("manual_case_003"))
@@ -168,6 +181,105 @@ class ManualTestModuleTests(unittest.TestCase):
         self.assertEqual(payload["status"], "aborted")
         self.assertTrue(any("输出文件: 未启用" in line for line in outputs))
         self.assertTrue(any("测试结果未写入文件" in line for line in outputs))
+
+    def test_run_manual_test_session_can_print_address_state_when_enabled(self):
+        class StubPolicy:
+            def __init__(self):
+                self.last_used_model_intent_inference = False
+
+            def respond(self, *, scenario, transcript, collected_slots, runtime_state):
+                runtime_state.awaiting_full_address = True
+                runtime_state.partial_address_candidate = "江苏省扬州市宝应县安宜镇"
+                runtime_state.last_address_followup_prompt = "好的，请您继续说一下小区、楼栋和门牌号。"
+                return ServicePolicyResult(
+                    reply="好的，请您继续说一下小区、楼栋和门牌号。",
+                    slot_updates={},
+                    is_ready_to_close=False,
+                )
+
+        scenario = Scenario.from_dict(build_scenario_payload("manual_case_004"))
+        outputs: list[str] = []
+        replies = iter(["江苏省扬州市宝应县安宜镇", "/quit"])
+
+        def fake_input(prompt: str) -> str:
+            return next(replies)
+
+        run_manual_test_session(
+            scenario,
+            output_path=None,
+            max_rounds=4,
+            policy=StubPolicy(),
+            show_address_state=True,
+            input_func=fake_input,
+            print_func=outputs.append,
+        )
+
+        self.assertTrue(any(line.startswith("地址状态: ") for line in outputs))
+        self.assertTrue(any("安宜镇" in line for line in outputs if line.startswith("地址状态: ")))
+        self.assertTrue(any('"actual_address"' in line for line in outputs if line.startswith("地址状态: ")))
+        self.assertTrue(any('"missing_required_precision"' in line for line in outputs if line.startswith("地址状态: ")))
+
+    def test_run_manual_test_session_preserves_normal_text_after_sanitizing_input(self):
+        class StubPolicy:
+            def __init__(self):
+                self.last_used_model_intent_inference = False
+
+            def respond(self, *, scenario, transcript, collected_slots, runtime_state):
+                return ServicePolicyResult(
+                    reply="好的，请继续。",
+                    slot_updates={},
+                    is_ready_to_close=False,
+                )
+
+        scenario = Scenario.from_dict(build_scenario_payload("manual_case_005"))
+        replies = iter(["  阳光锦城\u30003\u00a0号楼\u200b2 单元\r\n402  ", "/quit"])
+
+        def fake_input(prompt: str) -> str:
+            return next(replies)
+
+        payload = run_manual_test_session(
+            scenario,
+            output_path=None,
+            max_rounds=4,
+            policy=StubPolicy(),
+            input_func=fake_input,
+            print_func=lambda _: None,
+        )
+
+        self.assertEqual(payload["service_trace"][0]["user_text"], "阳光锦城 3 号楼2 单元 402")
+
+    def test_run_manual_test_session_can_print_final_slots_and_keep_product_routing_result(self):
+        class StubPolicy:
+            def __init__(self):
+                self.last_used_model_intent_inference = False
+
+            def respond(self, *, scenario, transcript, collected_slots, runtime_state):
+                return ServicePolicyResult(
+                    reply="好的，请继续。",
+                    slot_updates={"product_routing_result": "楼宇 + 可直接确认机型"},
+                    is_ready_to_close=False,
+                )
+
+        scenario = Scenario.from_dict(build_scenario_payload("manual_case_006"))
+        outputs: list[str] = []
+        replies = iter(["美的空气能热水器需要维修", "/quit"])
+
+        def fake_input(prompt: str) -> str:
+            return next(replies)
+
+        payload = run_manual_test_session(
+            scenario,
+            output_path=None,
+            max_rounds=4,
+            policy=StubPolicy(),
+            show_final_slots=True,
+            input_func=fake_input,
+            print_func=outputs.append,
+        )
+
+        self.assertEqual(payload["collected_slots"]["product_routing_result"], "楼宇 + 可直接确认机型")
+        self.assertTrue(any("最终槽位:" in line for line in outputs))
+        self.assertTrue(any("product_routing_result" in line for line in outputs))
 
 
 if __name__ == "__main__":

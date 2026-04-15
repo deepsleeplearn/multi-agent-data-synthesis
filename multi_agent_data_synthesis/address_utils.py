@@ -55,6 +55,8 @@ COMMUNITY_SUFFIXES = (
     "新村",
     "碧桂园",
 )
+ROAD_LOCALITY_SUFFIXES = ("路", "街", "大道", "巷", "弄", "胡同")
+BUILDING_SUFFIXES = ("号楼", "栋", "幢", "座", "楼")
 COMMUNITY_SECTION_PATTERN = re.compile(
     r"([A-Za-z0-9\u4e00-\u9fa5]{2,20}?(?:[一二三四五六七八九十\d]+区))"
 )
@@ -128,14 +130,14 @@ class AddressComponents:
 
 
 def normalize_address_text(text: str) -> str:
-    return (
+    normalized = (
         (text or "")
         .replace("，", "")
         .replace(",", "")
         .replace("。", "")
-        .replace(" ", "")
         .strip()
     )
+    return re.sub(r"\s+", "", normalized)
 
 
 def _strip_province_suffix(text: str) -> str:
@@ -275,27 +277,52 @@ def extract_address_components(text: str) -> AddressComponents:
         town = town_match.group(0)
         remainder = remainder[town_match.end() :]
 
-    road = ""
-    road_match = re.search(r"([^\d]{1,20}(?:路|街|大道|巷|弄|胡同)\d+号?)", remainder)
-    if road_match:
-        road = road_match.group(1)
-    community_search_text = remainder[road_match.end() :] if road_match else remainder
-
     community = ""
     community_patterns = [
         rf"([A-Za-z0-9\u4e00-\u9fa5]*?(?:{suffix})(?:[零一二三四五六七八九十两\d]+期)?)"
         for suffix in COMMUNITY_SUFFIXES
     ]
-    community_matches: list[str] = []
+    community_match_spans: list[tuple[int, int, str]] = []
     for pattern in community_patterns:
-        community_matches.extend(match.group(1) for match in re.finditer(pattern, community_search_text))
-    section_match = COMMUNITY_SECTION_PATTERN.search(community_search_text)
+        for match in re.finditer(pattern, remainder):
+            community_match_spans.append((match.start(), match.end(), match.group(1)))
+    section_match = COMMUNITY_SECTION_PATTERN.search(remainder)
     if section_match:
-        community_matches.append(section_match.group(1))
-    if community_matches:
-        community = sorted(community_matches, key=len)[-1]
+        community_match_spans.append((section_match.start(), section_match.end(), section_match.group(1)))
+    community_start = -1
+    community_end = -1
+    if community_match_spans:
+        community_start, community_end, community = sorted(
+            community_match_spans,
+            key=lambda item: (item[0], -len(item[2])),
+        )[0]
 
-    building_match = re.search(r"([A-Za-z零一二三四五六七八九十两\d]+(?:号楼|栋|幢|座|楼))", remainder)
+    road = ""
+    road_end = -1
+    road_suffix_pattern = "|".join(re.escape(suffix) for suffix in ROAD_LOCALITY_SUFFIXES if suffix != "弄")
+    named_road_source = remainder[:community_start] if community_start >= 0 else remainder
+    named_road_match = re.search(
+        rf"([A-Za-z0-9\u4e00-\u9fa5]{{1,24}}(?:{road_suffix_pattern})(?:[零一二三四五六七八九十两\d]+(?:号|弄))?)",
+        named_road_source,
+    )
+    if named_road_match:
+        road = named_road_match.group(1)
+        road_end = named_road_match.end()
+    else:
+        lane_source = remainder[community_end:] if community_end >= 0 else remainder
+        lane_match = re.match(r"([零一二三四五六七八九十两\d]+弄)", lane_source)
+        if not lane_match:
+            lane_match = re.search(r"([零一二三四五六七八九十两\d]+弄)", lane_source)
+        if lane_match:
+            road = lane_match.group(1)
+            lane_offset = community_end if community_end >= 0 else 0
+            road_end = lane_offset + lane_match.end()
+
+    building_suffix_pattern = "|".join(re.escape(suffix) for suffix in BUILDING_SUFFIXES)
+    building_match = re.search(
+        rf"([A-Za-z零一二三四五六七八九十两\d]+(?:{building_suffix_pattern}))",
+        remainder,
+    )
     unit_match = re.search(r"(\d+单元)", remainder)
     floor_match = re.search(r"([零一二三四五六七八九十两\d]+层)", remainder)
     room_match = re.search(r"(\d{2,4}室)", remainder)
@@ -305,6 +332,16 @@ def extract_address_components(text: str) -> AddressComponents:
         trailing_room = re.search(r"(?:(?:栋|幢|座|楼|单元|层)[^\d]*)?(\d{2,4})$", remainder)
         if trailing_room:
             room = f"{trailing_room.group(1)}室"
+
+    if not community and building_match:
+        locality_start = max(road_end, 0)
+        fallback_community = remainder[locality_start : building_match.start()].strip("，, ")
+        if (
+            re.fullmatch(r"[A-Za-z0-9\u4e00-\u9fa5]{2,20}", fallback_community)
+            and not re.fullmatch(r"[零一二三四五六七八九十两\d]+(?:号|弄)?", fallback_community)
+            and not re.search(r"(?:路|街|大道|巷|弄|胡同|单元|层|室)$", fallback_community)
+        ):
+            community = fallback_community
 
     return AddressComponents(
         province=province,

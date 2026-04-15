@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import re
+import unicodedata
 from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
@@ -10,6 +12,7 @@ from multi_agent_data_synthesis.schemas import (
     DialogueSample,
     DialogueTurn,
     Scenario,
+    SUPPLEMENTARY_COLLECTED_SLOTS,
     SERVICE_SPEAKER,
     USER_SPEAKER,
     display_speaker,
@@ -26,6 +29,25 @@ MANUAL_TEST_EXIT_COMMANDS = {"/quit", "/exit"}
 MANUAL_TEST_SHOW_SLOTS_COMMAND = "/slots"
 MANUAL_TEST_SHOW_STATE_COMMAND = "/state"
 MANUAL_TEST_HELP_COMMAND = "/help"
+
+
+def _sanitize_manual_user_text(raw: str) -> str:
+    normalized = unicodedata.normalize("NFKC", str(raw or ""))
+    cleaned_chars: list[str] = []
+    for char in normalized:
+        category = unicodedata.category(char)
+        if category in {"Cc", "Cf", "Cs", "Co", "Cn"}:
+            if char in {"\t", "\n", "\r"}:
+                cleaned_chars.append(" ")
+            continue
+        cleaned_chars.append(char)
+    cleaned = "".join(cleaned_chars)
+    cleaned = re.sub(r"\s+", " ", cleaned)
+    return cleaned.strip()
+
+
+def _manual_command_token(text: str) -> str:
+    return re.sub(r"\s+", "", _sanitize_manual_user_text(text)).lower()
 
 
 def load_manual_test_scenario(
@@ -59,6 +81,8 @@ def run_manual_test_session(
     max_rounds: int | None = None,
     ok_prefix_probability: float = 0.7,
     policy: ServiceDialoguePolicy | None = None,
+    show_address_state: bool = False,
+    show_final_slots: bool = False,
     input_func: InputFunc = input,
     print_func: PrintFunc = print,
 ) -> dict[str, Any]:
@@ -67,10 +91,11 @@ def run_manual_test_session(
     transcript: list[DialogueTurn] = []
     required_slots = effective_required_slots(scenario)
     collected_slots = {slot: "" for slot in required_slots}
-    collected_slots.setdefault("phone_contactable", "")
-    collected_slots.setdefault("phone_contact_owner", "")
-    collected_slots.setdefault("phone_collection_attempts", "")
-    collected_slots.setdefault("product_arrived", "")
+    for slot in SUPPLEMENTARY_COLLECTED_SLOTS:
+        collected_slots.setdefault(slot, "")
+    collected_slots["product_routing_result"] = str(
+        scenario.hidden_context.get("product_routing_result", "")
+    ).strip()
     rounds_limit = max_rounds or scenario.max_turns or 20
     trace: list[dict[str, Any]] = []
     status = "incomplete"
@@ -95,25 +120,26 @@ def run_manual_test_session(
                 user_text = None
                 break
 
-            normalized = str(raw or "").strip().replace(" ", "")
-            if not normalized:
+            sanitized = _sanitize_manual_user_text(raw)
+            command_token = _manual_command_token(raw)
+            if not sanitized:
                 print_func("输入不能为空。输入 /help 查看可用命令。")
                 continue
-            if normalized in MANUAL_TEST_EXIT_COMMANDS:
+            if command_token in MANUAL_TEST_EXIT_COMMANDS:
                 status = "aborted"
                 aborted_reason = "user_exit"
                 user_text = None
                 break
-            if normalized == MANUAL_TEST_SHOW_SLOTS_COMMAND:
+            if command_token == MANUAL_TEST_SHOW_SLOTS_COMMAND:
                 print_func(json.dumps(collected_slots, ensure_ascii=False, indent=2))
                 continue
-            if normalized == MANUAL_TEST_SHOW_STATE_COMMAND:
+            if command_token == MANUAL_TEST_SHOW_STATE_COMMAND:
                 print_func(json.dumps(asdict(runtime_state), ensure_ascii=False, indent=2))
                 continue
-            if normalized == MANUAL_TEST_HELP_COMMAND:
+            if command_token == MANUAL_TEST_HELP_COMMAND:
                 print_func("可用命令: /help, /slots, /state, /quit")
                 continue
-            user_text = normalized
+            user_text = sanitized
 
         if status == "aborted":
             break
@@ -141,7 +167,7 @@ def run_manual_test_session(
         _merge_slots(
             collected_slots,
             service_result.slot_updates,
-            ["phone_contactable", "phone_contact_owner", "phone_collection_attempts", "product_arrived"],
+            list(SUPPLEMENTARY_COLLECTED_SLOTS),
         )
 
         transcript.append(
@@ -154,14 +180,27 @@ def run_manual_test_session(
         used_model_intent_inference = bool(
             getattr(resolved_policy, "last_used_model_intent_inference", False)
         )
-        service_round_label = f"{round_index}{'*' if used_model_intent_inference else ''}"
+        user_round_label = f"{round_index}{'*' if used_model_intent_inference else ''}"
+        service_round_label = str(round_index)
+        if used_model_intent_inference:
+            transcript[-2].model_intent_inference_used = True
+            print_func(f"[{user_round_label}] {display_speaker(USER_SPEAKER)}: {user_text}")
         print_func(f"[{service_round_label}] {display_speaker(SERVICE_SPEAKER)}: {service_result.reply}")
+        if show_address_state and _should_print_address_state(
+            runtime_state=runtime_state,
+            service_reply=service_result.reply,
+            slot_updates=service_result.slot_updates,
+        ):
+            print_func(
+                f"地址状态: {json.dumps(_address_state_snapshot(scenario, runtime_state, collected_slots), ensure_ascii=False)}"
+            )
 
         trace.append(
             {
                 "round_index": round_index,
                 "user_text": user_text,
                 "service_reply": service_result.reply,
+                "user_round_label": user_round_label,
                 "service_round_label": service_round_label,
                 "used_model_intent_inference": used_model_intent_inference,
                 "slot_updates": dict(service_result.slot_updates),
@@ -211,6 +250,10 @@ def run_manual_test_session(
         "service_trace": trace,
         "validation": sample.validation,
     }
+    if show_final_slots:
+        print_func(f"最终槽位: {json.dumps(collected_slots, ensure_ascii=False, indent=2)}")
+        if missing_slots:
+            print_func(f"仍缺失槽位: {json.dumps(missing_slots, ensure_ascii=False)}")
     if output_path is not None:
         output_path.parent.mkdir(parents=True, exist_ok=True)
         output_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -250,3 +293,47 @@ def _print_session_header(
     else:
         print_func("输出文件: 未启用")
     print_func("可用命令: /help, /slots, /state, /quit")
+
+
+def _address_state_snapshot(
+    scenario: Scenario,
+    runtime_state: ServiceRuntimeState,
+    collected_slots: dict[str, str],
+) -> dict[str, Any]:
+    current_candidate = (
+        runtime_state.pending_address_confirmation
+        or runtime_state.partial_address_candidate
+        or collected_slots.get("address", "")
+    )
+    return {
+        "actual_address": scenario.customer.address,
+        "awaiting_full_address": runtime_state.awaiting_full_address,
+        "expected_address_confirmation": runtime_state.expected_address_confirmation,
+        "pending_address_confirmation": runtime_state.pending_address_confirmation,
+        "partial_address_candidate": runtime_state.partial_address_candidate,
+        "address_input_attempts": runtime_state.address_input_attempts,
+        "address_vague_retry_count": runtime_state.address_vague_retry_count,
+        "last_address_followup_prompt": runtime_state.last_address_followup_prompt,
+        "collected_address": collected_slots.get("address", ""),
+        "missing_required_precision": ServiceDialoguePolicy._missing_required_address_precision(
+            current_candidate,
+            scenario.customer.address,
+        ) if current_candidate else [],
+    }
+
+
+def _should_print_address_state(
+    *,
+    runtime_state: ServiceRuntimeState,
+    service_reply: str,
+    slot_updates: dict[str, str],
+) -> bool:
+    return bool(
+        runtime_state.awaiting_full_address
+        or runtime_state.expected_address_confirmation
+        or runtime_state.pending_address_confirmation
+        or runtime_state.partial_address_candidate
+        or slot_updates.get("address", "").strip()
+        or ServiceDialoguePolicy.is_address_collection_prompt(service_reply)
+        or ServiceDialoguePolicy.is_address_confirmation_prompt(service_reply)
+    )

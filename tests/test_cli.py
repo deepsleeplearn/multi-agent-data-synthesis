@@ -9,8 +9,10 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 
 from multi_agent_data_synthesis.cli import (
+    _configure_manual_test_known_address,
     _hydrate_manual_test_scenario_locally,
     _manual_test_requires_generated_hidden_settings,
+    _resolve_interactive_max_rounds,
     _validate_output_flags,
     build_parser,
     run_generate_async,
@@ -51,6 +53,65 @@ class CliTests(unittest.TestCase):
 
         self.assertTrue(args.show_dialogue)
         self.assertTrue(args.show_persona)
+
+    def test_interactive_parser_accepts_show_address_state_flag(self):
+        parser = build_parser()
+
+        args = parser.parse_args(["interactive-test", "--show-address-state"])
+
+        self.assertTrue(args.show_address_state)
+
+    def test_interactive_parser_defaults_address_state_to_hidden(self):
+        parser = build_parser()
+
+        args = parser.parse_args(["interactive-test"])
+
+        self.assertFalse(args.show_address_state)
+        self.assertFalse(args.hide_address_state)
+
+    def test_interactive_parser_accepts_hide_address_state_flag(self):
+        parser = build_parser()
+
+        args = parser.parse_args(["interactive-test", "--hide-address-state"])
+
+        self.assertTrue(args.hide_address_state)
+
+    def test_interactive_parser_accepts_show_final_slots_flag(self):
+        parser = build_parser()
+
+        args = parser.parse_args(["interactive-test", "--show-final-slots"])
+
+        self.assertTrue(args.show_final_slots)
+
+    def test_resolve_interactive_max_rounds_prefers_cli_arg(self):
+        self.assertEqual(
+            _resolve_interactive_max_rounds(
+                args_max_rounds=40,
+                scenario_max_turns=20,
+                config_max_rounds=32,
+            ),
+            40,
+        )
+
+    def test_resolve_interactive_max_rounds_falls_back_to_scenario(self):
+        self.assertEqual(
+            _resolve_interactive_max_rounds(
+                args_max_rounds=None,
+                scenario_max_turns=20,
+                config_max_rounds=32,
+            ),
+            20,
+        )
+
+    def test_resolve_interactive_max_rounds_uses_config_when_scenario_missing(self):
+        self.assertEqual(
+            _resolve_interactive_max_rounds(
+                args_max_rounds=None,
+                scenario_max_turns=0,
+                config_max_rounds=32,
+            ),
+            32,
+        )
 
     def test_dialogue_header_can_include_persona_profile(self):
         buffer = io.StringIO()
@@ -188,12 +249,50 @@ class CliTests(unittest.TestCase):
 
         hydrated = _hydrate_manual_test_scenario_locally(scenario)
 
-        self.assertNotEqual(hydrated.customer.full_name, "未知")
-        self.assertNotEqual(hydrated.customer.phone, "未知")
-        self.assertNotEqual(hydrated.customer.address, "未知")
-        self.assertNotEqual(hydrated.request.issue, "未知")
+        self.assertEqual(hydrated.customer.full_name, "未知")
+        self.assertEqual(hydrated.customer.phone, "未知")
+        self.assertEqual(hydrated.customer.address, "未知")
+        self.assertEqual(hydrated.request.issue, "未知")
         self.assertTrue(hydrated.hidden_context["current_call_contactable"])
+        self.assertEqual(hydrated.hidden_context["contact_phone_owner"], "本人当前来电")
+        self.assertTrue(str(hydrated.hidden_context["contact_phone"]).startswith("139"))
         self.assertFalse(hydrated.hidden_context["service_known_address"])
+        self.assertEqual(hydrated.hidden_context["address_input_rounds"], [])
+
+    def test_configure_manual_test_known_address_enables_direct_confirmation(self):
+        scenario = Scenario.from_dict(build_scenario_payload("manual_known_address_case"))
+        printed: list[str] = []
+
+        configured = _configure_manual_test_known_address(
+            scenario,
+            input_func=lambda _: " 上海市青浦区徐泾镇西郊一区1785弄40号楼301室 ",
+            print_func=printed.append,
+        )
+
+        self.assertEqual(configured.customer.address, "上海市青浦区徐泾镇西郊一区1785弄40号楼301室")
+        self.assertTrue(configured.hidden_context["service_known_address"])
+        self.assertTrue(configured.hidden_context["service_known_address_matches_actual"])
+        self.assertEqual(
+            configured.hidden_context["service_known_address_value"],
+            "上海市青浦区徐泾镇西郊一区1785弄40号楼301室",
+        )
+        self.assertIn("已设置已知地址", printed[0])
+
+    def test_configure_manual_test_known_address_blank_keeps_inquiry_flow(self):
+        scenario = Scenario.from_dict(build_scenario_payload("manual_unknown_address_case"))
+        printed: list[str] = []
+
+        configured = _configure_manual_test_known_address(
+            scenario,
+            input_func=lambda _: "   ",
+            print_func=printed.append,
+        )
+
+        self.assertEqual(configured.customer.address, scenario.customer.address)
+        self.assertFalse(configured.hidden_context["service_known_address"])
+        self.assertEqual(configured.hidden_context["service_known_address_value"], "")
+        self.assertFalse(configured.hidden_context["service_known_address_matches_actual"])
+        self.assertIn("未设置已知地址", printed[0])
 
 
 if __name__ == "__main__":

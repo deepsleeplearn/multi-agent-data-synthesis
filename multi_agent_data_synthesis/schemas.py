@@ -30,7 +30,16 @@ SLOT_DESCRIPTIONS = {
     "phone_contact_owner": "登记号码归属，如本人、爱人、朋友等",
     "phone_collection_attempts": "拨号盘录入联系方式的尝试次数",
     "product_arrived": "安装场景下产品是否已到货",
+    "product_routing_result": "产品归属识别结果，如家用、楼宇或转人工",
 }
+
+SUPPLEMENTARY_COLLECTED_SLOTS = (
+    "phone_contactable",
+    "phone_contact_owner",
+    "phone_collection_attempts",
+    "product_arrived",
+    "product_routing_result",
+)
 
 
 def normalize_speaker(speaker: str) -> str:
@@ -143,7 +152,7 @@ class DialogueTurn:
 
     def to_display_dict(self) -> dict[str, Any]:
         round_label = str(self.round_index)
-        if normalize_speaker(self.speaker) == SERVICE_SPEAKER and self.model_intent_inference_used:
+        if self.model_intent_inference_used:
             round_label = f"{round_label}*"
         return {
             "speaker": display_speaker(self.speaker),

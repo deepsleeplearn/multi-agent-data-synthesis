@@ -17,6 +17,7 @@ from multi_agent_data_synthesis.hidden_settings_tool import (
     COHERENT_REGION_OPTIONS,
     HiddenSettingsRepository,
     HiddenSettingsTool,
+    SURNAME_OPTIONS,
     UserGenerationPlan,
 )
 from multi_agent_data_synthesis.prompts import build_user_agent_messages, next_address_input_value
@@ -955,6 +956,64 @@ class UserPromptTests(unittest.TestCase):
         self.assertIn("全国地址地区池示例（仅示例，要求覆盖全国随机采样）", messages[1]["content"])
         self.assertIn("地址地区必须在全国范围内随机取样", messages[1]["content"])
         self.assertIn("不要反复集中在“张、王、李、赵”和“广深杭苏”等少数高频选项", messages[0]["content"])
+
+    def test_surname_options_are_limited_to_common_top_50_surnames(self):
+        self.assertEqual(len(SURNAME_OPTIONS), 50)
+        self.assertEqual(
+            SURNAME_OPTIONS,
+            (
+                "王",
+                "李",
+                "张",
+                "刘",
+                "陈",
+                "杨",
+                "黄",
+                "赵",
+                "吴",
+                "周",
+                "徐",
+                "孙",
+                "马",
+                "朱",
+                "胡",
+                "郭",
+                "何",
+                "高",
+                "林",
+                "罗",
+                "郑",
+                "梁",
+                "谢",
+                "宋",
+                "唐",
+                "许",
+                "韩",
+                "冯",
+                "邓",
+                "曹",
+                "彭",
+                "曾",
+                "肖",
+                "田",
+                "董",
+                "袁",
+                "潘",
+                "于",
+                "蒋",
+                "蔡",
+                "余",
+                "杜",
+                "叶",
+                "程",
+                "苏",
+                "魏",
+                "吕",
+                "丁",
+                "任",
+                "沈",
+            ),
+        )
 
     def test_user_prompt_adds_hard_guardrail_after_repeated_surname_prompt(self):
         scenario = build_base_scenario()

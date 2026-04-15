@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import argparse
 import json
-import random
 from dataclasses import replace
 from pathlib import Path
 
@@ -13,6 +12,7 @@ from multi_agent_data_synthesis.hidden_settings_tool import HiddenSettingsTool
 from multi_agent_data_synthesis.llm import OpenAIChatClient
 from multi_agent_data_synthesis.agents import ServiceAgent
 from multi_agent_data_synthesis.manual_test import (
+    _sanitize_manual_user_text,
     default_manual_test_output_path,
     load_manual_test_scenario,
     run_manual_test_session,
@@ -20,7 +20,6 @@ from multi_agent_data_synthesis.manual_test import (
 from multi_agent_data_synthesis.orchestrator import DialogueOrchestrator
 from multi_agent_data_synthesis.product_routing import ensure_product_routing_plan
 from multi_agent_data_synthesis.scenario_factory import ScenarioFactory
-from multi_agent_data_synthesis.schemas import CustomerProfile, ServiceRequest
 
 
 DEFAULT_SCENARIO_FILE = Path("data/seed_scenarios.json")
@@ -160,6 +159,21 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="显式启用文件输出；默认只在终端打印结果，不写入 outputs/ 或 data/",
     )
+    interactive_parser.add_argument(
+        "--show-address-state",
+        action="store_true",
+        help="手工测试时在地址采集/确认环节额外打印地址运行状态",
+    )
+    interactive_parser.add_argument(
+        "--hide-address-state",
+        action="store_true",
+        help="手工测试时关闭地址采集/确认环节的地址运行状态打印",
+    )
+    interactive_parser.add_argument(
+        "--show-final-slots",
+        action="store_true",
+        help="手工测试结束后在终端打印最终收集到的槽位信息",
+    )
 
     return parser
 
@@ -248,6 +262,7 @@ def run_interactive_test(args: argparse.Namespace) -> None:
         scenario = tool.generate_for_scenario(scenario)
     elif _manual_test_requires_generated_hidden_settings(scenario):
         scenario = _hydrate_manual_test_scenario_locally(scenario)
+    scenario = _configure_manual_test_known_address(scenario)
     scenario.hidden_context["interactive_test_freeform"] = True
     ensure_product_routing_plan(
         scenario.hidden_context,
@@ -267,12 +282,19 @@ def run_interactive_test(args: argparse.Namespace) -> None:
     output_path = None
     if args.write_output:
         output_path = args.output or default_manual_test_output_path(scenario.scenario_id)
+    resolved_max_rounds = _resolve_interactive_max_rounds(
+        args_max_rounds=args.max_rounds,
+        scenario_max_turns=scenario.max_turns,
+        config_max_rounds=config.max_rounds,
+    )
     run_manual_test_session(
         scenario,
         output_path=output_path,
-        max_rounds=args.max_rounds,
+        max_rounds=resolved_max_rounds,
         ok_prefix_probability=config.service_ok_prefix_probability,
         policy=service_agent.policy,
+        show_address_state=bool(args.show_address_state) and not bool(args.hide_address_state),
+        show_final_slots=bool(args.show_final_slots),
     )
 
 
@@ -294,6 +316,19 @@ def _validate_output_flags(parser: argparse.ArgumentParser, args: argparse.Names
             parser.error("--output 需要配合 --write-output 使用。")
     elif args.command == "interactive-test" and args.output is not None:
         parser.error("--output 需要配合 --write-output 使用。")
+
+
+def _resolve_interactive_max_rounds(
+    *,
+    args_max_rounds: int | None,
+    scenario_max_turns: int | None,
+    config_max_rounds: int,
+) -> int:
+    if args_max_rounds:
+        return int(args_max_rounds)
+    if scenario_max_turns:
+        return int(scenario_max_turns)
+    return int(config_max_rounds)
 
 
 def _manual_test_requires_generated_hidden_settings(scenario) -> bool:
@@ -324,90 +359,90 @@ def _manual_test_requires_generated_hidden_settings(scenario) -> bool:
     return False
 
 
-def _hydrate_manual_test_scenario_locally(scenario):
-    seed = sum((index + 1) * ord(char) for index, char in enumerate(scenario.scenario_id))
-    rng = random.Random(seed)
-
-    customer_options = (
-        {
-            "full_name": "张丽",
-            "surname": "张",
-            "phone": "13800138001",
-            "address": "上海市浦东新区锦绣路1888弄6号1202室",
-            "persona": "上班族，表达比较直接，倾向按客服流程一步步确认。",
-            "speech_style": "说话简短清楚，偶尔带一点口头语。",
-        },
-        {
-            "full_name": "王强",
-            "surname": "王",
-            "phone": "13900139002",
-            "address": "杭州市余杭区五常大道666号3幢1单元802室",
-            "persona": "家用用户，希望尽快把问题登记清楚，不喜欢反复确认。",
-            "speech_style": "说话偏口语化，确认信息时比较利索。",
-        },
-        {
-            "full_name": "郭建国",
-            "surname": "郭",
-            "phone": "13773341553",
-            "address": "江苏省扬州市宝应县安宜镇宝应碧桂园3幢5层502室",
-            "persona": "普通家庭用户，比较配合客服，但不希望流程拖太久。",
-            "speech_style": "表达自然，必要时会补半句说明。",
-        },
+def _configure_manual_test_known_address(
+    scenario,
+    *,
+    input_func=input,
+    print_func=print,
+):
+    raw = input_func(
+        "如需让客服直接核对已知地址，请输入完整地址；直接回车则按未知地址走询问流程: "
     )
-    request_type = scenario.request.request_type
-    customer_seed = customer_options[rng.randrange(len(customer_options))]
+    known_address = _sanitize_manual_user_text(raw)
+    hidden_context = dict(scenario.hidden_context)
 
-    if request_type == "installation":
-        request_seed = {
-            "issue": "新买的空气能热水机已经送到家了，想约师傅上门安装。",
-            "desired_resolution": "先把安装工单登记好，等后续联系确认时间。",
-            "availability": "这周六上午或者周日下午都可以。",
-            "product_arrived": "yes",
-        }
-    else:
-        request_seed = {
-            "issue": "最近空气能热水器加热比较慢，洗澡时水温还有点忽冷忽热，想报修。",
-            "desired_resolution": "尽快安排售后上门检查机器问题。",
-            "availability": "工作日晚上七点后或者周末白天都可以。",
-            "product_arrived": "",
-        }
+    if not known_address:
+        hidden_context.update(
+            {
+                "service_known_address": False,
+                "service_known_address_value": "",
+                "service_known_address_matches_actual": False,
+            }
+        )
+        print_func("未设置已知地址，客服将按询问流程采集地址。")
+        return scenario.with_generated_hidden_settings(
+            customer=scenario.customer,
+            request=scenario.request,
+            hidden_context=hidden_context,
+        )
 
+    hidden_context.update(
+        {
+            "service_known_address": True,
+            "service_known_address_value": known_address,
+            "service_known_address_matches_actual": True,
+            "address_input_round_1": known_address,
+            "address_input_round_2": known_address,
+            "address_input_round_3": known_address,
+            "address_input_round_4": known_address,
+            "address_input_rounds": [known_address],
+        }
+    )
+    print_func(f"已设置已知地址，客服将优先核对: {known_address}")
+    return scenario.with_generated_hidden_settings(
+        customer=replace(scenario.customer, address=known_address),
+        request=scenario.request,
+        hidden_context=hidden_context,
+    )
+
+
+def _hydrate_manual_test_scenario_locally(scenario):
+    mock_contact_phone = _mock_manual_contact_phone(scenario.scenario_id)
     hidden_context = dict(scenario.hidden_context)
     hidden_context.update(
         {
             "current_call_contactable": True,
             "contact_phone_owner": "本人当前来电",
             "contact_phone_owner_spoken_label": "我这个号码",
-            "contact_phone": customer_seed["phone"],
+            "contact_phone": mock_contact_phone,
             "phone_input_attempts_required": 0,
-            "phone_input_round_1": f"{customer_seed['phone']}#",
-            "phone_input_round_2": f"{customer_seed['phone']}#",
-            "phone_input_round_3": f"{customer_seed['phone']}#",
+            "phone_input_round_1": "",
+            "phone_input_round_2": "",
+            "phone_input_round_3": "",
             "service_known_address": False,
             "service_known_address_value": "",
             "service_known_address_matches_actual": False,
-            "address_input_round_1": customer_seed["address"],
-            "address_input_round_2": customer_seed["address"],
-            "address_input_round_3": customer_seed["address"],
-            "address_input_round_4": customer_seed["address"],
-            "address_input_rounds": [customer_seed["address"]],
-            "gender": hidden_context.get("gender", "男"),
+            "address_input_round_1": "",
+            "address_input_round_2": "",
+            "address_input_round_3": "",
+            "address_input_round_4": "",
+            "address_input_rounds": [],
+            "gender": hidden_context.get("gender", ""),
             "second_round_reply_strategy": hidden_context.get("second_round_reply_strategy", "confirm_only"),
         }
     )
-    if request_seed["product_arrived"]:
-        hidden_context["product_arrived"] = request_seed["product_arrived"]
 
     return scenario.with_generated_hidden_settings(
-        customer=CustomerProfile(**customer_seed),
-        request=ServiceRequest(
-            request_type=request_type,
-            issue=request_seed["issue"],
-            desired_resolution=request_seed["desired_resolution"],
-            availability=request_seed["availability"],
-        ),
+        customer=scenario.customer,
+        request=scenario.request,
         hidden_context=hidden_context,
     )
+
+
+def _mock_manual_contact_phone(seed_text: str) -> str:
+    checksum = sum((index + 1) * ord(char) for index, char in enumerate(str(seed_text or "")))
+    suffix = str(checksum % 100000000).zfill(8)
+    return f"139{suffix}"
 
 
 def main() -> None:
