@@ -7,7 +7,7 @@ from dataclasses import replace
 from pathlib import Path
 
 from multi_agent_data_synthesis.config import load_config
-from multi_agent_data_synthesis.exporter import write_json, write_jsonl
+from multi_agent_data_synthesis.exporter import write_json, write_jsonl, write_sqlite
 from multi_agent_data_synthesis.hidden_settings_tool import HiddenSettingsTool
 from multi_agent_data_synthesis.llm import OpenAIChatClient
 from multi_agent_data_synthesis.agents import ServiceAgent
@@ -26,6 +26,7 @@ DEFAULT_SCENARIO_FILE = Path("data/seed_scenarios.json")
 DEFAULT_JSONL_OUTPUT = Path("outputs/dialogues.jsonl")
 DEFAULT_JSON_OUTPUT = Path("outputs/dialogues.json")
 DEFAULT_HIDDEN_SETTINGS_OUTPUT = Path("outputs/generated_hidden_scenarios.json")
+DEFAULT_SQLITE_OUTPUT = Path("outputs/generated_dialogues.sqlite3")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -82,6 +83,18 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=None,
         help="异步并发生成的任务数，默认使用配置中的 MAX_CONCURRENCY",
+    )
+    generate_parser.add_argument(
+        "--persist-to-db",
+        "-p",
+        action="store_true",
+        help="将生成的对话持久化到 SQLite 数据库（需配合 --write-output 使用）",
+    )
+    generate_parser.add_argument(
+        "--db-output",
+        type=Path,
+        default=DEFAULT_SQLITE_OUTPUT,
+        help=f"SQLite 输出路径，默认 {DEFAULT_SQLITE_OUTPUT}",
     )
 
     hidden_parser = subparsers.add_parser("generate-hidden-settings", help="仅生成隐藏设定")
@@ -202,15 +215,25 @@ async def run_generate_async(args: argparse.Namespace) -> None:
     if args.write_output:
         write_jsonl(samples, args.jsonl_output)
         write_json(samples, args.json_output)
+        if args.persist_to_db:
+            written = write_sqlite(samples, args.db_output)
 
     completed = sum(1 for sample in samples if sample.status == "completed")
+    incomplete = sum(1 for sample in samples if sample.status == "incomplete")
+    transferred = sum(1 for sample in samples if sample.status == "transferred")
     print(f"Generated {len(samples)} dialogues.")
-    print(f"Completed dialogues: {completed}")
+    print(f"  completed:   {completed}")
+    print(f"  incomplete:  {incomplete}")
+    print(f"  transferred: {transferred}")
     if args.write_output:
         print(f"JSONL output: {args.jsonl_output}")
-        print(f"JSON output: {args.json_output}")
+        print(f"JSON output:  {args.json_output}")
+        if args.persist_to_db:
+            print(f"SQLite output: {args.db_output} ({written} records written)")
     else:
         print("File output disabled. Use --write-output to persist JSONL/JSON files.")
+        if args.persist_to_db:
+            print("Note: --persist-to-db has no effect without --write-output.")
 
 
 def run_generate_hidden_settings(args: argparse.Namespace) -> None:
@@ -311,6 +334,8 @@ def _validate_output_flags(parser: argparse.ArgumentParser, args: argparse.Names
     if args.command == "generate":
         if args.jsonl_output != DEFAULT_JSONL_OUTPUT or args.json_output != DEFAULT_JSON_OUTPUT:
             parser.error("--jsonl-output/--json-output 需要配合 --write-output 使用。")
+        if args.db_output != DEFAULT_SQLITE_OUTPUT:
+            parser.error("--db-output 需要配合 --write-output 使用。")
     elif args.command == "generate-hidden-settings":
         if args.output != DEFAULT_HIDDEN_SETTINGS_OUTPUT:
             parser.error("--output 需要配合 --write-output 使用。")
