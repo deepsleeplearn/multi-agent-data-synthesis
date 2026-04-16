@@ -383,6 +383,17 @@ class UserAgent:
 
 
 class ServiceAgent:
+    SURNAME_SPLIT_VARIANTS = (
+        ("耳东", "东耳"),
+        ("弓长", "长弓"),
+        ("木子", "子木"),
+        ("关耳", "耳关"),
+        ("言午", "午言"),
+        ("立早", "早立"),
+        ("古月", "月古"),
+        ("双木", "木双"),
+    )
+
     def __init__(
         self,
         client: OpenAIChatClient,
@@ -400,6 +411,7 @@ class ServiceAgent:
         self.policy = ServiceDialoguePolicy(
             ok_prefix_probability=ok_prefix_probability,
             address_inference_callback=self._infer_address_candidate_with_model,
+            surname_inference_callback=self._infer_surname_with_model,
             contact_intent_inference_callback=self._infer_contactable_intent_with_model,
             confirmation_intent_inference_callback=self._infer_confirmation_intent_with_model,
             opening_intent_inference_callback=self._infer_opening_intent_with_model,
@@ -407,6 +419,15 @@ class ServiceAgent:
             product_routing_intent_inference_callback=self._infer_product_routing_intent_with_model,
             product_routing_enabled=product_routing_enabled,
         )
+
+    @classmethod
+    def _normalize_surname_model_input(cls, user_text: str) -> str:
+        normalized = str(user_text or "").strip()
+        if not normalized:
+            return ""
+        for canonical, variant in cls.SURNAME_SPLIT_VARIANTS:
+            normalized = normalized.replace(variant, canonical)
+        return normalized
 
     def _infer_address_candidate_with_model(
         self,
@@ -504,6 +525,45 @@ class ServiceAgent:
             temperature=0.0,
         )
         return {"intent": str(payload.get("intent", "")).strip()}
+
+    def _infer_surname_with_model(
+        self,
+        *,
+        user_text: str,
+        user_round_index: int = 0,
+    ) -> dict[str, Any]:
+        normalized_user_text = self._normalize_surname_model_input(user_text)
+        system_prompt = """你是家电客服对话里的姓氏识别助手。
+
+任务：
+1. 从用户当前这句回答里识别用户真正表达的姓氏。
+2. 支持常见口语、全名、自报姓氏，以及拆字式表达，例如“耳东陈”“东耳陈”“弓长张”“长弓张”“关耳郑”。
+3. 如果用户说的是全名，只返回姓，不返回名字。
+4. 如果用户没有明确回答姓氏，返回空字符串。
+5. surname 只返回 1 到 2 个汉字。
+6. 拆字式表达即使前后顺序颠倒，本质上还是同一个姓，例如“东耳郑”仍应识别为“郑”。
+
+输出 JSON：
+{
+  "surname": "识别出的姓氏，没有就返回空字符串"
+}
+"""
+        payload = self.client.complete_json(
+            model=self.model,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {
+                    "role": "user",
+                    "content": (
+                        f"[{user_round_index}]用户原话: {user_text}\n"
+                        f"归一化参考: {normalized_user_text or user_text}\n"
+                        "只返回 JSON。"
+                    ),
+                },
+            ],
+            temperature=0.0,
+        )
+        return {"surname": str(payload.get("surname", "")).strip()}
 
     def _infer_confirmation_intent_with_model(
         self,

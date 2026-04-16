@@ -325,13 +325,29 @@ def extract_address_components(text: str) -> AddressComponents:
     )
     unit_match = re.search(r"(\d+单元)", remainder)
     floor_match = re.search(r"([零一二三四五六七八九十两\d]+层)", remainder)
+    if not floor_match:
+        floor_match = re.search(r"([零一二三四五六七八九十两\d]+楼)(?=\d{2,4}(?:室)?$)", remainder)
     room_match = re.search(r"(\d{2,4}室)", remainder)
+    if not floor_match and room_match:
+        floor_match = re.search(r"([零一二三四五六七八九十两\d]+楼)$", remainder)
 
     room = room_match.group(1) if room_match else ""
     if not room:
         trailing_room = re.search(r"(?:(?:栋|幢|座|楼|单元|层)[^\d]*)?(\d{2,4})$", remainder)
         if trailing_room:
             room = f"{trailing_room.group(1)}室"
+
+    building = building_match.group(1) if building_match else ""
+    if (
+        building
+        and building.endswith("楼")
+        and floor_match
+        and floor_match.group(1) == building
+        and room_match
+        and building_match
+        and building_match.start() >= room_match.start()
+    ):
+        building = ""
 
     if not community and building_match:
         locality_start = max(road_end, 0)
@@ -343,6 +359,21 @@ def extract_address_components(text: str) -> AddressComponents:
         ):
             community = fallback_community
 
+    detail_starts = [
+        match.start()
+        for match in (building_match, unit_match, floor_match, room_match)
+        if match is not None
+    ]
+    if not road and detail_starts:
+        fallback_community = remainder[: min(detail_starts)].strip("，, ")
+        if (
+            re.fullmatch(r"[A-Za-z0-9\u4e00-\u9fa5]{2,20}", fallback_community)
+            and not re.fullmatch(r"[零一二三四五六七八九十两\d]+(?:号|弄)?", fallback_community)
+            and not re.search(r"(?:路|街|大道|巷|弄|胡同)", fallback_community)
+            and len(fallback_community) > len(community)
+        ):
+            community = fallback_community
+
     return AddressComponents(
         province=province,
         city=city,
@@ -350,7 +381,7 @@ def extract_address_components(text: str) -> AddressComponents:
         town=town,
         road=road,
         community=community,
-        building=building_match.group(1) if building_match else "",
+        building=building,
         unit=unit_match.group(1) if unit_match else "",
         floor=floor_match.group(1) if floor_match else "",
         room=room,

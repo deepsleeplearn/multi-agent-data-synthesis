@@ -126,6 +126,7 @@ class ServiceDialoguePolicy:
         ok_prefix_probability: float = 1.0,
         rng: random.Random | None = None,
         address_inference_callback: Callable[..., dict[str, Any] | None] | None = None,
+        surname_inference_callback: Callable[..., dict[str, Any] | None] | None = None,
         contact_intent_inference_callback: Callable[..., dict[str, Any] | None] | None = None,
         confirmation_intent_inference_callback: Callable[..., dict[str, Any] | None] | None = None,
         opening_intent_inference_callback: Callable[..., dict[str, Any] | None] | None = None,
@@ -136,6 +137,7 @@ class ServiceDialoguePolicy:
         self.ok_prefix_probability = max(0.0, min(1.0, ok_prefix_probability))
         self.rng = rng or random.Random()
         self.address_inference_callback = address_inference_callback
+        self.surname_inference_callback = surname_inference_callback
         self.contact_intent_inference_callback = contact_intent_inference_callback
         self.confirmation_intent_inference_callback = confirmation_intent_inference_callback
         self.opening_intent_inference_callback = opening_intent_inference_callback
@@ -276,6 +278,18 @@ class ServiceDialoguePolicy:
                 slot_updates=slot_updates,
                 runtime_state=runtime_state,
             )
+
+        implicit_routing_result = self._try_advance_product_routing_from_context(
+            scenario=scenario,
+            user_text=last_user_turn.text,
+            user_round_index=last_user_turn.round_index,
+            previous_service_signature=previous_service_signature,
+            collected_slots=merged_slots,
+            slot_updates=slot_updates,
+            runtime_state=runtime_state,
+        )
+        if implicit_routing_result is not None:
+            return implicit_routing_result
 
         next_slot = self._next_slot_to_request(merged_slots, required_slots)
         return self._transition_to_next_slot(
@@ -514,17 +528,30 @@ class ServiceDialoguePolicy:
             )
 
         if intent == "no":
-            denial_address = self._extract_address_candidate_from_denial(
-                user_text=user_text,
-                confirmation_address=confirmation_address,
-            )
-            if not denial_address:
+            if self.address_inference_callback is not None:
                 denial_address = self._infer_address_candidate_with_callback(
                     user_text=user_text,
                     confirmation_address=confirmation_address,
                     partial_address_candidate="",
                     last_address_followup_prompt="",
                 )
+                if not denial_address:
+                    denial_address = self._extract_address_candidate_from_denial(
+                        user_text=user_text,
+                        confirmation_address=confirmation_address,
+                    )
+            else:
+                denial_address = self._extract_address_candidate_from_denial(
+                    user_text=user_text,
+                    confirmation_address=confirmation_address,
+                )
+                if not denial_address:
+                    denial_address = self._infer_address_candidate_with_callback(
+                        user_text=user_text,
+                        confirmation_address=confirmation_address,
+                        partial_address_candidate="",
+                        last_address_followup_prompt="",
+                    )
             if denial_address:
                 runtime_state.awaiting_full_address = True
                 runtime_state.address_input_attempts = 1
@@ -620,24 +647,24 @@ class ServiceDialoguePolicy:
         runtime_state: ServiceRuntimeState,
         slot_updates: dict[str, str],
     ) -> ServicePolicyResult:
-        prepared_address = self._prepare_address_for_confirmation(user_text)
-        if not prepared_address:
-            prepared_address = self._infer_address_candidate_with_callback(
-                user_text=user_text,
-                confirmation_address=runtime_state.pending_address_confirmation,
-                partial_address_candidate=runtime_state.partial_address_candidate,
-                last_address_followup_prompt=runtime_state.last_address_followup_prompt,
-                dialogue_history=self._dialogue_history_text(transcript),
-            )
+        dialogue_history = self._dialogue_history_text(transcript)
+        model_prepared_address = self._infer_address_candidate_with_callback(
+            user_text=user_text,
+            confirmation_address=runtime_state.pending_address_confirmation,
+            partial_address_candidate=runtime_state.partial_address_candidate,
+            last_address_followup_prompt=runtime_state.last_address_followup_prompt,
+            dialogue_history=dialogue_history,
+        )
+        prepared_address = model_prepared_address or self._prepare_address_for_confirmation(user_text)
         previous_candidate = runtime_state.partial_address_candidate
         inferred_candidate = ""
         if self._address_user_accepts_current_candidate(user_text):
-            inferred_candidate = self._infer_address_candidate_with_callback(
+            inferred_candidate = model_prepared_address or self._infer_address_candidate_with_callback(
                 user_text=user_text,
                 confirmation_address=runtime_state.pending_address_confirmation,
                 partial_address_candidate=runtime_state.partial_address_candidate,
                 last_address_followup_prompt=runtime_state.last_address_followup_prompt,
-                dialogue_history=self._dialogue_history_text(transcript),
+                dialogue_history=dialogue_history,
             )
             accepted_candidate = previous_candidate
             if inferred_candidate:
@@ -676,12 +703,12 @@ class ServiceDialoguePolicy:
                 )
         elif self._address_user_signals_reask_frustration(user_text):
             frustration_candidate = previous_candidate
-            inferred_candidate = self._infer_address_candidate_with_callback(
+            inferred_candidate = model_prepared_address or self._infer_address_candidate_with_callback(
                 user_text=user_text,
                 confirmation_address=runtime_state.pending_address_confirmation,
                 partial_address_candidate=runtime_state.partial_address_candidate,
                 last_address_followup_prompt=runtime_state.last_address_followup_prompt,
-                dialogue_history=self._dialogue_history_text(transcript),
+                dialogue_history=dialogue_history,
             )
             if inferred_candidate:
                 frustration_candidate = self._merge_address_candidate(
@@ -750,12 +777,12 @@ class ServiceDialoguePolicy:
             actual_address=scenario.customer.address,
         )
         if not progress_made or not current_is_complete or needs_model_backfill:
-            inferred_address = self._infer_address_candidate_with_callback(
+            inferred_address = model_prepared_address or self._infer_address_candidate_with_callback(
                 user_text=user_text,
                 confirmation_address=runtime_state.pending_address_confirmation,
                 partial_address_candidate=previous_candidate,
                 last_address_followup_prompt=runtime_state.last_address_followup_prompt,
-                dialogue_history=self._dialogue_history_text(transcript),
+                dialogue_history=dialogue_history,
             )
             if inferred_address:
                 inferred_combined = self._merge_address_candidate(
@@ -894,47 +921,12 @@ class ServiceDialoguePolicy:
                 )
 
         if observed_answer_key:
-            runtime_state.product_routing_observed_trace.append(observed_answer_key)
-            next_steps, result = next_product_routing_steps_from_observed_trace(
-                runtime_state.product_routing_observed_trace,
-                model_hint=scenario.product.model,
-            )
-            self._update_product_routing_plan(
-                scenario=scenario,
-                steps=next_steps,
-                trace=runtime_state.product_routing_observed_trace,
-                result=result,
-            )
-            runtime_state.product_routing_step_index = 0
-            if next_steps:
-                return self._start_product_routing_step(
-                    scenario=scenario,
-                    runtime_state=runtime_state,
-                    slot_updates=slot_updates,
-                )
-
-            runtime_state.product_routing_completed = True
-            slot_updates = self._with_product_routing_result_slot(
-                scenario=scenario,
-                slot_updates=slot_updates,
-                result=result,
-            )
-            if slot_updates.get("product_routing_result", "").strip() == ROUTING_RESULT_HUMAN:
-                return self._handoff_to_human(
-                    scenario=scenario,
-                    runtime_state=runtime_state,
-                    slot_updates=slot_updates,
-                    reason="product_routing_human",
-                )
-            merged_slots = dict(collected_slots)
-            merged_slots.update(slot_updates)
-            next_slot = self._next_slot_to_request(merged_slots, effective_required_slots(scenario))
-            return self._transition_to_next_slot(
+            return self._advance_product_routing_with_answer(
                 scenario=scenario,
                 collected_slots=collected_slots,
                 slot_updates=slot_updates,
                 runtime_state=runtime_state,
-                next_slot=next_slot,
+                observed_answer_key=observed_answer_key,
             )
 
         runtime_state.product_routing_step_index += 1
@@ -1081,12 +1073,17 @@ class ServiceDialoguePolicy:
             and not collected_slots["surname"].strip()
             and self._signature_matches_prompt(previous_service_signature, self.SURNAME_PROMPT)
         ):
-            if self._has_known_value(scenario.customer.surname) and scenario.customer.surname in user_text:
-                slot_updates["surname"] = scenario.customer.surname
-            elif self._interactive_test_freeform_enabled(scenario):
+            if self.surname_inference_callback is not None:
+                freeform_surname = self._extract_surname_with_model(
+                    user_text,
+                    user_round_index=user_round_index,
+                )
+            elif self._has_known_value(scenario.customer.surname) and scenario.customer.surname in user_text:
+                freeform_surname = scenario.customer.surname
+            else:
                 freeform_surname = self._extract_freeform_surname(user_text)
-                if freeform_surname:
-                    slot_updates["surname"] = freeform_surname
+            if freeform_surname:
+                slot_updates["surname"] = freeform_surname
 
         if (
             "product_model" in collected_slots
@@ -1602,6 +1599,30 @@ class ServiceDialoguePolicy:
             self.last_used_model_intent_inference = True
         return issue_description
 
+    def _extract_surname_with_model(
+        self,
+        text: str,
+        *,
+        user_round_index: int = 0,
+    ) -> str:
+        if self.surname_inference_callback is None:
+            return ""
+        try:
+            payload = self._invoke_inference_callback(
+                self.surname_inference_callback,
+                user_text=text,
+                user_round_index=user_round_index,
+            )
+        except Exception:
+            return ""
+        if not isinstance(payload, dict):
+            return ""
+        surname = str(payload.get("surname", "")).strip()
+        if not surname or not re.fullmatch(r"[一-龥]{1,2}", surname):
+            return ""
+        self.last_used_model_intent_inference = True
+        return surname
+
     def _resolve_issue_description(
         self,
         text: str,
@@ -1864,15 +1885,15 @@ class ServiceDialoguePolicy:
         normalized_candidate = cls._normalize_address_text(address)
         normalized_actual = cls._normalize_address_text(actual_address)
         if not normalized_candidate or normalized_candidate == normalized_actual:
-            return address
+            return cls._normalize_confirmation_address_order(address)
         if (
             normalized_candidate in normalized_actual
             and cls._address_has_detail_info(address)
             and cls._has_required_address_precision(address, actual_address)
         ):
-            return actual_address
+            return cls._normalize_confirmation_address_order(actual_address)
         if cls._compact_address_text(address) == cls._compact_address_text(actual_address):
-            return actual_address
+            return cls._normalize_confirmation_address_order(actual_address)
         candidate_components = extract_address_components(address)
         actual_components = extract_address_components(actual_address)
         if (
@@ -1880,8 +1901,40 @@ class ServiceDialoguePolicy:
             and components_match(candidate_components, actual_components)
             and cls._has_required_address_precision(address, actual_address)
         ):
-            return actual_address
-        return address
+            return cls._normalize_confirmation_address_order(actual_address)
+        return cls._normalize_confirmation_address_order(address)
+
+    @classmethod
+    def _normalize_confirmation_address_order(cls, address: str) -> str:
+        normalized = cls._normalize_address_text(address)
+        if not normalized:
+            return address
+        components = extract_address_components(address)
+        detail_tokens = [token for token in (components.building, components.unit, components.floor, components.room) if token]
+        if len(detail_tokens) < 2:
+            return address
+
+        token_positions = [normalized.find(cls._normalize_address_text(token)) for token in detail_tokens]
+        if any(position < 0 for position in token_positions) or token_positions == sorted(token_positions):
+            return address
+
+        ordered = "".join(
+            part
+            for part in (
+                components.province,
+                components.city,
+                components.district,
+                components.town,
+                components.road,
+                components.community,
+                components.building,
+                components.unit,
+                components.floor,
+                components.room,
+            )
+            if part
+        )
+        return ordered or address
 
     @classmethod
     def _prepare_address_for_confirmation(cls, text: str) -> str:
@@ -3148,6 +3201,8 @@ class ServiceDialoguePolicy:
         components = extract_address_components(candidate)
         if self._is_rural_address_candidate(candidate):
             return self._address_rural_detail_followup_prompt()
+        if components.has_locality and not self._address_has_site_locality(components):
+            return self._address_locality_followup_prompt()
         if (
             components.road
             and not components.community
@@ -3204,6 +3259,37 @@ class ServiceDialoguePolicy:
 
         compact = re.sub(r"[，,。！？!?：:\s]", "", cleaned)
         compact = re.sub(r"^(好的|嗯|啊|呃|额|是|对)+", "", compact)
+        split_surname_prefixes = (
+            "弓长",
+            "木子",
+            "口天",
+            "耳东",
+            "关耳",
+            "言午",
+            "双木",
+            "立早",
+            "古月",
+            "子小",
+            "走肖",
+            "三横",
+            "禾火",
+            "双口",
+            "示申",
+            "山今",
+            "女马",
+            "鱼羊",
+            "酉告",
+            "单人",
+            "提土",
+            "门耳",
+            "车干",
+            "虫二",
+            "草头",
+            "日京",
+            "两土",
+        )
+        if any(compact.startswith(prefix) and len(compact) == len(prefix) + 1 for prefix in split_surname_prefixes):
+            return compact[-1]
         if re.fullmatch(r"[一-龥]{1,4}", compact):
             return compact[0]
         return ""
@@ -3448,6 +3534,94 @@ class ServiceDialoguePolicy:
         if runtime_state.product_routing_completed or runtime_state.expected_product_routing_response:
             return False
         return self._has_pending_product_routing_step(scenario, runtime_state)
+
+    def _try_advance_product_routing_from_context(
+        self,
+        *,
+        scenario: Scenario,
+        user_text: str,
+        user_round_index: int,
+        previous_service_signature: str,
+        collected_slots: dict[str, str],
+        slot_updates: dict[str, str],
+        runtime_state: ServiceRuntimeState,
+    ) -> ServicePolicyResult | None:
+        if not self._should_run_product_routing(scenario, runtime_state):
+            return None
+        if previous_service_signature != self._normalize_prompt_text(self._build_opening_prompt(scenario)):
+            return None
+
+        steps = self._product_routing_steps(scenario)
+        if runtime_state.product_routing_step_index >= len(steps):
+            return None
+        current_step = steps[runtime_state.product_routing_step_index]
+        prompt_key = str(current_step.get("prompt_key", "")).strip()
+        if not prompt_key:
+            return None
+
+        observed_answer_key = infer_product_routing_answer_key(prompt_key, user_text)
+        if not observed_answer_key:
+            return None
+
+        return self._advance_product_routing_with_answer(
+            scenario=scenario,
+            collected_slots=collected_slots,
+            slot_updates=slot_updates,
+            runtime_state=runtime_state,
+            observed_answer_key=observed_answer_key,
+        )
+
+    def _advance_product_routing_with_answer(
+        self,
+        *,
+        scenario: Scenario,
+        collected_slots: dict[str, str],
+        slot_updates: dict[str, str],
+        runtime_state: ServiceRuntimeState,
+        observed_answer_key: str,
+    ) -> ServicePolicyResult:
+        runtime_state.product_routing_observed_trace.append(observed_answer_key)
+        next_steps, result = next_product_routing_steps_from_observed_trace(
+            runtime_state.product_routing_observed_trace,
+            model_hint=scenario.product.model,
+        )
+        self._update_product_routing_plan(
+            scenario=scenario,
+            steps=next_steps,
+            trace=runtime_state.product_routing_observed_trace,
+            result=result,
+        )
+        runtime_state.product_routing_step_index = 0
+        if next_steps:
+            return self._start_product_routing_step(
+                scenario=scenario,
+                runtime_state=runtime_state,
+                slot_updates=slot_updates,
+            )
+
+        runtime_state.product_routing_completed = True
+        slot_updates = self._with_product_routing_result_slot(
+            scenario=scenario,
+            slot_updates=slot_updates,
+            result=result,
+        )
+        if slot_updates.get("product_routing_result", "").strip() == ROUTING_RESULT_HUMAN:
+            return self._handoff_to_human(
+                scenario=scenario,
+                runtime_state=runtime_state,
+                slot_updates=slot_updates,
+                reason="product_routing_human",
+            )
+        merged_slots = dict(collected_slots)
+        merged_slots.update(slot_updates)
+        next_slot = self._next_slot_to_request(merged_slots, effective_required_slots(scenario))
+        return self._transition_to_next_slot(
+            scenario=scenario,
+            collected_slots=collected_slots,
+            slot_updates=slot_updates,
+            runtime_state=runtime_state,
+            next_slot=next_slot,
+        )
 
     def _start_product_routing_step(
         self,

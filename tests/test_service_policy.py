@@ -5029,6 +5029,271 @@ class ServicePolicyTests(unittest.TestCase):
             "广东省佛山市顺德区陈村镇美景豪庭J座4单元502室",
         )
 
+    def test_cli_freeform_surname_capture_can_use_model_only_for_split_form(self):
+        def fake_surname_inference(*, user_text: str, user_round_index: int):
+            self.assertEqual(user_text, "关耳郑")
+            self.assertEqual(user_round_index, 3)
+            return {"surname": "郑"}
+
+        policy = ServiceDialoguePolicy(surname_inference_callback=fake_surname_inference)
+        state = ServiceRuntimeState(product_arrival_checked=True)
+        scenario = build_freeform_cli_scenario()
+        transcript = [
+            DialogueTurn(speaker="service", text="请问您贵姓？", round_index=3),
+            DialogueTurn(speaker="user", text="关耳郑", round_index=3),
+        ]
+        collected_slots = {
+            "issue_description": "需要安装空气能热水机。",
+            "surname": "",
+            "phone": "",
+            "address": "",
+            "request_type": "installation",
+            "phone_contactable": "",
+            "phone_contact_owner": "",
+            "phone_collection_attempts": "",
+            "product_arrived": "yes",
+        }
+
+        result = policy.respond(
+            scenario=scenario,
+            transcript=transcript,
+            collected_slots=collected_slots,
+            runtime_state=state,
+        )
+
+        self.assertEqual(result.slot_updates["surname"], "郑")
+        self.assertEqual(result.reply, "请问您当前这个来电号码能联系到您吗？")
+        self.assertTrue(policy.last_used_model_intent_inference)
+
+    def test_apology_prefixed_surname_prompt_uses_same_model_path(self):
+        def fake_surname_inference(*, user_text: str, user_round_index: int):
+            self.assertEqual(user_text, "啊，我姓什么，东耳郑")
+            self.assertEqual(user_round_index, 9)
+            return {"surname": "郑"}
+
+        policy = ServiceDialoguePolicy(surname_inference_callback=fake_surname_inference)
+        state = ServiceRuntimeState(product_arrival_checked=True)
+        scenario = build_freeform_cli_scenario(request_type="fault")
+        transcript = [
+            DialogueTurn(
+                speaker="service",
+                text="非常抱歉，给您添麻烦了，我这就安排是否上门维修，请问您贵姓？",
+                round_index=8,
+            ),
+            DialogueTurn(speaker="user", text="啊，我姓什么，东耳郑", round_index=9),
+        ]
+        collected_slots = {
+            "issue_description": "热水器不加热。",
+            "surname": "",
+            "phone": "",
+            "address": "",
+            "request_type": "fault",
+            "phone_contactable": "",
+            "phone_contact_owner": "",
+            "phone_collection_attempts": "",
+            "product_arrived": "",
+        }
+
+        result = policy.respond(
+            scenario=scenario,
+            transcript=transcript,
+            collected_slots=collected_slots,
+            runtime_state=state,
+        )
+
+        self.assertEqual(result.slot_updates["surname"], "郑")
+        self.assertEqual(result.reply, "请问您当前这个来电号码能联系到您吗？")
+        self.assertTrue(policy.last_used_model_intent_inference)
+
+    def test_unknown_actual_address_town_only_reply_keeps_locality_followup(self):
+        policy = ServiceDialoguePolicy(ok_prefix_probability=0.0)
+        state = ServiceRuntimeState(
+            awaiting_full_address=True,
+            partial_address_candidate="上海市青浦区",
+            last_address_followup_prompt="好的，请您继续说一下小区、楼栋和门牌号。",
+        )
+        scenario = build_freeform_cli_scenario(request_type="fault")
+        collected_slots = {
+            "issue_description": "热水器不加热。",
+            "surname": "郑",
+            "phone": "13800138001",
+            "address": "",
+            "request_type": "fault",
+            "phone_contactable": "yes",
+            "phone_contact_owner": "本人当前来电",
+            "phone_collection_attempts": "0",
+            "product_arrived": "",
+        }
+
+        result = policy.respond(
+            scenario=scenario,
+            transcript=[
+                DialogueTurn(
+                    speaker="service",
+                    text="好的，请您继续说一下小区、楼栋和门牌号。",
+                    round_index=6,
+                ),
+                DialogueTurn(speaker="user", text="徐泾镇", round_index=7),
+            ],
+            collected_slots=collected_slots,
+            runtime_state=state,
+        )
+
+        self.assertEqual(result.reply, "好的，请您继续说一下小区、楼栋和门牌号。")
+        self.assertEqual(state.partial_address_candidate, "上海市青浦区徐泾镇")
+
+    def test_opening_brand_correction_can_skip_first_product_routing_prompt(self):
+        policy = ServiceDialoguePolicy(ok_prefix_probability=0.0)
+        state = ServiceRuntimeState()
+        scenario = build_freeform_cli_scenario(request_type="fault")
+        scenario.hidden_context["product_routing_plan"] = {
+            "enabled": True,
+            "result": "",
+            "trace": [],
+            "summary": "",
+            "steps": [
+                {
+                    "prompt_key": "brand_or_series",
+                    "prompt": "请问您的空气能是什么具体品牌或系列呢？",
+                    "answer_key": "entry.unknown",
+                    "answer_value": "不知道品牌或系列",
+                    "answer_instruction": "自然表达自己不知道品牌或系列。",
+                }
+            ],
+        }
+
+        result = policy.respond(
+            scenario=scenario,
+            transcript=[
+                DialogueTurn(
+                    speaker="service",
+                    text="您好，很高兴为您服务，请问是美的空气能热水机需要维修吗？",
+                    round_index=1,
+                ),
+                DialogueTurn(speaker="user", text="不是，是小天鹅的", round_index=2),
+            ],
+            collected_slots={
+                "issue_description": "",
+                "surname": "",
+                "phone": "",
+                "address": "",
+                "request_type": "",
+                "phone_contactable": "",
+                "phone_contact_owner": "",
+                "phone_collection_attempts": "",
+                "product_arrived": "",
+                "product_routing_result": "",
+            },
+            runtime_state=state,
+        )
+
+        self.assertEqual(result.reply, "请稍等，正在为您转接人工服务。")
+        self.assertEqual(result.close_status, "transferred")
+        self.assertEqual(result.close_reason, "product_routing_human")
+        self.assertEqual(result.slot_updates["product_routing_result"], "转人工")
+        self.assertEqual(state.product_routing_observed_trace, ["brand_series.cooling_or_little_swan"])
+
+    def test_freeform_address_collection_uses_model_only_to_strip_chatter(self):
+        def fake_address_inference(**kwargs):
+            self.assertEqual(
+                kwargs["user_text"],
+                "云南南省西双版纳景洪市,我看一下,那个叫雨林名苑2栋2栋2单元405。",
+            )
+            return {
+                "address_candidate": "云南省西双版纳景洪市雨林名苑2栋2单元405",
+                "merged_address_candidate": "云南省西双版纳景洪市雨林名苑2栋2单元405",
+                "granularity": "complete",
+            }
+
+        policy = ServiceDialoguePolicy(address_inference_callback=fake_address_inference)
+        state = ServiceRuntimeState(awaiting_full_address=True)
+        scenario = build_freeform_cli_scenario()
+        collected_slots = {
+            "issue_description": "需要安装空气能热水机。",
+            "surname": "王",
+            "phone": "13800138001",
+            "address": "",
+            "request_type": "installation",
+            "phone_contactable": "yes",
+            "phone_contact_owner": "本人当前来电",
+            "phone_collection_attempts": "0",
+            "product_arrived": "yes",
+        }
+
+        result = policy.respond(
+            scenario=scenario,
+            transcript=[
+                DialogueTurn(
+                    speaker="service",
+                    text="需要登记下您的地址，麻烦您完整的说下省、市、区、乡镇，精确到门牌号。",
+                    round_index=8,
+                ),
+                DialogueTurn(
+                    speaker="user",
+                    text="云南南省西双版纳景洪市,我看一下,那个叫雨林名苑2栋2栋2单元405。",
+                    round_index=9,
+                ),
+            ],
+            collected_slots=collected_slots,
+            runtime_state=state,
+        )
+
+        self.assertEqual(
+            result.reply,
+            "好的，跟您确认一下，地址是云南省西双版纳景洪市雨林名苑2栋2单元405，对吗？",
+        )
+        self.assertTrue(state.expected_address_confirmation)
+        self.assertEqual(
+            state.pending_address_confirmation,
+            "云南省西双版纳景洪市雨林名苑2栋2单元405",
+        )
+
+    def test_address_confirmation_reorders_detail_granularity_after_model_extraction(self):
+        def fake_address_inference(**kwargs):
+            return {
+                "address_candidate": "浙江省宁波市海曙区文苑风荷3单元2301室23楼",
+                "merged_address_candidate": "浙江省宁波市海曙区文苑风荷3单元2301室23楼",
+                "granularity": "complete",
+            }
+
+        policy = ServiceDialoguePolicy(address_inference_callback=fake_address_inference)
+        state = ServiceRuntimeState(awaiting_full_address=True)
+        scenario = build_freeform_cli_scenario()
+        collected_slots = {
+            "issue_description": "需要安装空气能热水机。",
+            "surname": "王",
+            "phone": "13800138001",
+            "address": "",
+            "request_type": "installation",
+            "phone_contactable": "yes",
+            "phone_contact_owner": "本人当前来电",
+            "phone_collection_attempts": "0",
+            "product_arrived": "yes",
+        }
+
+        result = policy.respond(
+            scenario=scenario,
+            transcript=[
+                DialogueTurn(
+                    speaker="service",
+                    text="请问是几栋几单元几楼几号呢？",
+                    round_index=14,
+                ),
+                DialogueTurn(speaker="user", text="3单元2301室23楼", round_index=15),
+            ],
+            collected_slots=collected_slots,
+            runtime_state=state,
+        )
+
+        self.assertEqual(
+            result.reply,
+            "好的，跟您确认一下，地址是浙江省宁波市海曙区文苑风荷3单元23楼2301室，对吗？",
+        )
+        self.assertEqual(
+            state.pending_address_confirmation,
+            "浙江省宁波市海曙区文苑风荷3单元23楼2301室",
+        )
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

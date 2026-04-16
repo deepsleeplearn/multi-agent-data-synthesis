@@ -140,6 +140,23 @@ class RecordingOpeningClient:
         raise AssertionError("Async path is not used in ServiceAgent.")
 
 
+class RecordingSurnameClient:
+    def __init__(self):
+        self.calls: list[dict] = []
+
+    def complete_json(self, **kwargs):
+        self.calls.append(kwargs)
+        user_content = str(kwargs.get("messages", [{}, {}])[-1].get("content", ""))
+        if "[9]用户原话: 啊，我姓什么，东耳郑" not in user_content:
+            raise AssertionError("Unexpected surname user content.")
+        if "归一化参考: 啊，我姓什么，耳东郑" not in user_content:
+            raise AssertionError("Surname normalized hint was not passed to model.")
+        return {"surname": "郑"}
+
+    async def complete_json_async(self, **kwargs):
+        raise AssertionError("Async path is not used in ServiceAgent.")
+
+
 class UserAgentTests(unittest.IsolatedAsyncioTestCase):
     def test_respond_forces_numeric_satisfaction_rating(self):
         agent = UserAgent(
@@ -301,6 +318,7 @@ class ServiceAgentTests(unittest.TestCase):
             model="qwen3-32b",
             temperature=0.7,
             ok_prefix_probability=0.0,
+            product_routing_enabled=False,
         )
         scenario_data = build_scenario().to_dict()
         scenario_data["request"]["request_type"] = "installation"
@@ -713,4 +731,57 @@ class ServiceAgentTests(unittest.TestCase):
         )
 
         self.assertEqual(result["slot_updates"]["address"], "上海市浦东新区测试路1号")
+        self.assertEqual(len(client.calls), 1)
+
+    def test_service_agent_uses_model_for_surname_after_apology_prefixed_prompt(self):
+        client = RecordingSurnameClient()
+        agent = ServiceAgent(
+            client,
+            model="qwen3-32b",
+            temperature=0.7,
+            ok_prefix_probability=0.0,
+            product_routing_enabled=False,
+        )
+        scenario_data = build_scenario().to_dict()
+        scenario_data["required_slots"] = [
+            "issue_description",
+            "surname",
+            "phone",
+            "request_type",
+        ]
+        scenario = Scenario.from_dict(scenario_data)
+        state = ServiceRuntimeState(product_arrival_checked=True)
+
+        result = agent.respond(
+            scenario=scenario,
+            transcript=[
+                DialogueTurn(
+                    speaker="service",
+                    text="非常抱歉，给您添麻烦了，我这就安排是否上门维修，请问您贵姓？",
+                    round_index=8,
+                ),
+                DialogueTurn(
+                    speaker="user",
+                    text="啊，我姓什么，东耳郑",
+                    round_index=9,
+                ),
+            ],
+            collected_slots={
+                "issue_description": "热水器不加热",
+                "surname": "",
+                "phone": "",
+                "address": "",
+                "product_model": "",
+                "request_type": "fault",
+                "phone_contactable": "",
+                "phone_contact_owner": "",
+                "phone_collection_attempts": "",
+                "product_arrived": "",
+            },
+            runtime_state=state,
+        )
+
+        self.assertEqual(result["slot_updates"]["surname"], "郑")
+        self.assertEqual(result["reply"], "请问您当前这个来电号码能联系到您吗？")
+        self.assertTrue(result["used_model_intent_inference"])
         self.assertEqual(len(client.calls), 1)
