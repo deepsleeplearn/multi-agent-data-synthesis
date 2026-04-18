@@ -124,7 +124,7 @@
 ## 项目结构
 
 ```text
-multi_agent_data_synthesis/
+css_data_synthesis_test/
   agents.py
   cli.py
   config.py
@@ -237,7 +237,7 @@ PRODUCT_ROUTING_APPLY_PROBABILITY=1.0
 ### 2. 生成对话数据
 
 ```bash
-python -m multi_agent_data_synthesis.cli generate \
+python -m css_data_synthesis_test.cli generate \
   --count 10 \
   --write-output \
   --auto-hidden-settings \
@@ -254,7 +254,7 @@ python -m multi_agent_data_synthesis.cli generate \
 ### 3. 仅生成隐藏设定
 
 ```bash
-python -m multi_agent_data_synthesis.cli generate-hidden-settings \
+python -m css_data_synthesis_test.cli generate-hidden-settings \
   --count 10 \
   --write-output \
   --concurrency 5
@@ -271,7 +271,7 @@ python -m multi_agent_data_synthesis.cli generate-hidden-settings \
 批量生成完整对话样本。
 
 ```bash
-python -m multi_agent_data_synthesis.cli generate [options]
+python -m css_data_synthesis_test.cli generate [options]
 ```
 
 常用参数：
@@ -291,7 +291,7 @@ python -m multi_agent_data_synthesis.cli generate [options]
 仅为场景生成隐藏设定，不执行完整对话合成。
 
 ```bash
-python -m multi_agent_data_synthesis.cli generate-hidden-settings [options]
+python -m css_data_synthesis_test.cli generate-hidden-settings [options]
 ```
 
 常用参数：

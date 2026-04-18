@@ -76,5 +76,5 @@ docker compose up -d --build
 
 ## 说明
 
-- 前端适配的是 `multi_agent_data_synthesis.cli interactive-test` 的会话语义，而不是批量生成模式。
+- 前端适配的是 `css_data_synthesis_test.cli interactive-test` 的会话语义，而不是批量生成模式。
 - 默认不写输出文件，也不会持久化隐藏设定历史。
