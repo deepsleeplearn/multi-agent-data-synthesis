@@ -1,4 +1,4 @@
-# 多智能体客服对话数据合成框架
+# 客服场景数据合成测试框架
 
 面向中文家电售后场景的任务型对话生成项目。当前聚焦电话客服场景，围绕维修与安装两类诉求，生成可训练、可回放、可校验的结构化对话样本。
 
@@ -21,6 +21,46 @@
 - 支持输出结构化 transcript 和可直接阅读的完整文本
 - 内置基础对话校验逻辑
 - 覆盖单元测试
+
+## 三种模式总览
+
+项目当前可以按“入口形态”分成三种主模式，分别服务于造数、策略调试和网页测试。
+
+### 1. 自动生成模式
+
+对应命令：`python -m css_data_synthesis_test.cli generate`
+
+批量生成完整对话样本，适合正式造数、回归抽样和离线扩样。
+
+- 输入：场景文件，可选 `--auto-hidden-settings`
+- 输出：完整 `DialogueSample`，可落盘到 `JSONL`、`JSON`，也可选写入 SQLite
+- 特点：按场景并发，走完整 `user_agent` + `service_agent` + orchestrator 流程
+
+### 2. CLI 测试模式
+
+对应命令：`python -m css_data_synthesis_test.cli interactive-test`
+
+人工扮演用户，逐轮输入话术，与当前客服状态机交互，适合调策略、复盘问题样本和做地址/路由规则验证。
+
+- 输入：单个场景 + 人工输入
+- 输出：终端交互记录；启用 `--write-output` 后可写入 JSON 测试记录
+- 特点：适合定位规则问题，支持 `/help`、`/slots`、`/state`、`/quit`
+
+### 3. 前端测试模式
+
+对应入口：`python -m frontend.server`
+
+通过浏览器发起同类测试会话，适合非命令行用户使用，也更适合现场演示和多人共用测试台。
+
+- 输入：页面选择场景后逐轮输入用户话术
+- 输出：网页侧实时展示 transcript、槽位和运行状态
+- 特点：本质上是对 `interactive-test` 会话语义的前端封装，支持登录门禁和 Docker 部署
+
+如果只想记住一个选择规则：
+
+- 要批量生成完整训练样本，用自动生成模式
+- 要在终端里逐轮验证策略表现，用 CLI 测试模式
+- 要给测试同学或业务同学一个网页入口，用前端测试模式
 
 ## 地址机制
 
@@ -109,7 +149,18 @@
 
 ## 工作方式
 
-完整流程如下：
+三种主模式的关系如下：
+
+1. 自动生成模式负责批量产出样本，是主造数入口
+2. CLI 测试模式负责单场景逐轮调试，适合开发和规则回归
+3. 前端测试模式负责把同类测试流程搬到浏览器，便于非开发人员使用
+
+补充说明：
+
+- `generate-hidden-settings` 是辅助命令，不算三种主模式之一
+- 它适合在正式生成前先补齐 `customer`、`request`、`hidden_context`
+
+其中 `generate` 的完整合成流程如下：
 
 1. `ScenarioFactory` 读取场景文件，并在需要时扩样到指定 `count`
 2. 若场景缺少 `call_start_time`，自动补一个随机通话开始时间
@@ -126,14 +177,17 @@
 ```text
 css_data_synthesis_test/
   agents.py
+  address_utils.py
   cli.py
   config.py
   dialogue_plans.py
   exporter.py
   hidden_settings_tool.py
   llm.py
+  manual_test.py
   orchestrator.py
   prompts.py
+  product_routing.py
   scenario_factory.py
   schemas.py
   service_policy.py
@@ -142,6 +196,9 @@ css_data_synthesis_test/
 data/
   seed_scenarios.json
   hidden_settings_history.jsonl
+frontend/
+  server.py
+  static/
 tests/
   ...
 requirements.txt
@@ -234,7 +291,7 @@ PRODUCT_ROUTING_ENABLED=true
 PRODUCT_ROUTING_APPLY_PROBABILITY=1.0
 ```
 
-### 2. 生成对话数据
+### 2. 模式一：自动生成 `generate`
 
 ```bash
 python -m css_data_synthesis_test.cli generate \
@@ -251,7 +308,51 @@ python -m css_data_synthesis_test.cli generate \
 - `outputs/dialogues.jsonl`
 - `outputs/dialogues.json`
 
-### 3. 仅生成隐藏设定
+可选：
+
+- 追加 `--persist-to-db` 后可再写入 `outputs/generated_dialogues.sqlite3`
+
+### 3. 模式二：CLI 测试 `interactive-test`
+
+```bash
+python -m css_data_synthesis_test.cli interactive-test \
+  --scenario-id sample_fault_001 \
+  --auto-hidden-settings \
+  --show-address-state \
+  --show-final-slots
+```
+
+说明：
+
+- 启动后由你手工输入“用户”话术，客服回复由当前策略生成
+- 进入会话前，CLI 会询问是否给客服一条“已知地址”用于直接核对
+- 默认只在终端显示；传入 `--write-output` 后会写入 `outputs/manual_tests/<scenario_id>_<timestamp>.json`
+
+### 4. 模式三：前端测试
+
+1. 安装前端依赖
+
+```bash
+pip install -r frontend/requirements.txt
+```
+
+2. 启动服务
+
+```bash
+python -m frontend.server
+```
+
+3. 打开浏览器
+
+- 本机访问：`http://localhost:8000`
+- Docker 部署后默认访问：`http://localhost:8527`
+
+说明：
+
+- 前端测试页是 `interactive-test` 的浏览器封装
+- 支持登录门禁、场景选择、槽位/状态侧栏和用户轮次回溯编辑
+
+### 5. 辅助命令：仅生成隐藏设定 `generate-hidden-settings`
 
 ```bash
 python -m css_data_synthesis_test.cli generate-hidden-settings \
@@ -263,6 +364,11 @@ python -m css_data_synthesis_test.cli generate-hidden-settings \
 启用 `--write-output` 后默认输出：
 
 - `outputs/generated_hidden_scenarios.json`
+
+说明：
+
+- 这条命令不属于上面的三种主模式，更适合做场景预处理和隐藏设定抽查
+- 前端测试页的单独说明见 [`frontend/README.md`](./frontend/README.md)
 
 ## CLI 用法
 
@@ -301,6 +407,34 @@ python -m css_data_synthesis_test.cli generate-hidden-settings [options]
 - `--output`：输出路径，默认 `outputs/generated_hidden_scenarios.json`，需配合 `--write-output`
 - `--write-output`：显式启用输出文件与隐藏设定历史落盘；默认不写 `outputs/` 或 `data/`
 - `--concurrency`：覆盖默认并发数
+
+### `interactive-test`
+
+手工输入用户话术，与当前客服状态机逐轮交互，适合单场景调试。
+
+```bash
+python -m css_data_synthesis_test.cli interactive-test [options]
+```
+
+常用参数：
+
+- `--scenario-file`：场景文件路径，默认 `data/seed_scenarios.json`
+- `--scenario-id`：按 `scenario_id` 选择测试场景，优先级高于 `--scenario-index`
+- `--scenario-index`：按下标选择测试场景，默认第 1 个
+- `--max-rounds`：覆盖本次测试的最大轮数
+- `--auto-hidden-settings`：进入测试前先补齐隐藏设定
+- `--show-address-state`：地址采集/确认时打印运行状态
+- `--hide-address-state`：显式关闭地址状态打印
+- `--show-final-slots`：结束后打印最终收集到的槽位
+- `--output`：输出路径，需配合 `--write-output`
+- `--write-output`：把测试记录落盘到 JSON；默认只在终端打印
+
+交互内命令：
+
+- `/help`：显示可用命令
+- `/slots`：查看当前已收集槽位
+- `/state`：查看当前运行时状态
+- `/quit`：结束本次测试
 
 ## 场景文件格式
 
@@ -387,7 +521,7 @@ python -m css_data_synthesis_test.cli generate-hidden-settings [options]
 
 字段含义：
 
-- `status`：`completed` 或 `incomplete`
+- `status`：`completed`、`incomplete` 或 `transferred`
 - `transcript` / `dialogue_process`：结构化轮次列表，话者会被导出为“用户”或“客服”
 - `dialogue_text`：拼接后的可读文本
 - `collected_slots`：对话中采集到的槽位
@@ -496,6 +630,6 @@ python -m unittest
 ## 当前边界
 
 - 当前领域主要围绕家电售后电话场景
-- 当前入口以 CLI 为主，没有提供 Web 服务层
+- 当前主入口仍是 CLI；仓库提供的前端只封装 `interactive-test` 调试模式，不是面向生产的数据服务 API
 - 当前校验是规则型基础校验，不是完整质检系统
 - README 中的能力说明以仓库当前实现为准，不包含外部服务可用性保证
