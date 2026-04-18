@@ -123,6 +123,11 @@ class ProductRoutingPlanTests(unittest.TestCase):
 
         self.assertEqual(answer_key, "purpose.unknown")
 
+    def test_infer_product_routing_answer_key_maps_generic_midea_brand_to_unknown_entry_branch(self):
+        answer_key = infer_product_routing_answer_key("brand_or_series", "应该是美的吧")
+
+        self.assertEqual(answer_key, "entry.unknown")
+
     def test_infer_product_routing_answer_key_maps_colloquial_water_usage_to_water_branch(self):
         answer_key = infer_product_routing_answer_key("usage_purpose", "单独生活的")
 
@@ -383,6 +388,60 @@ class ProductRoutingServicePolicyTests(unittest.TestCase):
         self.assertEqual(post_routing.reply, "请问空气能热水器现在是出现了什么问题？")
         self.assertEqual(post_routing.slot_updates["product_routing_result"], ROUTING_RESULT_BUILDING)
         self.assertTrue(state.product_routing_completed)
+
+    def test_service_policy_treats_generic_midea_brand_as_unknown_entry(self):
+        plan = {
+            "enabled": True,
+            "result": ROUTING_RESULT_BUILDING,
+            "trace": ["entry.unknown", "purpose.both"],
+            "summary": "entry.unknown -> purpose.both -> 楼宇 + 可直接确认机型",
+            "steps": [
+                {
+                    "prompt_key": "brand_or_series",
+                    "prompt": PROMPT_BRAND_OR_SERIES,
+                    "answer_key": "entry.unknown",
+                    "answer_value": "不知道品牌或系列",
+                    "answer_instruction": "自然表达自己不知道品牌或系列、暂时提供不了，或者只知道是美的。",
+                },
+                {
+                    "prompt_key": "usage_purpose",
+                    "prompt": PROMPT_USAGE_PURPOSE,
+                    "answer_key": "purpose.both",
+                    "answer_value": "生活用水和采暖都有",
+                    "answer_instruction": "自然表达机器同时用于生活用水和采暖。",
+                },
+            ],
+        }
+        scenario = build_scenario_with_routing(plan)
+        policy = ServiceDialoguePolicy(ok_prefix_probability=0.0, rng=random.Random(0))
+        state = ServiceRuntimeState(
+            expected_product_routing_response=True,
+            product_routing_step_index=0,
+        )
+
+        result = policy.respond(
+            scenario=scenario,
+            transcript=[
+                DialogueTurn(speaker="service", text=PROMPT_BRAND_OR_SERIES, round_index=2),
+                DialogueTurn(speaker="user", text="美的", round_index=3),
+            ],
+            collected_slots={
+                "issue_description": "",
+                "surname": "",
+                "phone": "",
+                "address": "",
+                "request_type": "",
+                "phone_contactable": "",
+                "phone_contact_owner": "",
+                "phone_collection_attempts": "",
+                "product_arrived": "",
+            },
+            runtime_state=state,
+        )
+
+        self.assertEqual(result.reply, PROMPT_USAGE_PURPOSE)
+        self.assertEqual(state.product_routing_observed_trace, ["entry.unknown"])
+        self.assertTrue(state.expected_product_routing_response)
 
     def test_service_policy_prepends_fault_ack_before_first_routing_question(self):
         plan = {

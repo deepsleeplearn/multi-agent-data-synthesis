@@ -133,6 +133,19 @@ UNKNOWN_TEXT_PATTERNS = (
     "不确定",
     "我也不知道",
 )
+GENERIC_MIDEA_PRODUCT_TOKENS = (
+    "空气能热水器",
+    "空气能热水机",
+    "空气能",
+    "热水器",
+    "热水机",
+    "机器",
+    "机子",
+    "品牌",
+    "牌子",
+    "系列",
+    "款",
+)
 ROUTING_SEGMENT_SPLIT_PATTERN = re.compile(r"[，,。！？!?；;、]")
 ROUTING_PREFIX_PATTERNS = (
     r"^(这个|那个|这边|那边|我这边|我家这个|我们这个)",
@@ -329,7 +342,7 @@ def _answer_instruction(answer_key: str, *, answer_value: str) -> str:
         "brand_series.home_series": "自然表达副品牌/系列是真暖、真省、雪焰、暖家、煤改电、真享中的一个。",
         "brand_series.lieyan": "自然表达系列是烈焰。",
         "entry.model": "自然提供一个具体型号，不要说自己不知道。",
-        "entry.unknown": "优先用一小句直接表达自己不知道品牌或系列，或暂时提供不了；不要先猜一遍再否定，也不要绕着解释。",
+        "entry.unknown": "优先用一小句直接表达自己不知道品牌或系列、暂时提供不了，或者只知道是美的；不要先猜一遍再否定，也不要绕着解释。",
         "purpose.heating": "自然表达机器是单独采暖用途。",
         "purpose.unknown": "优先用一小句直接表达自己不清楚机器用途；不要先猜生活用水还是采暖再反复改口。",
         "purpose.water": "自然表达机器是单独生活用水/洗澡热水用途。",
@@ -370,6 +383,22 @@ def _stable_routing_rng(seed_text: str) -> random.Random:
 def _contains_unknown_intent(text: str) -> bool:
     normalized = _normalize_text(text)
     return any(pattern in normalized for pattern in UNKNOWN_TEXT_PATTERNS)
+
+
+def _is_generic_midea_brand_expression(text: str) -> bool:
+    normalized = re.sub(
+        r"\s+",
+        "",
+        _strip_routing_prefixes(_normalize_text(text)),
+    )
+    if not normalized or "美的" not in normalized:
+        return False
+    if re.search(r"(不是|非)美的", normalized):
+        return False
+    for token in GENERIC_MIDEA_PRODUCT_TOKENS:
+        normalized = normalized.replace(token, "")
+    normalized = re.sub(r"(吧|呢|啊|呀|哈|嘛|啦)+$", "", normalized)
+    return normalized == "美的"
 
 
 def allowed_product_routing_answer_keys(prompt_key: str) -> set[str]:
@@ -725,6 +754,8 @@ def infer_product_routing_answer_key(prompt_key: str, user_text: str) -> str:
                 return "brand_series.lieyan"
             if re.search(r"[A-Za-z]{1,4}\d{1,4}|(?:KF|RSJ)[A-Za-z0-9/\-()]+", compact, flags=re.IGNORECASE):
                 return "entry.model"
+            if _is_generic_midea_brand_expression(compact):
+                return "entry.unknown"
             continue
 
         if prompt_key == "usage_purpose":
