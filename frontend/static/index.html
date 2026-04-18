@@ -11,7 +11,7 @@
         <div class="auth-card">
             <div class="section-heading">
                 <p class="eyebrow">Access Control</p>
-                <h1>测试台登录</h1>
+                <h1>数据合成测试平台登录</h1>
             </div>
             <p class="section-copy">输入备案账号后才能进入手工测试页面。直接访问 URL 时会先停留在此登录界面。</p>
             <form id="login-form" class="auth-form">
@@ -21,7 +21,19 @@
                 </label>
                 <label class="field">
                     <span>密码</span>
-                    <input id="login-password" type="password" autocomplete="current-password" placeholder="请输入账号密码">
+                    <div class="password-input-wrap">
+                        <input id="login-password" type="password" autocomplete="current-password" placeholder="请输入账号密码">
+                        <button
+                            id="login-password-toggle"
+                            class="password-toggle"
+                            type="button"
+                            aria-label="显示密码"
+                            aria-pressed="false"
+                            title="显示密码"
+                        >
+                            <span id="login-password-toggle-label">显示</span>
+                        </button>
+                    </div>
                 </label>
                 <p id="auth-error" class="auth-error hidden" role="alert"></p>
                 <button id="login-btn" type="submit" class="primary-btn auth-submit">登录进入测试台</button>

@@ -175,6 +175,12 @@ h2 {
     gap: 0.4rem;
 }
 
+.password-input-wrap {
+    display: flex;
+    align-items: center;
+    gap: 0.55rem;
+}
+
 textarea,
 input[type="number"],
 input[type="text"],
@@ -189,10 +195,45 @@ select {
     outline: none;
 }
 
+.password-input-wrap input[type="password"],
+.password-input-wrap input[type="text"] {
+    flex: 1;
+    min-width: 0;
+}
+
 textarea:focus,
 input:focus,
 select:focus {
     border-color: var(--accent);
+    box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.12);
+}
+
+.password-toggle {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 4rem;
+    height: 2.9rem;
+    padding: 0 0.85rem;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: var(--panel-strong);
+    color: var(--muted);
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background-color 0.16s ease, color 0.16s ease, border-color 0.16s ease;
+}
+
+.password-toggle:hover {
+    background: rgba(15, 118, 110, 0.08);
+    color: var(--accent);
+    border-color: rgba(15, 118, 110, 0.28);
+}
+
+.password-toggle:focus-visible {
+    outline: none;
+    background: rgba(15, 118, 110, 0.08);
+    color: var(--accent);
     box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.12);
 }
 

@@ -17,6 +17,8 @@ const authError = document.getElementById('auth-error');
 const loginForm = document.getElementById('login-form');
 const loginUsername = document.getElementById('login-username');
 const loginPassword = document.getElementById('login-password');
+const loginPasswordToggle = document.getElementById('login-password-toggle');
+const loginPasswordToggleLabel = document.getElementById('login-password-toggle-label');
 const loginButton = document.getElementById('login-btn');
 const authUserName = document.getElementById('auth-user-name');
 const authUserMeta = document.getElementById('auth-user-meta');
@@ -332,9 +334,23 @@ function applyLoggedOutState(message = '') {
     authUserMeta.textContent = '只有备案账号可访问测试台。';
     appShell.classList.add('hidden');
     authGate.classList.remove('hidden');
+    setPasswordVisibility(false);
     loginPassword.value = '';
     setAuthError(message);
     resetWorkspace();
+}
+
+function setPasswordVisibility(visible) {
+    loginPassword.type = visible ? 'text' : 'password';
+    loginPasswordToggle.classList.toggle('is-visible', visible);
+    loginPasswordToggleLabel.textContent = visible ? '隐藏' : '显示';
+    loginPasswordToggle.setAttribute('aria-pressed', visible ? 'true' : 'false');
+    loginPasswordToggle.setAttribute('aria-label', visible ? '隐藏密码' : '显示密码');
+    loginPasswordToggle.title = visible ? '隐藏密码' : '显示密码';
+}
+
+function togglePasswordVisibility() {
+    setPasswordVisibility(loginPassword.type === 'password');
 }
 
 async function safeJson(response) {
@@ -426,6 +442,7 @@ async function login(event) {
             body: JSON.stringify({ username, password }),
         });
         applyAuthenticatedState(data.user);
+        setPasswordVisibility(false);
         loginPassword.value = '';
         await loadScenarios();
     } catch (error) {
@@ -652,6 +669,7 @@ async function rewindFromUserRound(roundIndex, restoreCheckpointIndex) {
 }
 
 loginForm.addEventListener('submit', login);
+loginPasswordToggle.addEventListener('click', togglePasswordVisibility);
 document.getElementById('logout-btn').onclick = logout;
 document.getElementById('start-session-btn').onclick = startSession;
 document.getElementById('end-session-btn').onclick = forceEndSession;
@@ -683,4 +701,5 @@ setSessionStatus('idle');
 setSessionIdIndicator('');
 setNextRound(1);
 resetReviewState();
+setPasswordVisibility(false);
 checkAuth();
