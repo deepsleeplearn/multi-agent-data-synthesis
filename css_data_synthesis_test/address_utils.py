@@ -305,7 +305,14 @@ def extract_address_components(text: str) -> AddressComponents:
         trailing_remainder = remainder[district_match.end() :]
         is_numbered_section = bool(re.fullmatch(r"[\u4e00-\u9fa5]{1,20}[一二三四五六七八九十\d]+区", candidate_district))
         is_community_like = any(candidate_district.endswith(suffix) for suffix in COMMUNITY_LIKE_SUFFIXES)
-        if not is_community_like and not (is_numbered_section and trailing_remainder):
+        contains_town_then_locality = bool(
+            re.search(r"(?:街道|镇|乡).+(?:(?<!小)(?<!社)区)$", candidate_district)
+        )
+        if (
+            not is_community_like
+            and not contains_town_then_locality
+            and not (is_numbered_section and trailing_remainder)
+        ):
             district = candidate_district
             remainder = trailing_remainder
 
@@ -422,6 +429,15 @@ def extract_address_components(text: str) -> AddressComponents:
             and not re.fullmatch(r"[零一二三四五六七八九十两\d]+(?:号|弄)?", fallback_community)
             and not re.search(r"(?:路|街|大道|巷|弄|胡同)", fallback_community)
             and len(fallback_community) > len(community)
+        ):
+            community = fallback_community
+
+    if not community and not road and not detail_starts:
+        fallback_community = remainder.strip("，, ")
+        if (
+            re.fullmatch(r"[A-Za-z0-9\u4e00-\u9fa5]{2,20}", fallback_community)
+            and not re.fullmatch(r"[零一二三四五六七八九十两\d]+(?:号|弄)?", fallback_community)
+            and not re.search(r"(?:路|街|大道|巷|弄|胡同|单元|层|室)$", fallback_community)
         ):
             community = fallback_community
 

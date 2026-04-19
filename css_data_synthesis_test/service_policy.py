@@ -532,35 +532,31 @@ class ServiceDialoguePolicy:
             )
 
         if intent == "no":
-            if self.address_inference_callback is not None:
+            denial_address = self._extract_address_candidate_from_denial(
+                user_text=user_text,
+                confirmation_address=confirmation_address,
+            )
+            if (
+                not denial_address
+                and self.address_inference_callback is not None
+                and not self._is_non_address_switch_request_after_denial(user_text)
+            ):
                 denial_address = self._infer_address_candidate_with_callback(
                     user_text=user_text,
                     confirmation_address=confirmation_address,
                     partial_address_candidate="",
                     last_address_followup_prompt="",
                 )
-                if not denial_address:
-                    denial_address = self._extract_address_candidate_from_denial(
-                        user_text=user_text,
-                        confirmation_address=confirmation_address,
-                    )
-            else:
-                denial_address = self._extract_address_candidate_from_denial(
-                    user_text=user_text,
-                    confirmation_address=confirmation_address,
-                )
-                if not denial_address:
-                    denial_address = self._infer_address_candidate_with_callback(
-                        user_text=user_text,
-                        confirmation_address=confirmation_address,
-                        partial_address_candidate="",
-                        last_address_followup_prompt="",
-                    )
             if denial_address:
                 runtime_state.awaiting_full_address = True
                 runtime_state.address_input_attempts = 1
                 runtime_state.pending_address_confirmation = ""
-                merged_candidate = self._merge_address_candidate(confirmation_address, denial_address)
+                merged_candidate = self._merge_address_candidate(
+                    runtime_state.partial_address_candidate,
+                    denial_address,
+                )
+                if not merged_candidate:
+                    merged_candidate = denial_address
                 runtime_state.partial_address_candidate = merged_candidate
                 runtime_state.address_vague_retry_count = 0
                 normalized_candidate = self._normalize_address_text(merged_candidate)
@@ -656,20 +652,22 @@ class ServiceDialoguePolicy:
         model_prepared_address = ""
         previous_candidate = runtime_state.partial_address_candidate
         if self.address_inference_callback is not None:
-            if self._can_use_rule_address_candidate_for_collection(
+            model_prepared_address = self._infer_address_candidate_with_callback(
+                user_text=user_text,
+                confirmation_address=runtime_state.pending_address_confirmation,
+                partial_address_candidate=runtime_state.partial_address_candidate,
+                last_address_followup_prompt=runtime_state.last_address_followup_prompt,
+                dialogue_history=dialogue_history,
+            )
+            if model_prepared_address:
+                prepared_address = model_prepared_address
+            elif self._can_use_rule_address_candidate_for_collection(
                 candidate=rule_prepared_address,
                 actual_address=scenario.customer.address,
             ):
                 prepared_address = rule_prepared_address
             else:
-                model_prepared_address = self._infer_address_candidate_with_callback(
-                    user_text=user_text,
-                    confirmation_address=runtime_state.pending_address_confirmation,
-                    partial_address_candidate=runtime_state.partial_address_candidate,
-                    last_address_followup_prompt=runtime_state.last_address_followup_prompt,
-                    dialogue_history=dialogue_history,
-                )
-                prepared_address = model_prepared_address
+                prepared_address = rule_prepared_address
         else:
             prepared_address = rule_prepared_address
         inferred_candidate = ""
@@ -1471,23 +1469,17 @@ class ServiceDialoguePolicy:
         normalized = re.sub(r"\s+", "", text or "")
         if self._is_alternate_contact_request(normalized):
             return "no"
-        heuristic = self._classify_yes_no(normalized)
-        model_intent: str | None = None
-        if self._should_verify_contactable_intent_with_model(normalized, heuristic=heuristic):
+        if self.contact_intent_inference_callback is not None:
             model_intent = self._classify_contactable_intent_with_model(
                 text,
                 user_round_index=user_round_index,
             )
-            if heuristic in {"yes", "no"} and model_intent in {"yes", "no"} and model_intent != heuristic:
+            if model_intent in {"yes", "no"}:
                 return model_intent
+        heuristic = self._classify_yes_no(normalized)
         if heuristic in {"yes", "no"}:
             return heuristic
-        if model_intent in {"yes", "no"}:
-            return model_intent
-        return self._classify_contactable_intent_with_model(
-            text,
-            user_round_index=user_round_index,
-        )
+        return None
 
     def _classify_confirmation_intent(
         self,
@@ -1496,12 +1488,9 @@ class ServiceDialoguePolicy:
         prompt_kind: str,
         user_round_index: int = 0,
     ) -> str | None:
-        heuristic = self._classify_yes_no(text)
-        if heuristic in {"yes", "no"}:
-            return heuristic
-
         if self.confirmation_intent_inference_callback is None:
-            return None
+            heuristic = self._classify_yes_no(text)
+            return heuristic if heuristic in {"yes", "no"} else None
         try:
             payload = self._invoke_inference_callback(
                 self.confirmation_intent_inference_callback,
@@ -1510,14 +1499,17 @@ class ServiceDialoguePolicy:
                 user_round_index=user_round_index,
             )
         except Exception:
-            return None
+            heuristic = self._classify_yes_no(text)
+            return heuristic if heuristic in {"yes", "no"} else None
         if not isinstance(payload, dict):
-            return None
+            heuristic = self._classify_yes_no(text)
+            return heuristic if heuristic in {"yes", "no"} else None
         intent = str(payload.get("intent", "")).strip().lower()
         if intent in {"yes", "no"}:
             self.last_used_model_intent_inference = True
             return intent
-        return None
+        heuristic = self._classify_yes_no(text)
+        return heuristic if heuristic in {"yes", "no"} else None
 
     def _classify_product_routing_answer_key(
         self,
@@ -1526,32 +1518,31 @@ class ServiceDialoguePolicy:
         user_text: str,
         user_round_index: int = 0,
     ) -> str:
+        if self.product_routing_intent_inference_callback is not None:
+            try:
+                payload = self._invoke_inference_callback(
+                    self.product_routing_intent_inference_callback,
+                    prompt_key=prompt_key,
+                    user_text=user_text,
+                    user_round_index=user_round_index,
+                )
+            except Exception:
+                payload = None
+            if isinstance(payload, dict):
+                answer_key = str(payload.get("answer_key", "")).strip()
+                inferred_prompt_key = str(payload.get("prompt_key", "")).strip()
+                if (
+                    answer_key
+                    and answer_key in allowed_product_routing_answer_keys(prompt_key)
+                    and (not inferred_prompt_key or inferred_prompt_key == prompt_key)
+                ):
+                    self.last_used_model_intent_inference = True
+                    return answer_key
+
         heuristic = infer_product_routing_answer_key(prompt_key, user_text)
         if heuristic:
             return heuristic
-
-        if self.product_routing_intent_inference_callback is None:
-            return ""
-        try:
-            payload = self._invoke_inference_callback(
-                self.product_routing_intent_inference_callback,
-                prompt_key=prompt_key,
-                user_text=user_text,
-                user_round_index=user_round_index,
-            )
-        except Exception:
-            return ""
-        if not isinstance(payload, dict):
-            return ""
-        answer_key = str(payload.get("answer_key", "")).strip()
-        inferred_prompt_key = str(payload.get("prompt_key", "")).strip()
-        if inferred_prompt_key and inferred_prompt_key != prompt_key:
-            return ""
-        if answer_key and answer_key not in allowed_product_routing_answer_keys(prompt_key):
-            return ""
-        if answer_key:
-            self.last_used_model_intent_inference = True
-        return answer_key
+        return ""
 
     def _classify_opening_intent(
         self,
@@ -1566,6 +1557,13 @@ class ServiceDialoguePolicy:
                 text,
                 user_round_index=user_round_index,
             )
+        if self.opening_intent_inference_callback is not None:
+            model_intent = self._classify_opening_intent_with_model(
+                text,
+                user_round_index=user_round_index,
+            )
+            if model_intent in {"yes", "no", "issue_detail"}:
+                return model_intent
 
         compact = re.sub(r"[，。！？、,.!\s]", "", str(text or ""))
         yes_no = self._classify_yes_no(text)
@@ -2070,6 +2068,24 @@ class ServiceDialoguePolicy:
 
         cleanup_patterns = (
             r"^(不对|不是这个地址|地址不对|不太对)[，,\s]*",
+            r"^不是[，,\s]*(?=(?:[\u4e00-\u9fa5]{2,}(?:省|市|区|县|镇|乡|街道|路|街|大道|巷|弄|胡同)|[A-Za-z0-9\u4e00-\u9fa5]{2,20}(?:小区|花园|公寓|苑|府|里|村|大厦|中心|广场|城|栋|幢|座|楼|单元|室|号)))",
+            r"^(?:换一个|换个)(?:地址|地方)?[，,\s]*",
+            r"^(?:留个|记个|登记个)(?:新)?地址[，,\s]*",
+            r"^(?:不是|不对)[，,\s]*(?:换一个|换个)(?:地址|地方)?[，,\s]*",
+            r"^(?:不是|不对)[，,\s]*(?:留个|记个|登记个)(?:新)?地址[，,\s]*",
+            r"^(?:不是|不对)[，,\s]*(?:我)?(?:换|改)(?:个|成)?(?:新)?地址[，,\s]*",
+        )
+        pure_denial_patterns = (
+            r"^(?:不|不是|不对|不太对|不对的|不是的|不是哦|不是啊|不是哈|不是呢|不对哦|不对啊)$",
+            r"^(?:不是这个|不是这个地址|不是这个地方|这不是|这个不对|地址不对)$",
+            r"^(?:换一个|换个|重新来|重新说|重说一下|重来一下)$",
+            r"^(?:不是|不对)[，,\s]*(?:换一个|换个|重新来|重新说|重说一下|重来一下)$",
+            r"^(?:留个|记个|登记个)(?:新)?地址$",
+            r"^(?:不是|不对)[，,\s]*(?:留个|记个|登记个)(?:新)?地址$",
+            r"^(?:我)?换地方了$",
+            r"^(?:不是|不对)[，,\s]*(?:我)?换地方了$",
+            r"^(?:我)?搬家了$",
+            r"^(?:不是|不对)[，,\s]*(?:我)?搬家了$",
         )
         correction_patterns = (
             r"(?:就是|改成|换成|应该是|应为)\s*([^，,。！？!?]+)$",
@@ -2085,6 +2101,11 @@ class ServiceDialoguePolicy:
             r"后面.*(?:小区|地址|地方).*(?:错|不对)",
             r"老家那个地址",
             r"那个地址",
+            r"换一个(?:地址|地方)?$",
+            r"换个(?:地址|地方)?$",
+            r"(?:留个|记个|登记个)(?:新)?地址$",
+            r"(?:我)?换地方了$",
+            r"(?:我)?搬家了$",
         )
 
         for raw_candidate in reversed(raw_candidates):
@@ -2116,6 +2137,8 @@ class ServiceDialoguePolicy:
             normalized = cls._normalize_address_text(cleaned)
             if not normalized or normalized == normalized_confirmation:
                 continue
+            if any(re.fullmatch(pattern, normalized) for pattern in pure_denial_patterns):
+                continue
             if any(re.search(pattern, normalized) for pattern in generic_non_address_patterns):
                 continue
 
@@ -2131,6 +2154,24 @@ class ServiceDialoguePolicy:
             if re.search(strong_detail_markers, normalized) and cls._address_has_detail_info(cleaned):
                 return cleaned
         return ""
+
+    @classmethod
+    def _is_non_address_switch_request_after_denial(cls, text: str) -> bool:
+        normalized = cls._normalize_address_text(text)
+        if not normalized:
+            return False
+        patterns = (
+            r"^(?:换一个|换个|重新来|重新说|重说一下|重来一下)$",
+            r"^(?:留个|记个|登记个)(?:新)?地址$",
+            r"^(?:不是|不对)[，,\s]*(?:换一个|换个|重新来|重新说|重说一下|重来一下)$",
+            r"^(?:不是|不对)[，,\s]*(?:留个|记个|登记个)(?:新)?地址$",
+            r"^(?:不是|不对)[，,\s]*(?:我)?(?:换|改)(?:个|成)?(?:新)?地址$",
+            r"^(?:我)?换地方了$",
+            r"^(?:不是|不对)[，,\s]*(?:我)?换地方了$",
+            r"^(?:我)?搬家了$",
+            r"^(?:不是|不对)[，,\s]*(?:我)?搬家了$",
+        )
+        return any(re.fullmatch(pattern, normalized) for pattern in patterns)
 
     @staticmethod
     def _normalize_address_text(text: str) -> str:
@@ -2185,6 +2226,7 @@ class ServiceDialoguePolicy:
     ) -> bool:
         normalized_candidate = self._normalize_address_text(candidate)
         actual_address = scenario.customer.address
+        use_precision_reference = self._manual_test_uses_address_precision_reference(scenario)
         if self._is_complete_address(normalized_candidate, actual_address):
             return True
         if self._requires_city_level_followup(candidate):
@@ -2195,7 +2237,13 @@ class ServiceDialoguePolicy:
             if require_strong_confirmable
             else self._is_confirmable_address_candidate(candidate)
         )
-        if not confirmable or not self._has_required_address_precision(candidate, actual_address):
+        if not confirmable:
+            return False
+
+        if self._interactive_test_freeform_enabled(scenario) and not use_precision_reference:
+            return self._has_unknown_actual_confirmation_precision(candidate)
+
+        if not self._has_required_address_precision(candidate, actual_address):
             return False
 
         if self._interactive_test_freeform_enabled(scenario) and not self._has_known_value(actual_address):
@@ -2399,6 +2447,24 @@ class ServiceDialoguePolicy:
         if new_has_region and new_has_detail:
             return prepared_new
 
+        if (
+            new_has_admin_region
+            and not new_has_detail
+            and existing_components.district
+            and new_components.district
+            and cls._normalize_address_text(existing_components.district)
+            == cls._normalize_address_text(new_components.district)
+            and not existing_components.province
+            and not existing_components.city
+            and (existing_components.community or existing_components.road or cls._has_nonstandard_address_detail(prepared_existing))
+        ):
+            existing_suffix = prepared_existing
+            if existing_components.district and existing_suffix.startswith(existing_components.district):
+                existing_suffix = existing_suffix[len(existing_components.district) :]
+            merged_with_completed_region = f"{prepared_new}{existing_suffix}"
+            if cls._normalize_address_text(merged_with_completed_region):
+                return merged_with_completed_region
+
         if not new_has_admin_region:
             precise_merged = cls._merge_precise_detail_components(prepared_existing, prepared_new)
             if precise_merged != prepared_existing:
@@ -2410,6 +2476,17 @@ class ServiceDialoguePolicy:
                 return prepared_existing
 
         if new_has_admin_region and not existing_has_admin_region and existing_has_detail and not new_has_detail:
+            return f"{prepared_new}{prepared_existing}"
+        if (
+            new_components.province
+            and new_components.city
+            and not new_components.district
+            and not new_has_detail
+            and existing_components.district
+            and (existing_components.community or existing_components.road or cls._has_nonstandard_address_detail(prepared_existing))
+            and not existing_components.province
+            and not existing_components.city
+        ):
             return f"{prepared_new}{prepared_existing}"
         if existing_has_admin_region and not new_has_admin_region and new_has_detail and not existing_has_detail:
             return f"{prepared_existing}{prepared_new}"
@@ -2879,6 +2956,8 @@ class ServiceDialoguePolicy:
             r"后面.*(?:小区|地址|地方).*(?:错|不对)",
             r"老家那个地址",
             r"那个地址",
+            r"(?:换一个|换个)(?:地址|地方)?",
+            r"(?:留个|记个|登记个)(?:新)?地址",
         )
         if any(re.search(pattern, user_text or "") for pattern in generic_non_address_patterns):
             return False
@@ -3431,6 +3510,8 @@ class ServiceDialoguePolicy:
     def _address_followup_prompt_for_actual(self, *, candidate: str, actual_address: str) -> str:
         components = extract_address_components(candidate)
         missing_precision = self._missing_required_address_precision(candidate, actual_address)
+        if self._requires_city_level_followup(candidate):
+            return self._address_region_street_followup_prompt()
         if not components.district and (
             components.has_locality
             or components.has_precise_detail
@@ -3457,7 +3538,10 @@ class ServiceDialoguePolicy:
 
     def _address_followup_prompt_for_scenario(self, *, scenario: Scenario, candidate: str) -> str:
         actual_address = scenario.customer.address
-        if self._interactive_test_freeform_enabled(scenario) and not self._has_known_value(actual_address):
+        if self._interactive_test_freeform_enabled(scenario) and (
+            not self._manual_test_uses_address_precision_reference(scenario)
+            or not self._has_known_value(actual_address)
+        ):
             if not self._has_unknown_actual_confirmation_precision(candidate):
                 return self._address_followup_prompt_for_unknown_actual(candidate)
         return self._address_followup_prompt_for_actual(
@@ -3467,6 +3551,8 @@ class ServiceDialoguePolicy:
 
     def _address_followup_prompt_for_unknown_actual(self, candidate: str) -> str:
         components = extract_address_components(candidate)
+        if self._requires_city_level_followup(candidate):
+            return self._address_region_street_followup_prompt()
         if not components.district:
             if components.province or components.city:
                 if components.city:
@@ -3516,6 +3602,12 @@ class ServiceDialoguePolicy:
     @staticmethod
     def _interactive_test_freeform_enabled(scenario: Scenario) -> bool:
         return bool(scenario.hidden_context.get("interactive_test_freeform", False))
+
+    @staticmethod
+    def _manual_test_uses_address_precision_reference(scenario: Scenario) -> bool:
+        if not bool(scenario.hidden_context.get("interactive_test_freeform", False)):
+            return True
+        return bool(scenario.hidden_context.get("manual_test_address_precision_reference", False))
 
     @staticmethod
     def _has_known_value(value: str) -> bool:

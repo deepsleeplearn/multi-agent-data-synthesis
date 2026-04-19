@@ -556,6 +556,7 @@ def _prepare_manual_test_scenario(req: StartSessionRequest) -> tuple[Scenario, s
     scenario = scenario.with_call_start_time(_resolve_manual_call_start_time(req, scenario))
     scenario, known_address_notice = _apply_known_address(scenario, req.known_address)
     scenario.hidden_context["interactive_test_freeform"] = True
+    scenario.hidden_context["manual_test_address_precision_reference"] = False
     ensure_product_routing_plan(
         scenario.hidden_context,
         enabled=config.product_routing_enabled,
