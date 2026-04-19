@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import argparse
+import hashlib
 import json
 from dataclasses import replace
 from pathlib import Path
+from typing import Any, Iterable
 
 from css_data_synthesis_test.config import load_config
 from css_data_synthesis_test.exporter import write_json, write_jsonl, write_sqlite
@@ -27,6 +29,58 @@ DEFAULT_JSONL_OUTPUT = Path("outputs/dialogues.jsonl")
 DEFAULT_JSON_OUTPUT = Path("outputs/dialogues.json")
 DEFAULT_HIDDEN_SETTINGS_OUTPUT = Path("outputs/generated_hidden_scenarios.json")
 DEFAULT_SQLITE_OUTPUT = Path("outputs/generated_dialogues.sqlite3")
+MANUAL_CONTACT_PHONE_PREFIXES = (
+    "130",
+    "131",
+    "132",
+    "133",
+    "134",
+    "135",
+    "136",
+    "137",
+    "138",
+    "139",
+    "145",
+    "146",
+    "147",
+    "148",
+    "149",
+    "150",
+    "151",
+    "152",
+    "153",
+    "155",
+    "156",
+    "157",
+    "158",
+    "159",
+    "166",
+    "167",
+    "170",
+    "171",
+    "172",
+    "173",
+    "175",
+    "176",
+    "177",
+    "178",
+    "180",
+    "181",
+    "182",
+    "183",
+    "184",
+    "185",
+    "186",
+    "187",
+    "188",
+    "189",
+    "191",
+    "193",
+    "195",
+    "196",
+    "198",
+    "199",
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -225,6 +279,10 @@ async def run_generate_async(args: argparse.Namespace) -> None:
     print(f"  completed:   {completed}")
     print(f"  incomplete:  {incomplete}")
     print(f"  transferred: {transferred}")
+    if args.auto_hidden_settings:
+        _print_utterance_reference_summary(
+            sample.scenario for sample in samples
+        )
     if args.write_output:
         print(f"JSONL output: {args.jsonl_output}")
         print(f"JSON output:  {args.json_output}")
@@ -254,7 +312,10 @@ async def run_generate_hidden_settings_async(args: argparse.Namespace) -> None:
 
     async def generate_single(scenario):
         async with semaphore:
-            generated = await tool.generate_for_scenario_async(scenario)
+            generated = await tool.generate_for_scenario_async(
+                scenario,
+                use_utterance_reference=True,
+            )
             return generated.to_dict()
 
     hydrated = list(await asyncio.gather(*(generate_single(scenario) for scenario in scenarios)))
@@ -266,6 +327,7 @@ async def run_generate_hidden_settings_async(args: argparse.Namespace) -> None:
             encoding="utf-8",
         )
     print(f"Generated hidden settings for {len(hydrated)} scenarios.")
+    _print_utterance_reference_summary(hydrated)
     if args.write_output:
         print(f"Output: {args.output}")
         print(f"History store: {config.hidden_settings_store}")
@@ -282,7 +344,10 @@ def run_interactive_test(args: argparse.Namespace) -> None:
     )
     if args.auto_hidden_settings:
         tool = HiddenSettingsTool(OpenAIChatClient(config), config)
-        scenario = tool.generate_for_scenario(scenario)
+        scenario = tool.generate_for_scenario(
+            scenario,
+            use_utterance_reference=True,
+        )
     elif _manual_test_requires_generated_hidden_settings(scenario):
         scenario = _hydrate_manual_test_scenario_locally(scenario)
     scenario = _configure_manual_test_known_address(scenario)
@@ -326,6 +391,36 @@ def _load_cli_config(*, write_output: bool):
     if write_output:
         return config
     return replace(config, hidden_settings_store=None)
+
+
+def _utterance_reference_summary_line(scenario_payload: dict) -> str:
+    scenario_id = str(scenario_payload.get("scenario_id", "")).strip() or "<unknown>"
+    hidden_context = scenario_payload.get("hidden_context", {})
+    if not isinstance(hidden_context, dict):
+        hidden_context = {}
+    source = str(hidden_context.get("utterance_reference_source", "model")).strip() or "model"
+    if source != "library":
+        return f"- {scenario_id}: 未参考话术库，直接走模型生成"
+
+    intent = str(hidden_context.get("utterance_reference_intent", "")).strip()
+    category = str(hidden_context.get("utterance_reference_category", "")).strip()
+    summary = str(hidden_context.get("utterance_reference_summary", "")).strip()
+    original = str(hidden_context.get("utterance_reference_original", "")).strip()
+    details = " / ".join(part for part in (intent, category, summary) if part)
+    if original:
+        return f"- {scenario_id}: 参考话术库 -> {details} | 原话: {original}"
+    return f"- {scenario_id}: 参考话术库 -> {details}"
+
+
+def _print_utterance_reference_summary(scenarios: Iterable[Any]) -> None:
+    payloads = [scenario for scenario in scenarios]
+    if not payloads:
+        return
+    print("话术参考使用情况:")
+    for scenario_payload in payloads:
+        if hasattr(scenario_payload, "to_dict"):
+            scenario_payload = scenario_payload.to_dict()
+        print(_utterance_reference_summary_line(dict(scenario_payload)))
 
 
 def _validate_output_flags(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
@@ -465,9 +560,11 @@ def _hydrate_manual_test_scenario_locally(scenario):
 
 
 def _mock_manual_contact_phone(seed_text: str) -> str:
-    checksum = sum((index + 1) * ord(char) for index, char in enumerate(str(seed_text or "")))
-    suffix = str(checksum % 100000000).zfill(8)
-    return f"139{suffix}"
+    normalized_seed = str(seed_text or "").strip() or "manual_test_default"
+    digest = hashlib.sha256(normalized_seed.encode("utf-8")).digest()
+    prefix = MANUAL_CONTACT_PHONE_PREFIXES[int.from_bytes(digest[:2], "big") % len(MANUAL_CONTACT_PHONE_PREFIXES)]
+    suffix = str(int.from_bytes(digest[2:8], "big") % 100000000).zfill(8)
+    return f"{prefix}{suffix}"
 
 
 def main() -> None:

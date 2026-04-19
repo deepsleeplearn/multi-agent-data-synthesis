@@ -47,7 +47,50 @@ def _build_region_options(region_map: dict[str, dict[str, tuple[str, ...]]]) -> 
     )
 
 
-COHERENT_REGION_CITY_DISTRICT_MAP: dict[str, dict[str, tuple[str, ...]]] = {
+def _merge_region_city_district_maps(
+    *maps: dict[str, dict[str, tuple[str, ...]]],
+) -> dict[str, dict[str, tuple[str, ...]]]:
+    merged: dict[str, dict[str, tuple[str, ...]]] = {}
+    for region_map in maps:
+        for province, cities in region_map.items():
+            province_bucket = merged.setdefault(province, {})
+            for city, districts in cities.items():
+                province_bucket[city] = tuple(dict.fromkeys(str(value) for value in districts))
+    return merged
+
+
+def _build_admin_division_options(
+    region_tree: dict[str, dict[str, dict[str, tuple[str, ...]]]],
+    municipality_tree: dict[str, dict[str, tuple[str, ...]]],
+) -> tuple[dict[str, str], ...]:
+    options: list[dict[str, str]] = []
+    for province, cities in region_tree.items():
+        for city, districts in cities.items():
+            for district, towns in districts.items():
+                for town in towns:
+                    options.append(
+                        {
+                            "province": province,
+                            "city": city,
+                            "district": district,
+                            "town": town,
+                        }
+                    )
+    for city, districts in municipality_tree.items():
+        for district, towns in districts.items():
+            for town in towns:
+                options.append(
+                    {
+                        "province": "",
+                        "city": city,
+                        "district": district,
+                        "town": town,
+                    }
+                )
+    return tuple(options)
+
+
+BASE_COHERENT_REGION_CITY_DISTRICT_MAP: dict[str, dict[str, tuple[str, ...]]] = {
     "河北省": {
         "石家庄市": ("长安区", "桥西区", "裕华区"),
         "唐山市": ("路北区", "路南区", "丰南区"),
@@ -157,6 +200,39 @@ COHERENT_REGION_CITY_DISTRICT_MAP: dict[str, dict[str, tuple[str, ...]]] = {
         "克拉玛依市": ("克拉玛依区", "独山子区", "白碱滩区"),
     },
 }
+ADDITIONAL_COHERENT_REGION_CITY_DISTRICT_MAP: dict[str, dict[str, tuple[str, ...]]] = {
+    "河北省": {"保定市": ("莲池区", "竞秀区", "满城区")},
+    "山西省": {"运城市": ("盐湖区", "夏县", "永济市")},
+    "辽宁省": {"鞍山市": ("铁东区", "铁西区", "立山区")},
+    "吉林省": {"四平市": ("铁西区", "铁东区", "梨树县")},
+    "黑龙江省": {"牡丹江市": ("东安区", "爱民区", "阳明区")},
+    "江苏省": {"无锡市": ("梁溪区", "滨湖区", "惠山区")},
+    "浙江省": {"温州市": ("鹿城区", "龙湾区", "瓯海区")},
+    "安徽省": {"蚌埠市": ("龙子湖区", "蚌山区", "禹会区")},
+    "福建省": {"泉州市": ("丰泽区", "鲤城区", "洛江区")},
+    "江西省": {"九江市": ("濂溪区", "浔阳区", "柴桑区")},
+    "山东省": {"烟台市": ("芝罘区", "莱山区", "福山区")},
+    "河南省": {"南阳市": ("宛城区", "卧龙区", "邓州市")},
+    "湖北省": {"襄阳市": ("樊城区", "襄城区", "襄州区")},
+    "湖南省": {"岳阳市": ("岳阳楼区", "云溪区", "君山区")},
+    "广东省": {"佛山市": ("禅城区", "南海区", "顺德区")},
+    "海南省": {"儋州市": ("那大镇", "白马井镇", "排浦镇")},
+    "四川省": {"南充市": ("顺庆区", "高坪区", "嘉陵区")},
+    "贵州省": {"毕节市": ("七星关区", "大方县", "纳雍县")},
+    "云南省": {"大理白族自治州": ("大理市", "祥云县", "弥渡县")},
+    "陕西省": {"咸阳市": ("秦都区", "渭城区", "兴平市")},
+    "甘肃省": {"张掖市": ("甘州区", "临泽县", "高台县")},
+    "青海省": {"海西蒙古族藏族自治州": ("德令哈市", "格尔木市", "都兰县")},
+    "内蒙古": {"赤峰市": ("红山区", "松山区", "元宝山区")},
+    "广西": {"桂林市": ("秀峰区", "象山区", "七星区")},
+    "西藏": {"林芝市": ("巴宜区", "工布江达县", "米林市")},
+    "宁夏": {"中卫市": ("沙坡头区", "中宁县", "海原县")},
+    "新疆": {"昌吉回族自治州": ("昌吉市", "阜康市", "呼图壁县")},
+}
+COHERENT_REGION_CITY_DISTRICT_MAP: dict[str, dict[str, tuple[str, ...]]] = _merge_region_city_district_maps(
+    BASE_COHERENT_REGION_CITY_DISTRICT_MAP,
+    ADDITIONAL_COHERENT_REGION_CITY_DISTRICT_MAP,
+)
 COHERENT_MUNICIPALITY_CITY_DISTRICT_MAP: dict[str, tuple[str, ...]] = {
     "北京市": ("朝阳区", "海淀区", "丰台区"),
     "上海市": ("浦东新区", "闵行区", "徐汇区"),
@@ -169,6 +245,219 @@ COHERENT_REGION_OPTIONS: tuple[dict[str, Any], ...] = _build_region_options(
 COHERENT_MUNICIPALITY_OPTIONS: tuple[dict[str, Any], ...] = tuple(
     {"province": "", "city": city, "districts": districts}
     for city, districts in COHERENT_MUNICIPALITY_CITY_DISTRICT_MAP.items()
+)
+COHERENT_REGION_CITY_DISTRICT_TOWN_MAP: dict[str, dict[str, dict[str, tuple[str, ...]]]] = {
+    "江苏省": {
+        "南京市": {
+            "鼓楼区": ("华侨路街道", "宁海路街道", "湖南路街道"),
+            "秦淮区": ("夫子庙街道", "洪武路街道", "双塘街道"),
+            "建邺区": ("沙洲街道", "双闸街道", "南苑街道"),
+        },
+        "苏州市": {
+            "吴中区": ("木渎镇", "郭巷街道", "越溪街道"),
+            "工业园区": ("娄葑街道", "斜塘街道", "唯亭街道"),
+            "虎丘区": ("枫桥街道", "狮山横塘街道", "通安镇"),
+        },
+        "无锡市": {
+            "梁溪区": ("崇安寺街道", "山北街道", "广益街道"),
+            "滨湖区": ("蠡湖街道", "荣巷街道", "河埒街道"),
+            "惠山区": ("洛社镇", "钱桥街道", "前洲街道"),
+        },
+    },
+    "浙江省": {
+        "杭州市": {
+            "西湖区": ("西溪街道", "蒋村街道", "转塘街道"),
+            "余杭区": ("良渚街道", "仓前街道", "闲林街道"),
+            "拱墅区": ("东新街道", "武林街道", "和睦街道"),
+        },
+        "宁波市": {
+            "鄞州区": ("首南街道", "钟公庙街道", "下应街道"),
+            "海曙区": ("段塘街道", "南门街道", "鼓楼街道"),
+            "江北区": ("庄桥街道", "孔浦街道", "甬江街道"),
+        },
+        "温州市": {
+            "鹿城区": ("五马街道", "南汇街道", "滨江街道"),
+            "龙湾区": ("永中街道", "蒲州街道", "状元街道"),
+            "瓯海区": ("娄桥街道", "梧田街道", "郭溪街道"),
+        },
+    },
+    "广东省": {
+        "广州市": {
+            "天河区": ("石牌街道", "天河南街道", "棠下街道"),
+            "海珠区": ("江南中街道", "赤岗街道", "新港街道"),
+            "越秀区": ("北京街道", "六榕街道", "东山街道"),
+        },
+        "深圳市": {
+            "南山区": ("粤海街道", "南头街道", "招商街道"),
+            "福田区": ("福田街道", "沙头街道", "梅林街道"),
+            "宝安区": ("新安街道", "西乡街道", "福永街道"),
+        },
+        "佛山市": {
+            "禅城区": ("祖庙街道", "石湾镇街道", "张槎街道"),
+            "南海区": ("桂城街道", "大沥镇", "狮山镇"),
+            "顺德区": ("大良街道", "容桂街道", "北滘镇"),
+        },
+    },
+    "湖北省": {
+        "武汉市": {
+            "洪山区": ("珞南街道", "关山街道", "张家湾街道"),
+            "江汉区": ("唐家墩街道", "常青街道", "民权街道"),
+            "武昌区": ("黄鹤楼街道", "粮道街道", "杨园街道"),
+        },
+        "宜昌市": {
+            "西陵区": ("西陵街道", "夜明珠街道"),
+            "伍家岗区": ("伍家岗街道", "万寿桥街道", "大公桥街道"),
+            "夷陵区": ("小溪塔街道", "龙泉镇", "黄花镇"),
+        },
+    },
+    "湖南省": {
+        "长沙市": {
+            "岳麓区": ("望岳街道", "桔子洲街道", "梅溪湖街道"),
+            "芙蓉区": ("定王台街道", "湘湖街道", "马王堆街道"),
+            "雨花区": ("井湾子街道", "圭塘街道", "东山街道"),
+        },
+        "株洲市": {
+            "天元区": ("泰山路街道", "嵩山路街道", "马家河街道"),
+            "荷塘区": ("桂花街道", "月塘街道", "宋家桥街道"),
+            "石峰区": ("田心街道", "清水塘街道", "响石岭街道"),
+        },
+    },
+    "山东省": {
+        "济南市": {
+            "历下区": ("姚家街道", "龙洞街道", "解放路街道"),
+            "历城区": ("唐冶街道", "华山街道", "王舍人街道"),
+            "槐荫区": ("兴福街道", "振兴街道", "道德街街道"),
+        },
+        "青岛市": {
+            "崂山区": ("中韩街道", "沙子口街道", "王哥庄街道"),
+            "黄岛区": ("长江路街道", "薛家岛街道", "灵山卫街道"),
+            "李沧区": ("李村街道", "沧口街道", "虎山路街道"),
+        },
+    },
+    "河南省": {
+        "郑州市": {
+            "金水区": ("花园路街道", "北林路街道", "丰庆路街道"),
+            "中原区": ("林山寨街道", "棉纺路街道", "桐柏路街道"),
+            "二七区": ("淮河路街道", "建中街街道", "福华街街道"),
+        },
+        "洛阳市": {
+            "西工区": ("西工街道", "王城路街道", "金谷园街道"),
+            "洛龙区": ("开元路街道", "翠云路街道", "关林街道"),
+            "涧西区": ("湖北路街道", "天津路街道", "重庆路街道"),
+        },
+    },
+    "四川省": {
+        "成都市": {
+            "武侯区": ("浆洗街街道", "玉林街道", "红牌楼街道"),
+            "高新区": ("芳草街街道", "石羊街道", "桂溪街道"),
+            "锦江区": ("成龙路街道", "三圣街道", "柳江街道"),
+        },
+        "绵阳市": {
+            "涪城区": ("城厢街道", "工区街道", "石塘街道"),
+            "游仙区": ("富乐街道", "游仙街道", "小枧镇"),
+            "安州区": ("花荄镇", "桑枣镇", "秀水镇"),
+        },
+        "南充市": {
+            "顺庆区": ("舞凤街道", "中城街道", "北城街道"),
+            "高坪区": ("白塔街道", "清溪街道", "小龙街道"),
+            "嘉陵区": ("火花街道", "南湖街道", "都尉街道"),
+        },
+    },
+    "陕西省": {
+        "西安市": {
+            "雁塔区": ("小寨路街道", "长延堡街道", "电子城街道"),
+            "未央区": ("张家堡街道", "徐家湾街道", "大明宫街道"),
+            "长安区": ("韦曲街道", "郭杜街道", "黄良街道"),
+        },
+        "咸阳市": {
+            "秦都区": ("人民路街道", "渭阳西路街道", "陈杨街道"),
+            "渭城区": ("文汇路街道", "中山街道"),
+            "兴平市": ("东城街道", "西城街道", "店张街道"),
+        },
+    },
+    "甘肃省": {
+        "兰州市": {
+            "城关区": ("五泉街道", "渭源路街道", "皋兰路街道"),
+            "七里河区": ("西园街道", "西站街道", "敦煌路街道"),
+            "安宁区": ("安宁西路街道", "孔家崖街道", "十里店街道"),
+        },
+    },
+    "云南省": {
+        "昆明市": {
+            "五华区": ("华山街道", "丰宁街道", "黑林铺街道"),
+            "官渡区": ("关上街道", "金马街道", "太和街道"),
+            "西山区": ("马街街道", "福海街道", "碧鸡街道"),
+        },
+    },
+    "贵州省": {
+        "贵阳市": {
+            "南明区": ("花果园街道", "中华南路街道", "兴关路街道"),
+            "云岩区": ("黔灵镇", "普陀路街道", "威清门街道"),
+            "观山湖区": ("金华镇", "观山街道", "宾阳街道"),
+        },
+        "遵义市": {
+            "汇川区": ("上海路街道", "洗马路街道", "高桥街道"),
+            "红花岗区": ("中华路街道", "忠庄街道", "老城街道"),
+            "播州区": ("龙坑街道", "南白街道", "乌江镇"),
+        },
+        "毕节市": {
+            "七星关区": ("市西街道", "麻园街道", "碧阳街道"),
+            "大方县": ("红旗街道", "顺德街道", "慕俄格古城街道"),
+            "纳雍县": ("厍东关乡", "文昌街道", "雍熙街道"),
+        },
+    },
+    "广西": {
+        "南宁市": {
+            "青秀区": ("南湖街道", "新竹街道", "中山街道"),
+            "兴宁区": ("民生街道", "朝阳街道", "三塘镇"),
+            "西乡塘区": ("北湖街道", "衡阳街道", "安吉街道"),
+        },
+        "桂林市": {
+            "秀峰区": ("秀峰街道", "丽君街道", "甲山街道"),
+            "象山区": ("南门街道", "平山街道", "二塘乡"),
+            "七星区": ("七星街道", "漓东街道", "朝阳乡"),
+        },
+    },
+    "内蒙古": {
+        "呼和浩特市": {
+            "新城区": ("东街街道", "中山东路街道"),
+            "赛罕区": ("大学西路街道", "昭乌达路街道", "乌兰察布路街道"),
+            "回民区": ("中山西路街道", "海拉尔西路街道", "钢铁路街道"),
+        },
+    },
+    "青海省": {
+        "西宁市": {
+            "城西区": ("西关大街街道", "古城台街道", "虎台街道"),
+            "城东区": ("大众街街道", "清真巷街道", "周家泉街道"),
+            "城中区": ("礼让街街道", "饮马街街道", "南滩街道"),
+        },
+    },
+}
+COHERENT_MUNICIPALITY_DISTRICT_TOWN_MAP: dict[str, dict[str, tuple[str, ...]]] = {
+    "北京市": {
+        "朝阳区": ("望京街道", "酒仙桥街道", "三里屯街道"),
+        "海淀区": ("中关村街道", "上地街道", "学院路街道"),
+        "丰台区": ("方庄街道", "六里桥街道", "右安门街道"),
+    },
+    "上海市": {
+        "浦东新区": ("花木街道", "张江镇", "川沙新镇"),
+        "闵行区": ("七宝镇", "莘庄镇", "浦江镇"),
+        "徐汇区": ("徐家汇街道", "漕河泾街道", "枫林路街道"),
+    },
+    "天津市": {
+        "南开区": ("鼓楼街道", "万兴街道", "广开街道"),
+        "河西区": ("梅江街道", "天塔街道", "桃园街道"),
+        "滨海新区": ("新村街道", "杭州道街道", "新港街道"),
+    },
+    "重庆市": {
+        "渝北区": ("龙溪街道", "两路街道", "回兴街道"),
+        "渝中区": ("解放碑街道", "两路口街道", "上清寺街道"),
+        "沙坪坝区": ("沙坪坝街道", "渝碚路街道", "天马路街道"),
+    },
+}
+COHERENT_ADDRESS_ADMIN_OPTIONS: tuple[dict[str, str], ...] = _build_admin_division_options(
+    COHERENT_REGION_CITY_DISTRICT_TOWN_MAP,
+    COHERENT_MUNICIPALITY_DISTRICT_TOWN_MAP,
 )
 # Intentionally restricted to common single-character surnames to avoid
 # generating overly rare surnames in synthetic customer profiles.
@@ -247,6 +536,14 @@ ADDRESS_TOWN_OPTIONS = (
     "桂城街道",
     "良渚街道",
     "观音桥街道",
+    "文峰街道",
+    "南门街道",
+    "文昌街道",
+    "清溪街道",
+    "古城街道",
+    "建设路街道",
+    "莲花街道",
+    "凤凰街道",
 )
 ADDRESS_COMMUNITY_OPTIONS = (
     "幸福花园",
@@ -255,19 +552,72 @@ ADDRESS_COMMUNITY_OPTIONS = (
     "康乐社区",
     "阳光家园",
     "碧桂园",
+    "万科城",
+    "恒大绿洲",
+    "中海国际社区",
+    "学府佳苑",
+    "金地花园",
+    "保利公馆",
+    "融创城",
+    "新湖国际",
 )
 ADDRESS_VILLAGE_OPTIONS = (
     "大湖村",
     "福寿村",
     "新丰村",
     "东风村",
+    "新民村",
+    "团结村",
+    "和平村",
 )
 ADDRESS_POI_OPTIONS = (
     "社区卫生服务中心",
     "实验小学",
     "生活广场",
     "便民服务站",
+    "派出所",
+    "供电所",
+    "文化广场",
 )
+
+
+def generate_local_customer_address(scenario_id: str, address_style: str = "standard_residential") -> str:
+    rng = random.Random(f"{scenario_id}:customer-address")
+    option = rng.choice(COHERENT_ADDRESS_ADMIN_OPTIONS)
+    province = str(option["province"])
+    city = str(option["city"])
+    district = str(option["district"])
+    town = str(option["town"])
+    community = rng.choice(ADDRESS_COMMUNITY_OPTIONS)
+    building_no = rng.randint(1, 18)
+    unit_no = rng.randint(1, 4)
+    floor_no = rng.randint(2, 24)
+    room_suffix = rng.randint(1, 4)
+    room_no = f"{floor_no}{room_suffix:02d}"
+    house_no = rng.randint(8, 168)
+
+    prefix = f"{province}{city}{district}"
+    if address_style == "rural_group_number":
+        village = rng.choice(ADDRESS_VILLAGE_OPTIONS)
+        group_no = rng.randint(1, 8)
+        return f"{prefix}{town}{village}{group_no}组{house_no}号"
+    if address_style == "landmark_poi":
+        poi = rng.choice(ADDRESS_POI_OPTIONS)
+        return f"{prefix}{town}{community}{poi}旁{house_no}号"
+    if address_style == "house_number_only":
+        return f"{prefix}{town}{community}{house_no}号"
+    detail_templates = (
+        f"{community}{building_no}幢{unit_no}单元{room_no}室",
+        f"{community}{building_no}栋{room_no}室",
+        f"{community}{building_no}号楼{unit_no}单元{room_no}室",
+        f"{community}{building_no}座{floor_no}楼{room_no}室",
+        f"{community}{building_no}号楼{floor_no}层{room_no}室",
+        f"{community}{building_no}栋{unit_no}单元{floor_no}楼{room_no}室",
+        f"{community}{building_no}座{room_no}室",
+        f"{community}{house_no}号{building_no}栋{room_no}室",
+    )
+    detail = str(rng.choice(detail_templates))
+    return f"{prefix}{town}{detail}"
 
 
 def _has_meaningful_text(value: Any) -> bool:
@@ -298,6 +648,14 @@ class UserGenerationPlan:
     reply_noise_target: str
     reply_noise_rounds: int
     reply_noise_instruction: str
+
+
+@dataclass(frozen=True)
+class UtteranceReferenceSample:
+    intent: str
+    category: str
+    summary: str
+    original: str
 
 
 class HiddenSettingsRepository:
@@ -382,16 +740,34 @@ class HiddenSettingsTool:
         self.config = config
         self.repository = HiddenSettingsRepository(config.hidden_settings_store)
         self._history_lock = asyncio.Lock()
+        self._utterance_reference_cache: dict[str, Any] | None = None
 
-    def generate_for_scenario(self, scenario: Scenario) -> Scenario:
+    def generate_for_scenario(
+        self,
+        scenario: Scenario,
+        *,
+        use_utterance_reference: bool = False,
+    ) -> Scenario:
         history = self.repository.load()
         rejection_feedback = ""
 
         for attempt in range(1, self.config.hidden_settings_max_attempts + 1):
             generation_plan = self._sample_user_generation_plan()
+            forced_surname = self._sample_forced_surname()
+            utterance_reference = (
+                self._maybe_sample_utterance_reference(scenario)
+                if use_utterance_reference
+                else None
+            )
             payload = self.client.complete_json(
                 model=self.config.user_agent_model,
-                messages=self._build_messages(scenario, rejection_feedback, generation_plan),
+                messages=self._build_messages(
+                    scenario,
+                    rejection_feedback,
+                    generation_plan,
+                    forced_surname=forced_surname,
+                    utterance_reference=utterance_reference,
+                ),
                 temperature=0.95,
             )
             try:
@@ -403,6 +779,7 @@ class HiddenSettingsTool:
             except ValueError as error:
                 rejection_feedback = self._build_validation_feedback(attempt, str(error))
                 continue
+            self._attach_utterance_reference(candidate, utterance_reference)
             self._attach_user_generation_plan(candidate, generation_plan)
             self._attach_second_round_reply_plan(scenario.scenario_id, candidate)
             self._attach_product_routing_plan(scenario, candidate)
@@ -523,40 +900,14 @@ class HiddenSettingsTool:
             )
 
     def _generate_local_customer_address(self, scenario_id: str, address_style: str) -> str:
-        rng = random.Random(f"{scenario_id}:customer-address")
-        use_municipality = rng.random() < 0.18
-        if use_municipality:
-            city = str(rng.choice(tuple(COHERENT_MUNICIPALITY_CITY_DISTRICT_MAP.keys())))
-            province = ""
-            district = str(rng.choice(COHERENT_MUNICIPALITY_CITY_DISTRICT_MAP[city]))
-        else:
-            option = rng.choice(COHERENT_REGION_OPTIONS)
-            province = str(option["province"])
-            city = str(option["city"])
-            district = str(rng.choice(tuple(option["districts"])))
+        return generate_local_customer_address(scenario_id, address_style)
 
-        town = rng.choice(ADDRESS_TOWN_OPTIONS)
-        community = rng.choice(ADDRESS_COMMUNITY_OPTIONS)
-        building_no = rng.randint(1, 18)
-        unit_no = rng.randint(1, 4)
-        floor_no = rng.randint(2, 18)
-        room_suffix = rng.randint(1, 4)
-        room_no = f"{floor_no}{room_suffix:02d}"
-        house_no = rng.randint(8, 168)
-
-        prefix = f"{province}{city}{district}"
-        if address_style == "rural_group_number":
-            village = rng.choice(ADDRESS_VILLAGE_OPTIONS)
-            group_no = rng.randint(1, 8)
-            return f"{prefix}{town}{village}{group_no}组{house_no}号"
-        if address_style == "landmark_poi":
-            poi = rng.choice(ADDRESS_POI_OPTIONS)
-            return f"{prefix}{town}{community}{poi}旁{house_no}号"
-        if address_style == "house_number_only":
-            return f"{prefix}{town}{community}{house_no}号"
-        return f"{prefix}{town}{community}{building_no}幢{unit_no}单元{room_no}室"
-
-    async def generate_for_scenario_async(self, scenario: Scenario) -> Scenario:
+    async def generate_for_scenario_async(
+        self,
+        scenario: Scenario,
+        *,
+        use_utterance_reference: bool = False,
+    ) -> Scenario:
         rejection_feedback = ""
 
         for attempt in range(1, self.config.hidden_settings_max_attempts + 1):
@@ -564,9 +915,21 @@ class HiddenSettingsTool:
                 history = self.repository.load()
 
             generation_plan = self._sample_user_generation_plan()
+            forced_surname = self._sample_forced_surname()
+            utterance_reference = (
+                self._maybe_sample_utterance_reference(scenario)
+                if use_utterance_reference
+                else None
+            )
             payload = await self._complete_json_async(
                 model=self.config.user_agent_model,
-                messages=self._build_messages(scenario, rejection_feedback, generation_plan),
+                messages=self._build_messages(
+                    scenario,
+                    rejection_feedback,
+                    generation_plan,
+                    forced_surname=forced_surname,
+                    utterance_reference=utterance_reference,
+                ),
                 temperature=0.95,
             )
             try:
@@ -578,6 +941,7 @@ class HiddenSettingsTool:
             except ValueError as error:
                 rejection_feedback = self._build_validation_feedback(attempt, str(error))
                 continue
+            self._attach_utterance_reference(candidate, utterance_reference)
             self._attach_user_generation_plan(candidate, generation_plan)
             self._attach_second_round_reply_plan(scenario.scenario_id, candidate)
             self._attach_contact_plan(scenario.scenario_id, candidate)
@@ -659,6 +1023,10 @@ class HiddenSettingsTool:
     def _sample_prompt_surname_examples(cls, scenario_id: str, count: int = 28) -> str:
         return "、".join(cls._stable_sample_text_options(SURNAME_OPTIONS, f"{scenario_id}:surname", count))
 
+    @staticmethod
+    def _sample_forced_surname() -> str:
+        return str(random.choice(SURNAME_OPTIONS))
+
     @classmethod
     def _sample_prompt_region_examples(cls, scenario_id: str, count: int = 18) -> str:
         region_labels = tuple(
@@ -675,6 +1043,9 @@ class HiddenSettingsTool:
         scenario: Scenario,
         rejection_feedback: str,
         generation_plan: UserGenerationPlan,
+        *,
+        forced_surname: str = "",
+        utterance_reference: UtteranceReferenceSample | None = None,
     ) -> list[dict[str, str]]:
         product_name = str(scenario.product.category).strip() or "空气能热水器"
         surname_examples = self._sample_prompt_surname_examples(scenario.scenario_id)
@@ -744,6 +1115,8 @@ class HiddenSettingsTool:
 - 大多数用户应更像普通来电用户，不要总写成创业者、高管、专家或表达特别流畅的人
 - 姓氏请从中国最常用的 50 个姓氏中随机分散采样；除非有特别理由，不要连续生成相似姓氏
 - 姓氏候选池示例（仅示例，不限于此）: {surname_examples}
+- 本次指定姓氏: {forced_surname or '未指定'}
+- 如果本次指定姓氏非空，则 `customer.surname` 必须严格等于该姓氏，`customer.full_name` 也必须以该姓氏开头
 - 全国地址地区池示例（仅示例，要求覆盖全国随机采样）: {region_examples}
 - 本场景用户回复随机性要求: {generation_plan.reply_noise_instruction}
 - 如果收到“与历史样本相似度过高”的反馈，说明这次生成和历史记录太像，需要整体换一版内容
@@ -751,10 +1124,93 @@ class HiddenSettingsTool:
 {rejection_feedback}
 
 请仅返回 JSON。"""
+        if utterance_reference is not None:
+            user_prompt += f"""
+
+参考话术要求：
+- 本次优先参考话术参考库中的{utterance_reference.intent}话术，不要脱离这个主题
+- 参考分类: {utterance_reference.category}
+- 参考总结: {utterance_reference.summary}
+- 参考原话: {utterance_reference.original}
+- 生成时可以改写，但 `request.issue` 必须与参考话术语义一致
+- `desired_resolution` 也要和该参考语义一致，例如报修更偏“安排检查/维修”，报装更偏“安排安装/调试/确认费用/预约时间”
+"""
         return [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
         ]
+
+    def _load_utterance_reference_library(self) -> dict[str, Any]:
+        if self._utterance_reference_cache is not None:
+            return self._utterance_reference_cache
+        path = self.config.utterance_reference_library_path
+        if not path.exists():
+            self._utterance_reference_cache = {}
+            return self._utterance_reference_cache
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        self._utterance_reference_cache = payload if isinstance(payload, dict) else {}
+        return self._utterance_reference_cache
+
+    @staticmethod
+    def _intent_key_for_request_type(request_type: str) -> str:
+        if str(request_type or "").strip() == "installation":
+            return "报装"
+        return "报修"
+
+    def _maybe_sample_utterance_reference(self, scenario: Scenario) -> UtteranceReferenceSample | None:
+        probability = max(0.0, min(1.0, float(self.config.utterance_reference_sample_probability)))
+        if probability <= 0.0 or random.Random().random() >= probability:
+            return None
+        library = self._load_utterance_reference_library()
+        intent_key = self._intent_key_for_request_type(scenario.request.request_type)
+        intent_bucket = library.get(intent_key, {})
+        if not isinstance(intent_bucket, dict):
+            return None
+        available_categories = [
+            str(category).strip()
+            for category, samples in intent_bucket.items()
+            if str(category).strip() and isinstance(samples, list) and samples
+        ]
+        if not available_categories:
+            return None
+        rng = random.Random()
+        category = rng.choice(available_categories)
+        sample = rng.choice(intent_bucket[category])
+        if not isinstance(sample, dict):
+            return None
+        summary = str(sample.get("总结", "")).strip()
+        original = str(sample.get("原话", "")).strip()
+        if not summary and not original:
+            return None
+        return UtteranceReferenceSample(
+            intent=intent_key,
+            category=category,
+            summary=summary,
+            original=original,
+        )
+
+    @staticmethod
+    def _attach_utterance_reference(
+        candidate: dict[str, Any],
+        utterance_reference: UtteranceReferenceSample | None,
+    ) -> None:
+        hidden_context = candidate["hidden_context"]
+        if utterance_reference is None:
+            hidden_context["utterance_reference_source"] = "model"
+            hidden_context.pop("utterance_reference_intent", None)
+            hidden_context.pop("utterance_reference_category", None)
+            hidden_context.pop("utterance_reference_summary", None)
+            hidden_context.pop("utterance_reference_original", None)
+            return
+        hidden_context.update(
+            {
+                "utterance_reference_source": "library",
+                "utterance_reference_intent": utterance_reference.intent,
+                "utterance_reference_category": utterance_reference.category,
+                "utterance_reference_summary": utterance_reference.summary,
+                "utterance_reference_original": utterance_reference.original,
+            }
+        )
 
     def _normalize_generated_payload(
         self,

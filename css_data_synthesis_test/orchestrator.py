@@ -55,7 +55,10 @@ class DialogueOrchestrator:
 
     async def generate_dialogue_async(self, scenario: Scenario) -> DialogueSample:
         if self.auto_generate_hidden_settings:
-            scenario = await self.hidden_settings_tool.generate_for_scenario_async(scenario)
+            scenario = await self.hidden_settings_tool.generate_for_scenario_async(
+                scenario,
+                use_utterance_reference=True,
+            )
         else:
             scenario = self.hidden_settings_tool.hydrate_scenario_locally(scenario)
         if self.show_dialogue_progress:

@@ -29,6 +29,8 @@ def build_config() -> AppConfig:
         data_dir=root,
         output_dir=root,
         hidden_settings_store=root / "hidden_settings_history.jsonl",
+        utterance_reference_library_path=root / "utterance_reference_library.json",
+        utterance_reference_sample_probability=0.9,
         product_routing_enabled=True,
         product_routing_apply_probability=1.0,
         hidden_settings_similarity_threshold=0.82,

@@ -47,8 +47,13 @@ def end_utterance(*, brand: str) -> str:
 
 
 def _parse_time(value: str) -> time:
+    normalized = str(value or "").strip()
+    if not normalized:
+        return time(10, 0, 0)
     try:
-        hour, minute, second = [int(part) for part in str(value).split(":", 2)]
+        if " " in normalized:
+            normalized = normalized.rsplit(" ", 1)[-1]
+        hour, minute, second = [int(part) for part in normalized.split(":", 2)]
         return time(hour, minute, second)
     except Exception:
         return time(10, 0, 0)

@@ -143,58 +143,46 @@ def _known_address_line(payload: dict[str, Any]) -> str:
     return f"已知地址: {known_address}"
 
 
+def _call_start_time_line(payload: dict[str, Any]) -> str:
+    if not isinstance(payload, dict):
+        return "通话开始时间: -"
+    call_start_time = str(payload.get("call_start_time", "")).strip()
+    if not call_start_time:
+        session_config = payload.get("session_config", {})
+        if isinstance(session_config, dict):
+            call_start_time = str(session_config.get("call_start_time", "")).strip()
+    return f"通话开始时间: {call_start_time or '-'}"
+
+
 def _final_slots_lines(payload: dict[str, Any]) -> list[str]:
+    if not isinstance(payload, dict):
+        return []
     collected_slots = payload.get("collected_slots", {})
     if not isinstance(collected_slots, dict) or not collected_slots:
-        return []
-
-    lines = [
+        return ["", "最终槽位: 当前评审库未持久化该字段"]
+    return [
         "",
         f"最终槽位: {json.dumps(collected_slots, ensure_ascii=False, indent=2)}",
     ]
-    missing_slots = payload.get("missing_slots", [])
-    if isinstance(missing_slots, list) and missing_slots:
-        lines.append(f"仍缺失槽位: {json.dumps(missing_slots, ensure_ascii=False)}")
-    return lines
 
 
 def format_review_record_as_cli(record: dict[str, Any], *, show_final_slots: bool = False) -> str:
     payload = record.get("review_payload", {})
-    scenario = payload.get("scenario", {}) if isinstance(payload, dict) else {}
-    product = scenario.get("product", {}) if isinstance(scenario, dict) else {}
-    request = scenario.get("request", {}) if isinstance(scenario, dict) else {}
     review = payload.get("review", {}) if isinstance(payload, dict) else {}
-
-    product_line = " ".join(
-        part
-        for part in (
-            str(product.get("brand", "")).strip(),
-            str(product.get("category", "")).strip(),
-            str(product.get("model", "")).strip(),
-        )
-        if part
-    ) or "-"
-    scenario_id = str(record.get("scenario_id", "")).strip() or str(scenario.get("scenario_id", "")).strip() or "-"
-    request_type = str(request.get("request_type", "")).strip() or "-"
-    rounds_limit = payload.get("rounds_limit")
+    scenario_id = str(record.get("scenario_id", "")).strip() or "-"
 
     lines = [
         f"Session ID: {str(record.get('session_id', '')).strip() or '-'}",
         f"评审账号: {str(record.get('username', '')).strip() or '-'}",
         f"场景: {scenario_id}",
-        f"产品: {product_line}",
-        f"诉求: {request_type}",
+        f"会话状态: {str(record.get('status', '')).strip() or '-'}",
+        f"开始时间: {str(record.get('started_at', '')).strip() or '-'}",
+        f"结束时间: {str(record.get('ended_at', '')).strip() or '-'}",
+        f"评审时间: {str(record.get('reviewed_at', '')).strip() or '-'}",
+        _call_start_time_line(payload if isinstance(payload, dict) else {}),
+        _known_address_line(payload if isinstance(payload, dict) else {}),
+        "",
     ]
-    if rounds_limit not in (None, ""):
-        lines.append(f"轮次上限: {rounds_limit}")
-    lines.extend(
-        [
-            "输出文件: 未启用",
-            "可用命令: /help, /slots, /state, /quit",
-            _known_address_line(payload if isinstance(payload, dict) else {}),
-            "",
-        ]
-    )
 
     transcript = record.get("transcript", [])
     if isinstance(transcript, list) and transcript:
@@ -235,9 +223,8 @@ def format_review_record_as_cli(record: dict[str, Any], *, show_final_slots: boo
                 f"评审备注: {str(review.get('notes', '')).strip() or '-'}",
             ]
         )
-
-    if show_final_slots and isinstance(payload, dict):
-        lines.extend(_final_slots_lines(payload))
+    if show_final_slots:
+        lines.extend(_final_slots_lines(payload if isinstance(payload, dict) else {}))
 
     return "\n".join(lines)
 
@@ -278,7 +265,7 @@ def main() -> None:
     parser.add_argument(
         "--show-final-slots",
         action="store_true",
-        help="仅在 cli 输出时，额外打印会话结束时的最终槽位信息",
+        help="仅在 cli 输出时额外打印最终槽位；其中 address 表示最终收集结果，不等于已知地址配置",
     )
     args = parser.parse_args()
 

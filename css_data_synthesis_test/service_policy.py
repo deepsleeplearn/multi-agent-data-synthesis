@@ -11,6 +11,7 @@ from css_data_synthesis_test.address_utils import (
     MUNICIPALITY_PREFIXES,
     PROVINCE_PREFIXES,
     AddressComponents,
+    comparable_component,
     compact_address_text,
     components_match,
     extract_address_components,
@@ -517,10 +518,7 @@ class ServiceDialoguePolicy:
 
         if intent == "yes":
             slot_updates = dict(slot_updates)
-            if self._interactive_test_freeform_enabled(scenario) and not self._has_known_value(scenario.customer.address):
-                slot_updates["address"] = confirmation_address
-            else:
-                slot_updates["address"] = scenario.customer.address
+            slot_updates["address"] = confirmation_address or scenario.customer.address
             runtime_state.pending_address_confirmation = ""
             merged_slots = dict(collected_slots)
             merged_slots.update(slot_updates)
@@ -831,6 +829,7 @@ class ServiceDialoguePolicy:
             prepared_address,
         )
         address_candidate = self._normalize_address_text(combined_address)
+        combined_components = extract_address_components(combined_address)
         runtime_state.partial_address_candidate = combined_address
 
         if self._can_start_address_confirmation(
@@ -1198,9 +1197,20 @@ class ServiceDialoguePolicy:
         runtime_state.awaiting_satisfaction_rating = False
         return self._appointment_prompt_for_scenario(scenario)
 
+    def _effective_brand_for_service_utterance(self, scenario: Scenario) -> str:
+        base_brand = str(scenario.product.brand or "").strip()
+        hidden_context = scenario.hidden_context if isinstance(scenario.hidden_context, dict) else {}
+        trace = hidden_context.get("product_routing_trace")
+        if not isinstance(trace, list):
+            trace = hidden_context.get("product_routing_plan", {}).get("trace", [])
+        normalized_trace = {str(item or "").strip() for item in trace if str(item or "").strip()}
+        if "brand_series.colmo" in normalized_trace:
+            return "COLMO"
+        return base_brand
+
     def _appointment_prompt_for_scenario(self, scenario: Scenario) -> str:
         return appointment_utterance(
-            brand=scenario.product.brand,
+            brand=self._effective_brand_for_service_utterance(scenario),
             category=self._product_name(scenario),
             request_type=scenario.request.request_type,
             call_start_time=scenario.call_start_time,
@@ -1216,7 +1226,7 @@ class ServiceDialoguePolicy:
         return ask_satisfaction_utterance()
 
     def _end_prompt_for_scenario(self, scenario: Scenario) -> str:
-        return end_utterance(brand=scenario.product.brand)
+        return end_utterance(brand=self._effective_brand_for_service_utterance(scenario))
 
     @staticmethod
     def _extract_satisfaction_score(text: str) -> str:
@@ -1932,14 +1942,6 @@ class ServiceDialoguePolicy:
         if not normalized:
             return address
         components = extract_address_components(address)
-        detail_tokens = [token for token in (components.building, components.unit, components.floor, components.room) if token]
-        if len(detail_tokens) < 2:
-            return address
-
-        token_positions = [normalized.find(cls._normalize_address_text(token)) for token in detail_tokens]
-        if any(position < 0 for position in token_positions) or token_positions == sorted(token_positions):
-            return address
-
         ordered = "".join(
             part
             for part in (
@@ -1956,6 +1958,24 @@ class ServiceDialoguePolicy:
             )
             if part
         )
+        normalized_room = cls._normalize_address_text(components.room)
+        room_digits = re.sub(r"室$", "", normalized_room)
+        if (
+            normalized_room
+            and normalized_room not in normalized
+            and room_digits
+            and normalized.endswith(room_digits)
+            and (components.building or components.unit or components.floor)
+        ):
+            return ordered or address
+        detail_tokens = [token for token in (components.building, components.unit, components.floor, components.room) if token]
+        if len(detail_tokens) < 2:
+            return address
+
+        token_positions = [normalized.find(cls._normalize_address_text(token)) for token in detail_tokens]
+        if any(position < 0 for position in token_positions) or token_positions == sorted(token_positions):
+            return address
+
         return ordered or address
 
     @classmethod
@@ -2124,6 +2144,8 @@ class ServiceDialoguePolicy:
     def _is_complete_address(cls, candidate: str, actual_address: str) -> bool:
         if not candidate:
             return False
+        if cls._requires_city_level_followup(candidate):
+            return False
         normalized_actual = cls._normalize_address_text(actual_address)
         compact_candidate = cls._compact_address_text(candidate)
         compact_actual = cls._compact_address_text(actual_address)
@@ -2165,6 +2187,8 @@ class ServiceDialoguePolicy:
         actual_address = scenario.customer.address
         if self._is_complete_address(normalized_candidate, actual_address):
             return True
+        if self._requires_city_level_followup(candidate):
+            return False
 
         confirmable = (
             self._is_strong_confirmable_address_candidate(candidate)
@@ -2207,6 +2231,13 @@ class ServiceDialoguePolicy:
     def _missing_required_address_precision(cls, candidate: str, actual_address: str) -> list[str]:
         candidate_components = extract_address_components(candidate)
         actual_components = extract_address_components(actual_address)
+        has_landmark_anchor = bool(
+            candidate_components.city
+            and candidate_components.district
+            and cls._has_landmark_delivery_detail(candidate)
+        )
+        if has_landmark_anchor:
+            return []
         missing: list[str] = []
         if actual_components.room and not candidate_components.room:
             missing.append("room")
@@ -2884,6 +2915,27 @@ class ServiceDialoguePolicy:
             and (candidate_has_site_locality or candidate_has_detail)
         ):
             return True
+        if (
+            observed_components.district
+            and not observed_components.city
+            and not observed_components.province
+            and (
+                candidate_components.city
+                or candidate_components.province
+            )
+        ):
+            return True
+        if (
+            observed_components.city
+            and not observed_components.province
+            and not observed_components.district
+            and not observed_has_site_locality
+            and not observed_has_detail
+            and candidate_components.city
+            and comparable_component("city", candidate_components.city)
+            != comparable_component("city", observed_components.city)
+        ):
+            return True
         if observed_has_site_locality and not observed_has_detail and candidate_has_detail:
             return True
         return False
@@ -3333,8 +3385,24 @@ class ServiceDialoguePolicy:
     def _address_has_site_locality(components: AddressComponents) -> bool:
         return bool(components.road or components.community)
 
+    @classmethod
+    def _requires_city_level_followup(cls, candidate: str) -> bool:
+        components = extract_address_components(candidate)
+        return bool(
+            candidate
+            and not components.city
+            and (
+                components.district
+                or components.has_locality
+                or components.has_precise_detail
+                or cls._has_nonstandard_address_detail(candidate)
+            )
+        )
+
     def _address_followup_prompt(self, candidate: str, actual_address: str) -> str:
         components = extract_address_components(candidate)
+        if self._requires_city_level_followup(candidate):
+            return self._address_region_street_followup_prompt()
         if not components.district:
             if components.province or components.city:
                 city = self._address_city_for_followup(candidate, actual_address)

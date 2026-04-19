@@ -35,7 +35,8 @@
    用法：  recent [--days D] [--hours H] [--minutes M]
    示例：  recent --hours 2          # 删除最近 2 小时的记录
            recent --days 1 --hours 6 # 组合；等价于最近 30 小时
-   说明：  --days/--hours/--minutes 至少一个为正；以 UTC 当前时间为参考点。
+   说明：  --days/--hours/--minutes 至少一个为正；generated 以 UTC 计算，
+           reviews 以本地展示时间 `YYYY-MM-DD HH:MM:SS` 计算。
 
 3) older-than     删除"N 段时间之前"的历史记录（时间列 <= now - Δ）
    用法：  older-than [--days D] [--hours H] [--minutes M]
@@ -43,13 +44,14 @@
    说明：  参数语义同 recent；与 recent 互为补集。
 
 4) before         删除某个"绝对时间点"之前的记录（时间列 <= --time）
-   用法：  before --time <ISO>
-   示例：  before --time 2026-03-01T00:00:00
-   说明：  时间格式与入库格式一致（datetime.utcnow().isoformat()，无时区后缀）。
+   用法：  before --time <TIME>
+   示例：  before --time 2026-03-01 08:00:00
+           before --time 2026-03-01T00:00:00
+   说明：  reviews 使用 `YYYY-MM-DD HH:MM:SS`；generated 兼容旧 ISO。
 
 5) after          删除某个"绝对时间点"之后的记录（时间列 >= --time）
-   用法：  after --time <ISO>
-   示例：  after --time 2026-04-18T09:00:00
+   用法：  after --time <TIME>
+   示例：  after --time 2026-04-18 09:00:00
 
 6) all            清空整张表（无 WHERE）
    用法：  all
@@ -73,7 +75,7 @@
     python review_db/delete_records.py --target generated recent --hours 24 --yes
 
     # 删除某个绝对时刻之前的所有评审
-    python review_db/delete_records.py --target reviews before --time 2026-03-01T00:00:00
+    python review_db/delete_records.py --target reviews before --time "2026-03-01 08:00:00"
 
     # 清空整张表（需显式 --yes）
     python review_db/delete_records.py --target reviews --yes all
@@ -125,6 +127,7 @@ class TargetTable:
     table: str
     id_column: str
     time_column: str
+    time_style: str = "iso"
 
 
 OUTPUTS_DIR = Path(__file__).resolve().parent.parent / "outputs"
@@ -136,6 +139,7 @@ TARGETS: dict[str, TargetTable] = {
         table="manual_test_reviews",
         id_column="session_id",
         time_column="reviewed_at",
+        time_style="display",
     ),
     "generated": TargetTable(
         name="generated",
@@ -143,6 +147,7 @@ TARGETS: dict[str, TargetTable] = {
         table="generated_dialogues",
         id_column="dialogue_id",
         time_column="generated_at",
+        time_style="iso",
     ),
 }
 
@@ -241,9 +246,31 @@ def _parse_duration(args: argparse.Namespace) -> timedelta:
     return timedelta(seconds=total_seconds)
 
 
-def _utc_now_iso() -> str:
-    # 与入库侧使用的 datetime.utcnow().isoformat() 对齐：UTC 且无时区后缀
-    return datetime.now(timezone.utc).replace(tzinfo=None).isoformat(timespec="seconds")
+DISPLAY_TIMEZONE = timezone(timedelta(hours=8))
+DISPLAY_TIME_FORMAT = "%Y-%m-%d %H:%M:%S"
+
+
+def _target_cutoff_text(table: TargetTable, duration: timedelta) -> str:
+    if table.time_style == "display":
+        return (datetime.now(DISPLAY_TIMEZONE) - duration).strftime(DISPLAY_TIME_FORMAT)
+    return (datetime.now(timezone.utc).replace(tzinfo=None) - duration).isoformat(timespec="seconds")
+
+
+def _normalize_absolute_time_for_target(table: TargetTable, value: str) -> str:
+    normalized = str(value or "").strip()
+    if not normalized:
+        raise ValueError("时间不能为空")
+    if table.time_style == "display":
+        try:
+            return datetime.fromisoformat(normalized.replace("Z", "+00:00")).astimezone(DISPLAY_TIMEZONE).strftime(
+                DISPLAY_TIME_FORMAT
+            )
+        except ValueError:
+            try:
+                return datetime.strptime(normalized, DISPLAY_TIME_FORMAT).strftime(DISPLAY_TIME_FORMAT)
+            except ValueError as exc:
+                raise ValueError("reviews 库时间格式必须为 YYYY-MM-DD HH:MM:SS，或可被 fromisoformat 解析") from exc
+    return normalized
 
 
 @register_strategy("by-id")
@@ -254,25 +281,27 @@ def _factory_by_id(args: argparse.Namespace) -> DeletionStrategy:
 @register_strategy("recent")
 def _factory_recent(args: argparse.Namespace) -> DeletionStrategy:
     duration = _parse_duration(args)
-    cutoff = (datetime.now(timezone.utc).replace(tzinfo=None) - duration).isoformat(timespec="seconds")
+    cutoff = _target_cutoff_text(TARGETS[args.target], duration)
     return TimeRangeStrategy(lower=cutoff, upper=None, label=f"recent (>= {cutoff})")
 
 
 @register_strategy("older-than")
 def _factory_older_than(args: argparse.Namespace) -> DeletionStrategy:
     duration = _parse_duration(args)
-    cutoff = (datetime.now(timezone.utc).replace(tzinfo=None) - duration).isoformat(timespec="seconds")
+    cutoff = _target_cutoff_text(TARGETS[args.target], duration)
     return TimeRangeStrategy(lower=None, upper=cutoff, label=f"older-than (<= {cutoff})")
 
 
 @register_strategy("before")
 def _factory_before(args: argparse.Namespace) -> DeletionStrategy:
-    return TimeRangeStrategy(lower=None, upper=args.time, label=f"before ({args.time})")
+    normalized = _normalize_absolute_time_for_target(TARGETS[args.target], args.time)
+    return TimeRangeStrategy(lower=None, upper=normalized, label=f"before ({normalized})")
 
 
 @register_strategy("after")
 def _factory_after(args: argparse.Namespace) -> DeletionStrategy:
-    return TimeRangeStrategy(lower=args.time, upper=None, label=f"after ({args.time})")
+    normalized = _normalize_absolute_time_for_target(TARGETS[args.target], args.time)
+    return TimeRangeStrategy(lower=normalized, upper=None, label=f"after ({normalized})")
 
 
 @register_strategy("all")
@@ -366,10 +395,10 @@ def build_parser() -> argparse.ArgumentParser:
         p.add_argument("--minutes", type=int, default=0, help="分钟数（默认 0）")
 
     p_before = sub.add_parser("before", parents=[common], help="删除某个绝对时间之前的记录")
-    p_before.add_argument("--time", required=True, help="ISO 时间，例如 2026-03-01T00:00:00")
+    p_before.add_argument("--time", required=True, help="reviews 用 YYYY-MM-DD HH:MM:SS；generated 可用 ISO")
 
     p_after = sub.add_parser("after", parents=[common], help="删除某个绝对时间之后的记录")
-    p_after.add_argument("--time", required=True, help="ISO 时间，例如 2026-03-01T00:00:00")
+    p_after.add_argument("--time", required=True, help="reviews 用 YYYY-MM-DD HH:MM:SS；generated 可用 ISO")
 
     sub.add_parser("all", parents=[common], help="清空整张表（需配合 --yes）")
 

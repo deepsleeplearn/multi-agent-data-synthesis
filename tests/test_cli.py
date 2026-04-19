@@ -9,13 +9,17 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 
 from css_data_synthesis_test.cli import (
+    MANUAL_CONTACT_PHONE_PREFIXES,
     _configure_manual_test_known_address,
     _hydrate_manual_test_scenario_locally,
+    _mock_manual_contact_phone,
     _manual_test_requires_generated_hidden_settings,
     _resolve_interactive_max_rounds,
+    _utterance_reference_summary_line,
     _validate_output_flags,
     build_parser,
     run_generate_async,
+    run_interactive_test,
 )
 from css_data_synthesis_test.orchestrator import DialogueOrchestrator
 from tests.test_orchestrator import build_scenario
@@ -152,6 +156,7 @@ class CliTests(unittest.TestCase):
             show_persona=False,
             concurrency=None,
             write_output=False,
+            persist_to_db=False,
         )
         config = SimpleNamespace(
             installation_request_probability=0.5,
@@ -177,6 +182,126 @@ class CliTests(unittest.TestCase):
 
         write_jsonl_mock.assert_not_called()
         write_json_mock.assert_not_called()
+
+    def test_utterance_reference_summary_line_formats_library_source(self):
+        line = _utterance_reference_summary_line(
+            {
+                "scenario_id": "fault_case_001",
+                "hidden_context": {
+                    "utterance_reference_source": "library",
+                    "utterance_reference_intent": "报修",
+                    "utterance_reference_category": "不制热 / 无热水",
+                    "utterance_reference_summary": "空气能热水器不出热水",
+                    "utterance_reference_original": "现在一点热水都没有了。",
+                },
+            }
+        )
+
+        self.assertIn("fault_case_001", line)
+        self.assertIn("参考话术库", line)
+        self.assertIn("不制热 / 无热水", line)
+        self.assertIn("现在一点热水都没有了。", line)
+
+    def test_run_generate_async_prints_utterance_reference_summary_when_auto_hidden_enabled(self):
+        args = argparse.Namespace(
+            scenario_file=SimpleNamespace(),
+            count=1,
+            jsonl_output=SimpleNamespace(),
+            json_output=SimpleNamespace(),
+            auto_hidden_settings=True,
+            show_dialogue=False,
+            show_persona=False,
+            concurrency=None,
+            write_output=False,
+            persist_to_db=False,
+        )
+        config = SimpleNamespace(
+            installation_request_probability=0.5,
+            max_concurrency=2,
+        )
+        factory_instance = Mock()
+        factory_instance.load_from_file.return_value = ["scenario"]
+        factory_instance.expand_to_count.return_value = ["scenario"]
+        orchestrator_instance = Mock()
+        orchestrator_instance.generate_dialogues_async = AsyncMock(
+            return_value=[
+                SimpleNamespace(
+                    status="completed",
+                    scenario={
+                        "scenario_id": "fault_case_001",
+                        "hidden_context": {
+                            "utterance_reference_source": "library",
+                            "utterance_reference_intent": "报修",
+                            "utterance_reference_category": "不制热 / 无热水",
+                            "utterance_reference_summary": "空气能热水器不出热水",
+                            "utterance_reference_original": "现在一点热水都没有了。",
+                        },
+                    },
+                )
+            ]
+        )
+        buffer = io.StringIO()
+
+        with patch("css_data_synthesis_test.cli._load_cli_config", return_value=config):
+            with patch("css_data_synthesis_test.cli.ScenarioFactory", return_value=factory_instance):
+                with patch(
+                    "css_data_synthesis_test.cli.DialogueOrchestrator",
+                    return_value=orchestrator_instance,
+                ):
+                    with patch("css_data_synthesis_test.cli.write_jsonl"):
+                        with patch("css_data_synthesis_test.cli.write_json"):
+                            with redirect_stdout(buffer):
+                                asyncio.run(run_generate_async(args))
+
+        output = buffer.getvalue()
+        self.assertIn("话术参考使用情况:", output)
+        self.assertIn("fault_case_001", output)
+        self.assertIn("不制热 / 无热水", output)
+
+    def test_run_interactive_test_uses_utterance_reference_when_auto_hidden_enabled(self):
+        args = argparse.Namespace(
+            scenario_file=SimpleNamespace(),
+            scenario_id="seed_case",
+            scenario_index=0,
+            auto_hidden_settings=True,
+            known_address="",
+            write_output=False,
+            output=None,
+            max_rounds=None,
+            show_address_state=False,
+            hide_address_state=False,
+            show_final_slots=False,
+        )
+        config = SimpleNamespace(
+            service_agent_model="gpt-4o",
+            default_temperature=0.0,
+            service_ok_prefix_probability=0.0,
+            product_routing_enabled=False,
+            product_routing_apply_probability=0.0,
+            max_rounds=6,
+        )
+        scenario = build_scenario()
+        generated_scenario = build_scenario()
+
+        with patch("css_data_synthesis_test.cli._load_cli_config", return_value=config):
+            with patch("css_data_synthesis_test.cli.load_manual_test_scenario", return_value=scenario):
+                with patch("css_data_synthesis_test.cli.HiddenSettingsTool") as tool_cls:
+                    tool_cls.return_value.generate_for_scenario.return_value = generated_scenario
+                    with patch("css_data_synthesis_test.cli.OpenAIChatClient"):
+                        with patch("css_data_synthesis_test.cli.ServiceAgent") as service_agent_cls:
+                            service_agent_cls.return_value.policy = object()
+                            with patch(
+                                "css_data_synthesis_test.cli._configure_manual_test_known_address",
+                                return_value=generated_scenario,
+                            ):
+                                with patch("css_data_synthesis_test.cli.run_manual_test_session") as run_session:
+                                    run_interactive_test(args)
+
+        tool_cls.return_value.generate_for_scenario.assert_called_once_with(
+            scenario,
+            use_utterance_reference=True,
+        )
+        run_session.assert_called_once()
 
     def test_manual_test_requires_generated_hidden_settings_for_placeholder_seed(self):
         scenario = Scenario.from_dict(
@@ -255,9 +380,22 @@ class CliTests(unittest.TestCase):
         self.assertEqual(hydrated.request.issue, "未知")
         self.assertTrue(hydrated.hidden_context["current_call_contactable"])
         self.assertEqual(hydrated.hidden_context["contact_phone_owner"], "本人当前来电")
-        self.assertTrue(str(hydrated.hidden_context["contact_phone"]).startswith("139"))
+        phone = str(hydrated.hidden_context["contact_phone"])
+        self.assertEqual(len(phone), 11)
+        self.assertIn(phone[:3], MANUAL_CONTACT_PHONE_PREFIXES)
         self.assertFalse(hydrated.hidden_context["service_known_address"])
         self.assertEqual(hydrated.hidden_context["address_input_rounds"], [])
+
+    def test_mock_manual_contact_phone_uses_stable_but_generalized_prefixes(self):
+        phone_a = _mock_manual_contact_phone("manual_case_a")
+        phone_b = _mock_manual_contact_phone("manual_case_b")
+
+        self.assertEqual(phone_a, _mock_manual_contact_phone("manual_case_a"))
+        self.assertEqual(len(phone_a), 11)
+        self.assertEqual(len(phone_b), 11)
+        self.assertIn(phone_a[:3], MANUAL_CONTACT_PHONE_PREFIXES)
+        self.assertIn(phone_b[:3], MANUAL_CONTACT_PHONE_PREFIXES)
+        self.assertNotEqual(phone_a, phone_b)
 
     def test_configure_manual_test_known_address_enables_direct_confirmation(self):
         scenario = Scenario.from_dict(build_scenario_payload("manual_known_address_case"))

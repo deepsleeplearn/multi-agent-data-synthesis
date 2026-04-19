@@ -196,6 +196,7 @@ css_data_synthesis_test/
 data/
   seed_scenarios.json
   hidden_settings_history.jsonl
+  utterance_reference_library.json
 frontend/
   server.py
   static/
@@ -290,6 +291,20 @@ SERVICE_AGENT_MODEL=<model-for-service-agent>
 PRODUCT_ROUTING_ENABLED=true
 PRODUCT_ROUTING_APPLY_PROBABILITY=1.0
 ```
+
+隐藏设定生成还支持优先参考本地话术库：
+
+```dotenv
+UTTERANCE_REFERENCE_SAMPLE_PROBABILITY=0.9
+```
+
+说明：
+
+- 参考库默认读取 `data/utterance_reference_library.json`
+- 当前仅在自动生成链路里生效，即 `generate` 和 `generate-hidden-settings`；不用于 `interactive-test` 或前端手工测试
+- 当前会按 `request_type` 映射到 `报修` 或 `报装`
+- 命中概率后，会先随机抽一个分类，再随机抽取该分类下的一条 `总结` / `原话` 作为隐藏设定生成参考
+- 未命中概率或参考库缺失时，仍然直接走模型生成
 
 ### 2. 模式一：自动生成 `generate`
 

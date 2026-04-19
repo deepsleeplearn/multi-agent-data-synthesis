@@ -8,6 +8,7 @@ import traceback
 import uuid
 import hashlib
 import os
+import re
 import secrets
 from datetime import datetime, timedelta, timezone
 from dataclasses import asdict, replace
@@ -30,6 +31,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 try:
+    from css_data_synthesis_test.address_utils import extract_address_components
     from css_data_synthesis_test.agents import ServiceAgent
     from css_data_synthesis_test.cli import (
         _hydrate_manual_test_scenario_locally,
@@ -37,7 +39,10 @@ try:
         _resolve_interactive_max_rounds,
     )
     from css_data_synthesis_test.config import load_config
-    from css_data_synthesis_test.hidden_settings_tool import HiddenSettingsTool
+    from css_data_synthesis_test.hidden_settings_tool import (
+        HiddenSettingsTool,
+        generate_local_customer_address,
+    )
     from css_data_synthesis_test.llm import OpenAIChatClient
     from css_data_synthesis_test.manual_test import (
         MANUAL_TEST_EXIT_COMMANDS,
@@ -66,7 +71,7 @@ try:
         Scenario,
         effective_required_slots,
     )
-    from css_data_synthesis_test.service_policy import ServiceRuntimeState
+    from css_data_synthesis_test.service_policy import ServiceDialoguePolicy, ServiceRuntimeState
 except ImportError as exc:  # pragma: no cover
     print(f"Error: Could not import core modules. {exc}")
     print(f"sys.path: {sys.path}")
@@ -76,6 +81,8 @@ app = FastAPI(title="Multi-Agent Data Synthesis Frontend")
 AUTH_SESSION_COOKIE = "frontend_auth_session"
 AUTH_SESSION_TTL = timedelta(hours=12)
 DEFAULT_REGISTERED_ACCOUNTS_FILE = PROJECT_ROOT / "frontend" / "registered_accounts.local.json"
+DISPLAY_TIMEZONE = timezone(timedelta(hours=8))
+DISPLAY_TIME_FORMAT = "%Y-%m-%d %H:%M:%S"
 
 try:
     config = replace(load_config(), hidden_settings_store=None)
@@ -90,7 +97,10 @@ except Exception as exc:  # pragma: no cover
 sessions: dict[str, dict[str, Any]] = {}
 auth_sessions: dict[str, dict[str, Any]] = {}
 SESSION_REVIEW_DB_PATH = PROJECT_ROOT / "outputs" / "frontend_manual_test.sqlite3"
-SESSION_REVIEW_DB_LOCK = threading.Lock()
+SESSION_REVIEW_DB_LOCK = threading.RLock()
+_SESSION_REVIEW_DB_STATE_PATH: Path | None = None
+_SESSION_REVIEW_DB_SCHEMA_READY = False
+_SESSION_REVIEW_DB_NORMALIZED = False
 SESSION_REDIS_URL = os.getenv("FRONTEND_SESSION_REDIS_URL", "").strip()
 SESSION_REDIS_TTL_SECONDS = int(os.getenv("FRONTEND_SESSION_REDIS_TTL_SECONDS", "43200") or "43200")
 FLOW_REVIEW_OPTIONS = [
@@ -139,6 +149,8 @@ class StartSessionRequest(BaseModel):
     scenario_index: int = 0
     auto_generate_hidden_settings: bool = False
     known_address: str = ""
+    call_start_time: str = ""
+    use_session_start_time_as_call_start_time: bool = False
     max_rounds: int | None = None
     persist_to_db: bool = False
 
@@ -179,8 +191,158 @@ def _registered_accounts_file() -> Path:
     return DEFAULT_REGISTERED_ACCOUNTS_FILE
 
 
-def _utc_now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+def _current_display_timestamp() -> str:
+    return datetime.now(DISPLAY_TIMEZONE).strftime(DISPLAY_TIME_FORMAT)
+
+
+def _normalize_display_timestamp(value: str) -> str:
+    normalized = str(value or "").strip()
+    if not normalized:
+        return ""
+    try:
+        return datetime.strptime(normalized, DISPLAY_TIME_FORMAT).strftime(DISPLAY_TIME_FORMAT)
+    except ValueError:
+        pass
+
+    iso_candidate = normalized.replace("Z", "+00:00")
+    try:
+        parsed = datetime.fromisoformat(iso_candidate)
+    except ValueError:
+        return normalized
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=DISPLAY_TIMEZONE)
+    else:
+        parsed = parsed.astimezone(DISPLAY_TIMEZONE)
+    return parsed.strftime(DISPLAY_TIME_FORMAT)
+
+
+def _normalize_manual_call_start_time(value: str) -> str:
+    normalized = str(value or "").strip()
+    if not normalized:
+        return ""
+    try:
+        return datetime.strptime(normalized, DISPLAY_TIME_FORMAT).strftime(DISPLAY_TIME_FORMAT)
+    except ValueError as exc:
+        raise ValueError("通话开始时间格式必须为 YYYY-MM-DD HH:MM:SS。") from exc
+
+
+def _coerce_scenario_call_start_time_to_display(value: str) -> str:
+    normalized = str(value or "").strip()
+    if not normalized:
+        return ""
+    try:
+        return datetime.strptime(normalized, DISPLAY_TIME_FORMAT).strftime(DISPLAY_TIME_FORMAT)
+    except ValueError:
+        pass
+    iso_candidate = normalized.replace("Z", "+00:00")
+    try:
+        parsed = datetime.fromisoformat(iso_candidate)
+    except ValueError:
+        parsed = None
+    if parsed is not None:
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=DISPLAY_TIMEZONE)
+        else:
+            parsed = parsed.astimezone(DISPLAY_TIMEZONE)
+        return parsed.strftime(DISPLAY_TIME_FORMAT)
+    try:
+        parsed_time = datetime.strptime(normalized, "%H:%M:%S")
+    except ValueError:
+        return ""
+    current_date = datetime.now(DISPLAY_TIMEZONE).strftime("%Y-%m-%d")
+    return f"{current_date} {parsed_time.strftime('%H:%M:%S')}"
+
+
+def _compact_review_payload_json(
+    *,
+    session_id: str,
+    scenario_id: str,
+    username: str,
+    status: str,
+    aborted_reason: str,
+    started_at: str,
+    ended_at: str,
+    reviewed_at: str,
+    review_payload_text: str,
+    failed_flow_stage: str,
+    reviewer_notes: str,
+    persist_to_db: bool,
+    is_correct: bool,
+    collected_slots: dict[str, Any] | None = None,
+    call_start_time: str = "",
+    session_config: dict[str, Any] | None = None,
+) -> str:
+    payload_text = str(review_payload_text or "").strip()
+    payload: dict[str, Any] = {}
+    try:
+        parsed = json.loads(payload_text) if payload_text else {}
+    except json.JSONDecodeError:
+        parsed = {}
+    if isinstance(parsed, dict):
+        payload = parsed
+
+    transcript = payload.get("transcript", [])
+    if not isinstance(transcript, list):
+        transcript = []
+    review = payload.get("review", {})
+    if not isinstance(review, dict):
+        review = {}
+    payload_collected_slots = payload.get("collected_slots", {})
+    if not isinstance(payload_collected_slots, dict):
+        payload_collected_slots = {}
+    payload_session_config = payload.get("session_config", {})
+    if not isinstance(payload_session_config, dict):
+        payload_session_config = {}
+    effective_collected_slots = dict(payload_collected_slots)
+    if isinstance(collected_slots, dict):
+        effective_collected_slots = {str(key): str(value).strip() for key, value in collected_slots.items()}
+    effective_call_start_time = (
+        str(call_start_time or "").strip()
+        or str(payload.get("call_start_time", "")).strip()
+        or str(payload_session_config.get("call_start_time", "")).strip()
+    )
+    effective_session_config = dict(payload_session_config)
+    if isinstance(session_config, dict):
+        effective_session_config.update(session_config)
+
+    compact_session_config: dict[str, Any] = {}
+    known_address = str(effective_session_config.get("known_address", "")).strip()
+    if known_address:
+        compact_session_config["known_address"] = known_address
+    if effective_call_start_time:
+        compact_session_config["call_start_time"] = effective_call_start_time
+    if "use_session_start_time_as_call_start_time" in effective_session_config:
+        compact_session_config["use_session_start_time_as_call_start_time"] = bool(
+            effective_session_config.get("use_session_start_time_as_call_start_time", False)
+        )
+    if "auto_generate_hidden_settings" in effective_session_config:
+        compact_session_config["auto_generate_hidden_settings"] = bool(
+            effective_session_config.get("auto_generate_hidden_settings", False)
+        )
+
+    compact_payload = {
+        "session_id": str(session_id or "").strip(),
+        "scenario_id": str(scenario_id or "").strip(),
+        "username": str(username or "").strip() or str(payload.get("username", "")).strip() or str(review.get("username", "")).strip(),
+        "status": str(status or "").strip(),
+        "aborted_reason": str(aborted_reason or "").strip(),
+        "started_at": _normalize_display_timestamp(started_at),
+        "ended_at": _normalize_display_timestamp(ended_at),
+        "reviewed_at": _normalize_display_timestamp(reviewed_at),
+        "call_start_time": effective_call_start_time,
+        "collected_slots": effective_collected_slots,
+        "transcript": transcript,
+        "review": {
+            "username": str(username or "").strip() or str(review.get("username", "")).strip(),
+            "is_correct": bool(is_correct),
+            "failed_flow_stage": str(failed_flow_stage or "").strip(),
+            "notes": str(reviewer_notes or "").strip(),
+            "persist_to_db": bool(persist_to_db),
+        },
+    }
+    if compact_session_config:
+        compact_payload["session_config"] = compact_session_config
+    return json.dumps(compact_payload, ensure_ascii=False)
 
 
 def _load_registered_accounts() -> dict[str, dict[str, Any]]:
@@ -362,6 +524,18 @@ def _apply_known_address(scenario: Scenario, known_address: str) -> tuple[Scenar
     )
 
 
+def _resolve_manual_call_start_time(req: StartSessionRequest, scenario: Scenario) -> str:
+    if bool(req.use_session_start_time_as_call_start_time):
+        return _current_display_timestamp()
+
+    provided = _normalize_manual_call_start_time(req.call_start_time)
+    if provided:
+        return provided
+
+    scenario_value = _coerce_scenario_call_start_time_to_display(scenario.call_start_time)
+    return scenario_value or _current_display_timestamp()
+
+
 def _prepare_manual_test_scenario(req: StartSessionRequest) -> tuple[Scenario, str, int]:
     scenario = _resolve_scenario(
         scenario_id=req.scenario_id,
@@ -372,10 +546,14 @@ def _prepare_manual_test_scenario(req: StartSessionRequest) -> tuple[Scenario, s
         if not config.openai_api_key or "YOUR_API_KEY" in config.openai_api_key:
             raise ValueError("未配置 OPENAI_API_KEY，请检查 .env 文件。")
         tool = HiddenSettingsTool(llm_client, config)
-        scenario = tool.generate_for_scenario(scenario)
+        scenario = tool.generate_for_scenario(
+            scenario,
+            use_utterance_reference=True,
+        )
     elif _manual_test_requires_generated_hidden_settings(scenario):
         scenario = _hydrate_manual_test_scenario_locally(scenario)
 
+    scenario = scenario.with_call_start_time(_resolve_manual_call_start_time(req, scenario))
     scenario, known_address_notice = _apply_known_address(scenario, req.known_address)
     scenario.hidden_context["interactive_test_freeform"] = True
     ensure_product_routing_plan(
@@ -464,7 +642,7 @@ def _mark_session_closed(
     session["status"] = status
     session["aborted_reason"] = aborted_reason
     if not session.get("ended_at"):
-        session["ended_at"] = _utc_now_iso()
+        session["ended_at"] = _current_display_timestamp()
 
 
 def _review_prompt_payload(session: dict[str, Any]) -> dict[str, Any]:
@@ -723,6 +901,70 @@ def _copy_terminal_entries(entries: list[dict[str, Any]]) -> list[dict[str, Any]
     return [dict(entry) for entry in entries]
 
 
+def _address_runtime_state_snapshot(
+    *,
+    scenario: Scenario,
+    runtime_state: ServiceRuntimeState,
+    collected_slots: dict[str, str],
+) -> dict[str, Any]:
+    current_candidate = (
+        str(runtime_state.pending_address_confirmation or "").strip()
+        or str(runtime_state.partial_address_candidate or "").strip()
+        or str(collected_slots.get("address", "")).strip()
+    )
+    if not current_candidate:
+        return {}
+
+    components = extract_address_components(current_candidate)
+    landmark_candidate = current_candidate
+    for token in (
+        components.province,
+        components.city,
+        components.district,
+        components.town,
+        components.road,
+        components.community,
+        components.building,
+        components.unit,
+        components.floor,
+        components.room,
+    ):
+        if token:
+            landmark_candidate = landmark_candidate.replace(token, "", 1)
+    landmark_candidate = landmark_candidate.strip("，,。！？!?；;：:、 ")
+    return {
+        "address_current_candidate": current_candidate,
+        "address_collected_value": str(collected_slots.get("address", "")).strip(),
+        "address_slot_province": components.province,
+        "address_slot_city": components.city,
+        "address_slot_district": components.district,
+        "address_slot_town": components.town,
+        "address_slot_road": components.road,
+        "address_slot_community": components.community,
+        "address_slot_building": components.building,
+        "address_slot_unit": components.unit,
+        "address_slot_floor": components.floor,
+        "address_slot_room": components.room,
+        "address_slot_landmark": landmark_candidate,
+        "address_missing_required_precision": ServiceDialoguePolicy._missing_required_address_precision(
+            current_candidate,
+            scenario.customer.address,
+        ),
+    }
+
+
+def _build_runtime_state_view(session: dict[str, Any]) -> dict[str, Any]:
+    runtime_state = asdict(session["runtime_state"])
+    runtime_state.update(
+        _address_runtime_state_snapshot(
+            scenario=session["scenario"],
+            runtime_state=session["runtime_state"],
+            collected_slots=session["collected_slots"],
+        )
+    )
+    return runtime_state
+
+
 def _build_session_view(session_id: str, session: dict[str, Any]) -> dict[str, Any]:
     transcript = session["transcript"]
     return {
@@ -731,9 +973,11 @@ def _build_session_view(session_id: str, session: dict[str, Any]) -> dict[str, A
         "session_config": dict(session.get("session_config", {})),
         "required_slots": list(session["required_slots"]),
         "collected_slots": dict(session["collected_slots"]),
-        "runtime_state": asdict(session["runtime_state"]),
+        "runtime_state": _build_runtime_state_view(session),
         "rounds_limit": session["rounds_limit"],
         "status": session["status"],
+        "started_at": str(session.get("started_at", "")).strip(),
+        "ended_at": str(session.get("ended_at", "")).strip(),
         "session_closed": session["status"] != "active",
         "next_round_index": _next_round_index(transcript),
         "completed_rounds": _completed_round_count(transcript),
@@ -773,35 +1017,177 @@ def _review_table_columns(conn: sqlite3.Connection) -> set[str]:
     return {str(row[1]).strip() for row in rows}
 
 
-def _ensure_review_database() -> None:
-    SESSION_REVIEW_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with SESSION_REVIEW_DB_LOCK:
-        with sqlite3.connect(SESSION_REVIEW_DB_PATH, timeout=10.0) as conn:
-            conn.execute("PRAGMA journal_mode=WAL")
-            conn.execute("PRAGMA synchronous=NORMAL")
-            conn.execute("PRAGMA busy_timeout=10000")
+def _review_db_is_corrupt_error(exc: Exception) -> bool:
+    message = str(exc or "").lower()
+    return "database disk image is malformed" in message or "malformed" in message or "file is not a database" in message
+
+
+def _review_db_state_guard() -> None:
+    global _SESSION_REVIEW_DB_STATE_PATH, _SESSION_REVIEW_DB_SCHEMA_READY, _SESSION_REVIEW_DB_NORMALIZED
+    current_path = SESSION_REVIEW_DB_PATH.resolve()
+    if _SESSION_REVIEW_DB_STATE_PATH != current_path:
+        _SESSION_REVIEW_DB_STATE_PATH = current_path
+        _SESSION_REVIEW_DB_SCHEMA_READY = False
+        _SESSION_REVIEW_DB_NORMALIZED = False
+
+
+def _review_db_sidecar_paths() -> list[Path]:
+    return [
+        SESSION_REVIEW_DB_PATH,
+        Path(f"{SESSION_REVIEW_DB_PATH}-wal"),
+        Path(f"{SESSION_REVIEW_DB_PATH}-shm"),
+    ]
+
+
+def _mark_review_db_unready() -> None:
+    global _SESSION_REVIEW_DB_SCHEMA_READY, _SESSION_REVIEW_DB_NORMALIZED
+    _SESSION_REVIEW_DB_SCHEMA_READY = False
+    _SESSION_REVIEW_DB_NORMALIZED = False
+
+
+def _archive_corrupt_review_database_locked(reason: str) -> list[Path]:
+    archived_paths: list[Path] = []
+    timestamp = datetime.now(DISPLAY_TIMEZONE).strftime("%Y%m%d_%H%M%S")
+    normalized_reason = re.sub(r"[^a-z0-9_]+", "_", str(reason or "").lower()).strip("_") or "corrupt"
+    for original_path in _review_db_sidecar_paths():
+        if not original_path.exists():
+            continue
+        archived_path = original_path.with_name(f"{original_path.name}.{normalized_reason}_{timestamp}")
+        counter = 1
+        while archived_path.exists():
+            archived_path = original_path.with_name(f"{original_path.name}.{normalized_reason}_{timestamp}_{counter}")
+            counter += 1
+        original_path.rename(archived_path)
+        archived_paths.append(archived_path)
+    return archived_paths
+
+
+def _open_review_db_connection() -> sqlite3.Connection:
+    conn = sqlite3.connect(SESSION_REVIEW_DB_PATH, timeout=15.0, isolation_level=None)
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA synchronous=NORMAL")
+    conn.execute("PRAGMA busy_timeout=15000")
+    return conn
+
+
+def _normalize_review_database_locked(conn: sqlite3.Connection) -> None:
+    global _SESSION_REVIEW_DB_NORMALIZED
+    if _SESSION_REVIEW_DB_NORMALIZED:
+        return
+    rows = conn.execute(
+        """
+        SELECT session_id, scenario_id, username, status, aborted_reason, is_correct,
+               failed_flow_stage, reviewer_notes, persist_to_db,
+               started_at, ended_at, reviewed_at, review_payload_json
+        FROM manual_test_reviews
+        """
+    ).fetchall()
+    for (
+        session_id,
+        scenario_id,
+        username,
+        status,
+        aborted_reason,
+        is_correct,
+        failed_flow_stage,
+        reviewer_notes,
+        persist_to_db,
+        started_at,
+        ended_at,
+        reviewed_at,
+        review_payload_json,
+    ) in rows:
+        normalized_started_at = _normalize_display_timestamp(started_at)
+        normalized_ended_at = _normalize_display_timestamp(ended_at)
+        normalized_reviewed_at = _normalize_display_timestamp(reviewed_at)
+        normalized_payload = _compact_review_payload_json(
+            session_id=str(session_id or "").strip(),
+            scenario_id=str(scenario_id or "").strip(),
+            username=str(username or "").strip(),
+            status=str(status or "").strip(),
+            aborted_reason=str(aborted_reason or "").strip(),
+            started_at=str(started_at or "").strip(),
+            ended_at=str(ended_at or "").strip(),
+            reviewed_at=str(reviewed_at or "").strip(),
+            review_payload_text=str(review_payload_json or ""),
+            failed_flow_stage=str(failed_flow_stage or "").strip(),
+            reviewer_notes=str(reviewer_notes or "").strip(),
+            persist_to_db=bool(persist_to_db),
+            is_correct=bool(is_correct),
+        )
+        if (
+            normalized_started_at != str(started_at or "")
+            or normalized_ended_at != str(ended_at or "")
+            or normalized_reviewed_at != str(reviewed_at or "")
+            or normalized_payload != str(review_payload_json or "")
+        ):
             conn.execute(
                 """
-                CREATE TABLE IF NOT EXISTS manual_test_reviews (
-                    session_id TEXT PRIMARY KEY,
-                    scenario_id TEXT NOT NULL,
-                    username TEXT,
-                    status TEXT NOT NULL,
-                    aborted_reason TEXT NOT NULL,
-                    is_correct INTEGER NOT NULL,
-                    failed_flow_stage TEXT NOT NULL,
-                    reviewer_notes TEXT NOT NULL,
-                    persist_to_db INTEGER NOT NULL,
-                    started_at TEXT NOT NULL,
-                    ended_at TEXT NOT NULL,
-                    reviewed_at TEXT NOT NULL,
-                    review_payload_json TEXT NOT NULL
-                )
-                """
+                UPDATE manual_test_reviews
+                SET started_at = ?, ended_at = ?, reviewed_at = ?, review_payload_json = ?
+                WHERE session_id = ?
+                """,
+                (
+                    normalized_started_at,
+                    normalized_ended_at,
+                    normalized_reviewed_at,
+                    normalized_payload,
+                    session_id,
+                ),
             )
-            if "username" not in _review_table_columns(conn):
-                conn.execute("ALTER TABLE manual_test_reviews ADD COLUMN username TEXT")
-            conn.commit()
+    _SESSION_REVIEW_DB_NORMALIZED = True
+
+
+def _ensure_review_database() -> None:
+    global _SESSION_REVIEW_DB_SCHEMA_READY
+    SESSION_REVIEW_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with SESSION_REVIEW_DB_LOCK:
+        _review_db_state_guard()
+        if _SESSION_REVIEW_DB_SCHEMA_READY:
+            return
+        retry_after_reset = True
+        while True:
+            conn: sqlite3.Connection | None = None
+            try:
+                conn = _open_review_db_connection()
+                conn.execute("BEGIN IMMEDIATE")
+                conn.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS manual_test_reviews (
+                        session_id TEXT PRIMARY KEY,
+                        scenario_id TEXT NOT NULL,
+                        username TEXT,
+                        status TEXT NOT NULL,
+                        aborted_reason TEXT NOT NULL,
+                        is_correct INTEGER NOT NULL,
+                        failed_flow_stage TEXT NOT NULL,
+                        reviewer_notes TEXT NOT NULL,
+                        persist_to_db INTEGER NOT NULL,
+                        started_at TEXT NOT NULL,
+                        ended_at TEXT NOT NULL,
+                        reviewed_at TEXT NOT NULL,
+                        review_payload_json TEXT NOT NULL
+                    )
+                    """
+                )
+                if "username" not in _review_table_columns(conn):
+                    conn.execute("ALTER TABLE manual_test_reviews ADD COLUMN username TEXT")
+                _normalize_review_database_locked(conn)
+                conn.commit()
+                _SESSION_REVIEW_DB_SCHEMA_READY = True
+                return
+            except sqlite3.DatabaseError as exc:
+                if conn is not None:
+                    conn.rollback()
+                if retry_after_reset and _review_db_is_corrupt_error(exc):
+                    _archive_corrupt_review_database_locked("malformed")
+                    _mark_review_db_unready()
+                    retry_after_reset = False
+                    continue
+                raise
+            finally:
+                if conn is not None:
+                    conn.close()
 
 
 def _persist_review_result(
@@ -815,9 +1201,27 @@ def _persist_review_result(
     persist_to_db: bool,
 ) -> None:
     _ensure_review_database()
+    session_config = dict(session.get("session_config", {}))
+    effective_known_address = str(session_config.get("known_address", "")).strip()
+    if not effective_known_address:
+        hidden_context = session["scenario"].hidden_context if isinstance(session["scenario"].hidden_context, dict) else {}
+        generated_known_address = str(hidden_context.get("service_known_address_value", "")).strip()
+        if bool(hidden_context.get("service_known_address", False)) and generated_known_address:
+            effective_known_address = generated_known_address
+    if effective_known_address:
+        session_config["known_address"] = effective_known_address
+    session_config["call_start_time"] = str(session["scenario"].call_start_time).strip()
     review_payload = {
-        **_session_snapshot(session_id, session),
+        "session_id": session_id,
+        "scenario_id": session["scenario"].scenario_id,
         "username": username,
+        "status": session["status"],
+        "aborted_reason": session.get("aborted_reason", ""),
+        "started_at": str(session.get("started_at", "")).strip(),
+        "ended_at": str(session.get("ended_at", "")).strip(),
+        "call_start_time": str(session["scenario"].call_start_time).strip(),
+        "collected_slots": dict(session.get("collected_slots", {})),
+        "transcript": _serialize_transcript(session["transcript"]),
         "review": {
             "username": username,
             "is_correct": is_correct,
@@ -826,60 +1230,78 @@ def _persist_review_result(
             "persist_to_db": persist_to_db,
         },
     }
-    reviewed_at = _utc_now_iso()
+    if session_config:
+        review_payload["session_config"] = session_config
+    reviewed_at = _current_display_timestamp()
     with SESSION_REVIEW_DB_LOCK:
-        with sqlite3.connect(SESSION_REVIEW_DB_PATH, timeout=10.0) as conn:
-            conn.execute("PRAGMA journal_mode=WAL")
-            conn.execute("PRAGMA synchronous=NORMAL")
-            conn.execute("PRAGMA busy_timeout=10000")
-            conn.execute(
-                """
-                INSERT INTO manual_test_reviews (
-                    session_id,
-                    scenario_id,
-                    username,
-                    status,
-                    aborted_reason,
-                    is_correct,
-                    failed_flow_stage,
-                    reviewer_notes,
-                    persist_to_db,
-                    started_at,
-                    ended_at,
-                    reviewed_at,
-                    review_payload_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(session_id) DO UPDATE SET
-                    scenario_id=excluded.scenario_id,
-                    username=excluded.username,
-                    status=excluded.status,
-                    aborted_reason=excluded.aborted_reason,
-                    is_correct=excluded.is_correct,
-                    failed_flow_stage=excluded.failed_flow_stage,
-                    reviewer_notes=excluded.reviewer_notes,
-                    persist_to_db=excluded.persist_to_db,
-                    started_at=excluded.started_at,
-                    ended_at=excluded.ended_at,
-                    reviewed_at=excluded.reviewed_at,
-                    review_payload_json=excluded.review_payload_json
-                """,
-                (
-                    session_id,
-                    review_payload["scenario_id"],
-                    username,
-                    review_payload["status"],
-                    review_payload["aborted_reason"],
-                    1 if is_correct else 0,
-                    failed_flow_stage,
-                    notes,
-                    1 if persist_to_db else 0,
-                    review_payload["started_at"],
-                    review_payload["ended_at"],
-                    reviewed_at,
-                    json.dumps(review_payload, ensure_ascii=False),
-                ),
-            )
-            conn.commit()
+        retry_after_reset = True
+        while True:
+            conn: sqlite3.Connection | None = None
+            try:
+                _ensure_review_database()
+                conn = _open_review_db_connection()
+                conn.execute("BEGIN IMMEDIATE")
+                conn.execute(
+                    """
+                    INSERT INTO manual_test_reviews (
+                        session_id,
+                        scenario_id,
+                        username,
+                        status,
+                        aborted_reason,
+                        is_correct,
+                        failed_flow_stage,
+                        reviewer_notes,
+                        persist_to_db,
+                        started_at,
+                        ended_at,
+                        reviewed_at,
+                        review_payload_json
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(session_id) DO UPDATE SET
+                        scenario_id=excluded.scenario_id,
+                        username=excluded.username,
+                        status=excluded.status,
+                        aborted_reason=excluded.aborted_reason,
+                        is_correct=excluded.is_correct,
+                        failed_flow_stage=excluded.failed_flow_stage,
+                        reviewer_notes=excluded.reviewer_notes,
+                        persist_to_db=excluded.persist_to_db,
+                        started_at=excluded.started_at,
+                        ended_at=excluded.ended_at,
+                        reviewed_at=excluded.reviewed_at,
+                        review_payload_json=excluded.review_payload_json
+                    """,
+                    (
+                        session_id,
+                        review_payload["scenario_id"],
+                        username,
+                        review_payload["status"],
+                        review_payload["aborted_reason"],
+                        1 if is_correct else 0,
+                        failed_flow_stage,
+                        notes,
+                        1 if persist_to_db else 0,
+                        review_payload["started_at"],
+                        review_payload["ended_at"],
+                        reviewed_at,
+                        json.dumps(review_payload, ensure_ascii=False),
+                    ),
+                )
+                conn.commit()
+                return
+            except sqlite3.DatabaseError as exc:
+                if conn is not None:
+                    conn.rollback()
+                if retry_after_reset and _review_db_is_corrupt_error(exc):
+                    _archive_corrupt_review_database_locked("malformed")
+                    _mark_review_db_unready()
+                    retry_after_reset = False
+                    continue
+                raise
+            finally:
+                if conn is not None:
+                    conn.close()
 
 
 @app.get("/api/auth/me")
@@ -954,6 +1376,38 @@ def list_scenarios(current_user: dict[str, str] = Depends(_require_authenticated
         raise HTTPException(status_code=500, detail=f"加载场景列表失败: {exc}") from exc
 
 
+@app.get("/api/mock-known-address")
+def get_mock_known_address(
+    scenario_id: str = "",
+    current_user: dict[str, str] = Depends(_require_authenticated_user),
+):
+    _ = current_user
+    seed = scenario_id or "manual-test"
+    address = generate_local_customer_address(
+        f"{seed}:frontend-known-address:{secrets.token_hex(8)}",
+        "standard_residential",
+    )
+    return {"known_address": address}
+
+
+@app.get("/api/reference/fault-issue-categories")
+def get_fault_issue_categories(
+    current_user: dict[str, str] = Depends(_require_authenticated_user),
+):
+    _ = current_user
+    library_path = config.data_dir / "utterance_reference_library.json"
+    if not library_path.exists():
+        raise HTTPException(status_code=404, detail="未找到话术参考库文件。")
+
+    payload = json.loads(library_path.read_text(encoding="utf-8"))
+    repair_bucket = payload.get("报修", {}) if isinstance(payload, dict) else {}
+    if not isinstance(repair_bucket, dict):
+        return {"categories": []}
+
+    categories = [str(key).strip() for key in repair_bucket.keys() if str(key).strip()]
+    return {"categories": categories}
+
+
 @app.post("/api/session/start")
 def start_session(
     req: StartSessionRequest,
@@ -987,12 +1441,14 @@ def start_session(
             "rounds_limit": rounds_limit,
             "status": "active",
             "aborted_reason": "",
-            "started_at": _utc_now_iso(),
+            "started_at": _current_display_timestamp(),
             "ended_at": "",
             "review_submitted": False,
             "session_config": {
                 "scenario_id": scenario.scenario_id,
                 "known_address": _sanitize_manual_user_text(req.known_address),
+                "call_start_time": scenario.call_start_time,
+                "use_session_start_time_as_call_start_time": bool(req.use_session_start_time_as_call_start_time),
                 "max_rounds": req.max_rounds,
                 "auto_generate_hidden_settings": bool(req.auto_generate_hidden_settings),
                 "persist_to_db": bool(req.persist_to_db),
@@ -1299,7 +1755,7 @@ def review_session(
         "failed_flow_stage": failed_flow_stage,
         "notes": notes,
         "persist_to_db": bool(req.persist_to_db),
-        "reviewed_at": _utc_now_iso(),
+        "reviewed_at": _current_display_timestamp(),
     }
     _persist_session(req.session_id, session)
     return {

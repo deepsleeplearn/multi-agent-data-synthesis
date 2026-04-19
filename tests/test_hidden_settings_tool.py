@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import json
 import random
 import re
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
 
@@ -11,6 +13,7 @@ from css_data_synthesis_test.address_utils import extract_address_components
 from css_data_synthesis_test.config import AppConfig
 from css_data_synthesis_test.dialogue_plans import decide_second_round_reply_strategy
 from css_data_synthesis_test.hidden_settings_tool import (
+    COHERENT_ADDRESS_ADMIN_OPTIONS,
     COHERENT_MUNICIPALITY_CITY_DISTRICT_MAP,
     COHERENT_MUNICIPALITY_OPTIONS,
     COHERENT_REGION_CITY_DISTRICT_MAP,
@@ -18,7 +21,9 @@ from css_data_synthesis_test.hidden_settings_tool import (
     HiddenSettingsRepository,
     HiddenSettingsTool,
     SURNAME_OPTIONS,
+    UtteranceReferenceSample,
     UserGenerationPlan,
+    generate_local_customer_address,
 )
 from css_data_synthesis_test.prompts import build_user_agent_messages, next_address_input_value
 from css_data_synthesis_test.schemas import DialogueTurn, Scenario
@@ -42,6 +47,7 @@ class SequenceFakeClient:
 def build_config(
     store_path: Path,
     *,
+    utterance_reference_sample_probability: float = 0.0,
     installation_request_probability: float = 0.5,
     hidden_settings_multi_fault_probability: float = 0.1,
     second_round_include_issue_probability: float = 0.5,
@@ -154,6 +160,8 @@ def build_config(
         data_dir=store_path.parent,
         output_dir=store_path.parent,
         hidden_settings_store=store_path,
+        utterance_reference_library_path=store_path.parent / "utterance_reference_library.json",
+        utterance_reference_sample_probability=utterance_reference_sample_probability,
         product_routing_enabled=True,
         product_routing_apply_probability=1.0,
         hidden_settings_similarity_threshold=0.82,
@@ -956,12 +964,166 @@ class UserPromptTests(unittest.TestCase):
                     reply_noise_rounds=0,
                     reply_noise_instruction="整体正常配合客服，绝大多数轮次直接按问答题回答，不需要刻意答非所问。",
                 ),
+                forced_surname="周",
             )
 
         self.assertIn("姓氏候选池示例（仅示例，不限于此）", messages[1]["content"])
+        self.assertIn("本次指定姓氏: 周", messages[1]["content"])
         self.assertIn("全国地址地区池示例（仅示例，要求覆盖全国随机采样）", messages[1]["content"])
         self.assertIn("地址地区必须在全国范围内随机取样", messages[1]["content"])
         self.assertIn("不要反复集中在“张、王、李、赵”和“广深杭苏”等少数高频选项", messages[0]["content"])
+
+    def test_build_messages_includes_sampled_utterance_reference_when_provided(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store_path = Path(temp_dir) / "hidden_settings_history.jsonl"
+            tool = HiddenSettingsTool(SequenceFakeClient([]), build_config(store_path))
+
+            messages = tool._build_messages(
+                build_base_scenario(),
+                rejection_feedback="",
+                generation_plan=UserGenerationPlan(
+                    address_style="standard_residential",
+                    address_instruction="生成标准小区/公寓住宅地址，通常包含小区、楼栋、单元、楼层或室号。",
+                    reply_noise_enabled=False,
+                    reply_noise_target="",
+                    reply_noise_rounds=0,
+                    reply_noise_instruction="整体正常配合客服，绝大多数轮次直接按问答题回答，不需要刻意答非所问。",
+                ),
+                utterance_reference=UtteranceReferenceSample(
+                    intent="报修",
+                    category="不制热 / 无热水",
+                    summary="空气能热水器不出热水",
+                    original="现在一点热水都没有了。",
+                ),
+            )
+
+        self.assertIn("参考分类: 不制热 / 无热水", messages[1]["content"])
+        self.assertIn("参考总结: 空气能热水器不出热水", messages[1]["content"])
+        self.assertIn("参考原话: 现在一点热水都没有了。", messages[1]["content"])
+
+    def test_generate_for_scenario_records_library_reference_in_hidden_context(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store_path = Path(temp_dir) / "hidden_settings_history.jsonl"
+            reference_path = Path(temp_dir) / "utterance_reference_library.json"
+            reference_path.write_text(
+                json.dumps(
+                    {
+                        "报修": {
+                            "不制热 / 无热水": [
+                                {
+                                    "总结": "空气能热水器不出热水",
+                                    "原话": "现在一点热水都没有了。",
+                                }
+                            ]
+                        }
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            config = build_config(
+                store_path,
+                utterance_reference_sample_probability=1.0,
+            )
+            config = replace(config, utterance_reference_library_path=reference_path)
+            client = SequenceFakeClient(
+                [
+                    {
+                        "customer": {
+                            "full_name": "李晓梅",
+                            "surname": "李",
+                            "phone": "13812345678",
+                            "address": "浙江省杭州市余杭区良渚街道阳光家园8幢2单元502室",
+                            "persona": "普通家庭用户，比较着急洗澡用水问题。",
+                            "speech_style": "说话直接，带一点重复。",
+                        },
+                        "request": {
+                            "request_type": "fault",
+                            "issue": "空气能热水器不出热水",
+                            "desired_resolution": "希望尽快安排师傅上门检查维修",
+                            "availability": "明天下午都在家",
+                        },
+                        "hidden_context": {
+                            "gender": "女",
+                            "emotion": "着急",
+                            "urgency": "较高",
+                            "prior_attempts": "重启过一次，没有恢复。",
+                            "special_constraints": "家里老人小孩都要洗澡。",
+                        },
+                    }
+                ]
+            )
+            tool = HiddenSettingsTool(client, config)
+
+            scenario = tool.generate_for_scenario(
+                build_base_scenario(),
+                use_utterance_reference=True,
+            )
+
+        self.assertEqual(scenario.hidden_context["utterance_reference_source"], "library")
+        self.assertEqual(scenario.hidden_context["utterance_reference_intent"], "报修")
+        self.assertEqual(scenario.hidden_context["utterance_reference_category"], "不制热 / 无热水")
+        self.assertEqual(scenario.hidden_context["utterance_reference_summary"], "空气能热水器不出热水")
+        self.assertEqual(scenario.hidden_context["utterance_reference_original"], "现在一点热水都没有了。")
+
+    def test_generate_for_scenario_skips_library_reference_when_not_enabled(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store_path = Path(temp_dir) / "hidden_settings_history.jsonl"
+            reference_path = Path(temp_dir) / "utterance_reference_library.json"
+            reference_path.write_text(
+                json.dumps(
+                    {
+                        "报修": {
+                            "不制热 / 无热水": [
+                                {
+                                    "总结": "空气能热水器不出热水",
+                                    "原话": "现在一点热水都没有了。",
+                                }
+                            ]
+                        }
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            config = build_config(
+                store_path,
+                utterance_reference_sample_probability=1.0,
+            )
+            config = replace(config, utterance_reference_library_path=reference_path)
+            client = SequenceFakeClient(
+                [
+                    {
+                        "customer": {
+                            "full_name": "李晓梅",
+                            "surname": "李",
+                            "phone": "13812345678",
+                            "address": "浙江省杭州市余杭区良渚街道阳光家园8幢2单元502室",
+                            "persona": "普通家庭用户，比较着急洗澡用水问题。",
+                            "speech_style": "说话直接，带一点重复。",
+                        },
+                        "request": {
+                            "request_type": "fault",
+                            "issue": "空气能热水器不出热水",
+                            "desired_resolution": "希望尽快安排师傅上门检查维修",
+                            "availability": "明天下午都在家",
+                        },
+                        "hidden_context": {
+                            "gender": "女",
+                            "emotion": "着急",
+                            "urgency": "较高",
+                            "prior_attempts": "重启过一次，没有恢复。",
+                            "special_constraints": "家里老人小孩都要洗澡。",
+                        },
+                    }
+                ]
+            )
+            tool = HiddenSettingsTool(client, config)
+
+            scenario = tool.generate_for_scenario(build_base_scenario())
+
+        self.assertEqual(scenario.hidden_context["utterance_reference_source"], "model")
+        self.assertNotIn("utterance_reference_category", scenario.hidden_context)
 
     def test_surname_options_are_limited_to_common_top_50_surnames(self):
         self.assertEqual(len(SURNAME_OPTIONS), 50)
@@ -2319,8 +2481,8 @@ class UserPromptTests(unittest.TestCase):
                 "南海区桂城街道东信花园五期2栋3单元601室",
             )
             self.assertEqual(
-                generated.hidden_context["address_input_rounds"],
-                ["南海区桂城街道东信花园五期2栋3单元601室"],
+                "".join(generated.hidden_context["address_input_rounds"]),
+                "广东省佛山市南海区桂城街道东信花园五期2栋3单元601室",
             )
             self.assertNotIn("东信花园五期2栋3单元601室", generated.hidden_context["service_known_address_value"])
 
@@ -2387,8 +2549,8 @@ class UserPromptTests(unittest.TestCase):
                 "五泉街道福寿小区8号楼2单元1202室",
             )
             self.assertEqual(
-                generated.hidden_context["address_input_rounds"],
-                ["五泉街道福寿小区8号楼2单元1202室"],
+                "".join(generated.hidden_context["address_input_rounds"]),
+                "甘肃省兰州市城关区五泉街道福寿小区8号楼2单元1202室",
             )
             self.assertNotIn("福寿小区8号楼2单元1202室", generated.hidden_context["service_known_address_value"])
 
@@ -2426,13 +2588,46 @@ class UserPromptTests(unittest.TestCase):
 
         self.assertEqual(set(COHERENT_REGION_CITY_DISTRICT_MAP.keys()), expected_non_municipal_regions)
         self.assertEqual(set(COHERENT_MUNICIPALITY_CITY_DISTRICT_MAP.keys()), expected_municipalities)
-        self.assertEqual(len(COHERENT_REGION_OPTIONS), len(expected_non_municipal_regions) * 2)
+        self.assertGreaterEqual(len(COHERENT_REGION_OPTIONS), len(expected_non_municipal_regions) * 2)
         self.assertEqual(len(COHERENT_MUNICIPALITY_OPTIONS), len(expected_municipalities))
+        self.assertGreaterEqual(len(COHERENT_ADDRESS_ADMIN_OPTIONS), 150)
 
         for province, cities in COHERENT_REGION_CITY_DISTRICT_MAP.items():
             self.assertGreaterEqual(len(cities), 2, province)
             for city, districts in cities.items():
                 self.assertGreaterEqual(len(districts), 3, city)
+
+    def test_generate_local_customer_address_uses_real_admin_division_prefix(self):
+        valid_prefixes = {
+            f"{option['province']}{option['city']}{option['district']}{option['town']}"
+            for option in COHERENT_ADDRESS_ADMIN_OPTIONS
+        }
+
+        for seed in range(30):
+            address = generate_local_customer_address(f"seed-{seed}")
+            self.assertTrue(any(address.startswith(prefix) for prefix in valid_prefixes), address)
+
+    def test_generate_local_customer_address_uses_multiple_detail_templates(self):
+        detail_styles: set[str] = set()
+
+        for seed in range(60):
+            address = generate_local_customer_address(f"detail-seed-{seed}")
+            if "单元" in address and "幢" in address:
+                detail_styles.add("building-unit-room")
+            elif "号楼" in address and "层" in address:
+                detail_styles.add("building-floor-room")
+            elif "号楼" in address and "单元" in address:
+                detail_styles.add("building-unit-no-room-suffix")
+            elif "座" in address and "楼" in address:
+                detail_styles.add("seat-floor-room")
+            elif "座" in address and "室" in address:
+                detail_styles.add("seat-room")
+            elif "栋" in address and "单元" in address and "楼" in address:
+                detail_styles.add("building-unit-floor-room")
+            elif "栋" in address and "室" in address:
+                detail_styles.add("building-room")
+
+        self.assertGreaterEqual(len(detail_styles), 3)
 
     def test_generate_region_stale_address_keeps_valid_province_city_pairing(self):
         stale_address = HiddenSettingsTool._generate_region_stale_address(

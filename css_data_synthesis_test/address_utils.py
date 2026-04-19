@@ -56,10 +56,41 @@ COMMUNITY_SUFFIXES = (
     "新村",
     "碧桂园",
 )
+COMMUNITY_LIKE_SUFFIXES = COMMUNITY_SUFFIXES + ("校区", "园区", "景区", "厂区")
+LANDMARK_LOCALITY_SUFFIXES = (
+    "学校",
+    "小学",
+    "中学",
+    "大学",
+    "幼儿园",
+    "学生宿舍",
+    "宿舍",
+    "医院",
+    "诊所",
+    "卫生院",
+    "酒店",
+    "宾馆",
+    "饭店",
+    "餐馆",
+    "商场",
+    "超市",
+    "园区",
+    "厂区",
+    "校区",
+    "景区",
+    "写字楼",
+    "大厦",
+    "市场",
+    "门店",
+    "店铺",
+)
 ROAD_LOCALITY_SUFFIXES = ("路", "街", "大道", "巷", "弄", "胡同")
 BUILDING_SUFFIXES = ("号楼", "栋", "幢", "座", "楼")
 COMMUNITY_SECTION_PATTERN = re.compile(
     r"([A-Za-z0-9\u4e00-\u9fa5]{2,20}?(?:[一二三四五六七八九十\d]+区))"
+)
+LANDMARK_LOCALITY_PATTERN = re.compile(
+    rf"([A-Za-z0-9\u4e00-\u9fa5]{{2,40}}(?:{'|'.join(re.escape(suffix) for suffix in sorted(LANDMARK_LOCALITY_SUFFIXES, key=len, reverse=True))}))"
 )
 CHINESE_DIGITS = {
     "零": 0,
@@ -273,7 +304,7 @@ def extract_address_components(text: str) -> AddressComponents:
         candidate_district = district_match.group(0)
         trailing_remainder = remainder[district_match.end() :]
         is_numbered_section = bool(re.fullmatch(r"[\u4e00-\u9fa5]{1,20}[一二三四五六七八九十\d]+区", candidate_district))
-        is_community_like = any(candidate_district.endswith(suffix) for suffix in COMMUNITY_SUFFIXES)
+        is_community_like = any(candidate_district.endswith(suffix) for suffix in COMMUNITY_LIKE_SUFFIXES)
         if not is_community_like and not (is_numbered_section and trailing_remainder):
             district = candidate_district
             remainder = trailing_remainder
@@ -327,6 +358,9 @@ def extract_address_components(text: str) -> AddressComponents:
     section_match = COMMUNITY_SECTION_PATTERN.search(remainder)
     if section_match and not (road_end > 0 and section_match.start() < road_end):
         community_match_spans.append((section_match.start(), section_match.end(), section_match.group(1)))
+    landmark_match = LANDMARK_LOCALITY_PATTERN.search(remainder)
+    if landmark_match and not (road_end > 0 and landmark_match.start() < road_end):
+        community_match_spans.append((landmark_match.start(), landmark_match.end(), landmark_match.group(1)))
     community_start = -1
     community_end = -1
     if community_match_spans:

@@ -49,6 +49,8 @@ class FrontendServerTests(unittest.TestCase):
         frontend_server.sessions.clear()
         frontend_server.auth_sessions.clear()
         frontend_server.SESSION_REVIEW_DB_PATH = self.db_path
+        frontend_server._SESSION_REVIEW_DB_STATE_PATH = None
+        frontend_server._mark_review_db_unready()
         frontend_server.config = SimpleNamespace(
             data_dir=Path(self.temp_dir.name),
             openai_api_key="",
@@ -118,6 +120,136 @@ class FrontendServerTests(unittest.TestCase):
             frontend_server.sessions[payload["session_id"]]["checkpoints"][0]["completed_rounds"],
             0,
         )
+
+    def test_mock_known_address_endpoint_returns_realistic_prefill(self):
+        self._login()
+
+        response = self.client.get("/api/mock-known-address", params={"scenario_id": "frontend_case"})
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertIn("known_address", payload)
+        self.assertRegex(payload["known_address"], r"(省|市).*(区|县|市|镇).*(街道|镇).*(幢|号|栋|座|楼)")
+
+    def test_fault_issue_categories_endpoint_returns_repair_reference_keys(self):
+        self._login()
+        reference_path = Path(self.temp_dir.name) / "utterance_reference_library.json"
+        reference_path.write_text(
+            json.dumps(
+                {
+                    "报修": {
+                        "不制热/无热水": [],
+                        "故障码（P1/P4/P2/P5/PF等）": [],
+                        "设备不启动/通电不工作": [],
+                    },
+                    "报装": {"安装预约/时间调整": []},
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+
+        response = self.client.get("/api/reference/fault-issue-categories")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(
+            payload["categories"],
+            ["不制热/无热水", "故障码（P1/P4/P2/P5/PF等）", "设备不启动/通电不工作"],
+        )
+
+    def test_session_view_exposes_started_and_ended_timestamps(self):
+        self._login()
+        start_payload = self.client.post(
+            "/api/session/start",
+            json={"scenario_id": "frontend_case"},
+        ).json()
+        session_id = start_payload["session_id"]
+
+        self.assertRegex(start_payload["started_at"], r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$")
+        self.assertEqual(start_payload["ended_at"], "")
+
+        quit_payload = self.client.post(
+            "/api/session/respond",
+            json={"session_id": session_id, "text": "/quit"},
+        ).json()
+
+        self.assertRegex(quit_payload["started_at"], r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$")
+        self.assertRegex(quit_payload["ended_at"], r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$")
+
+    def test_session_view_exposes_address_granularity_runtime_state(self):
+        self._login()
+        start_payload = self.client.post(
+            "/api/session/start",
+            json={"scenario_id": "frontend_case"},
+        ).json()
+        session_id = start_payload["session_id"]
+        session = frontend_server.sessions[session_id]
+        session["runtime_state"].awaiting_full_address = True
+        session["runtime_state"].partial_address_candidate = "江苏省南京市玄武区南京农业大学卫岗校区"
+
+        payload = frontend_server._build_session_view(session_id, session)
+        runtime_state = payload["runtime_state"]
+
+        self.assertEqual(runtime_state["address_current_candidate"], "江苏省南京市玄武区南京农业大学卫岗校区")
+        self.assertEqual(runtime_state["address_slot_province"], "江苏省")
+        self.assertEqual(runtime_state["address_slot_city"], "南京市")
+        self.assertEqual(runtime_state["address_slot_district"], "玄武区")
+        self.assertEqual(runtime_state["address_slot_community"], "南京农业大学卫岗校区")
+        self.assertEqual(runtime_state["address_slot_landmark"], "")
+        self.assertIn("address_missing_required_precision", runtime_state)
+
+    def test_start_session_accepts_manual_call_start_time(self):
+        self._login()
+
+        response = self.client.post(
+            "/api/session/start",
+            json={
+                "scenario_id": "frontend_case",
+                "call_start_time": "2026-04-18 09:30:45",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        session = frontend_server.sessions[payload["session_id"]]
+        self.assertEqual(session["scenario"].call_start_time, "2026-04-18 09:30:45")
+        self.assertEqual(payload["scenario"]["call_start_time"], "2026-04-18 09:30:45")
+
+    def test_start_session_rejects_invalid_manual_call_start_time(self):
+        self._login()
+
+        response = self.client.post(
+            "/api/session/start",
+            json={
+                "scenario_id": "frontend_case",
+                "call_start_time": "2026/04/18 09:30",
+            },
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("通话开始时间格式必须为", response.json()["detail"])
+
+    def test_start_session_can_use_click_time_as_call_start_time(self):
+        self._login()
+
+        with patch("frontend.server._current_display_timestamp", return_value="2026-04-18 15:03:39"):
+            response = self.client.post(
+                "/api/session/start",
+                json={
+                    "scenario_id": "frontend_case",
+                    "call_start_time": "2026-04-17 01:02:03",
+                    "use_session_start_time_as_call_start_time": True,
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        session = frontend_server.sessions[payload["session_id"]]
+        self.assertEqual(session["scenario"].call_start_time, "2026-04-18 15:03:39")
+        self.assertEqual(payload["scenario"]["call_start_time"], "2026-04-18 15:03:39")
+        self.assertEqual(session["started_at"], "2026-04-18 15:03:39")
 
     def test_commands_do_not_consume_round_and_quit_closes_session(self):
         self._login()
@@ -234,6 +366,10 @@ class FrontendServerTests(unittest.TestCase):
         self.assertIn(
             "使用隐藏设定中的已知地址，客服将优先核对: 浙江省杭州市余杭区良渚街道玉鸟路88号",
             start_payload["initial_lines"],
+        )
+        tool_cls.return_value.generate_for_scenario.assert_called_once_with(
+            base_scenario,
+            use_utterance_reference=True,
         )
 
     def test_rewind_endpoint_restores_session_snapshot_and_reopens_session(self):
@@ -508,7 +644,12 @@ class FrontendServerTests(unittest.TestCase):
         self._login()
         start_payload = self.client.post(
             "/api/session/start",
-            json={"scenario_id": "frontend_case", "persist_to_db": True},
+            json={
+                "scenario_id": "frontend_case",
+                "persist_to_db": True,
+                "known_address": "浙江省杭州市余杭区良渚街道玉鸟路1号",
+                "call_start_time": "2026-04-18 09:30:45",
+            },
         ).json()
         session_id = start_payload["session_id"]
 
@@ -545,7 +686,8 @@ class FrontendServerTests(unittest.TestCase):
 
         with sqlite3.connect(self.db_path) as conn:
             row = conn.execute(
-                "SELECT scenario_id, username, status, is_correct, failed_flow_stage, reviewer_notes, review_payload_json "
+                "SELECT scenario_id, username, status, is_correct, failed_flow_stage, reviewer_notes, "
+                "started_at, ended_at, reviewed_at, review_payload_json "
                 "FROM manual_test_reviews WHERE session_id = ?",
                 (session_id,),
             ).fetchone()
@@ -557,20 +699,30 @@ class FrontendServerTests(unittest.TestCase):
         self.assertEqual(row[3], 0)
         self.assertEqual(row[4], "address_collection")
         self.assertEqual(row[5], "地址追问层级不对")
-        saved_payload = json.loads(row[6])
+        self.assertRegex(row[6], r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$")
+        self.assertRegex(row[7], r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$")
+        self.assertRegex(row[8], r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$")
+        saved_payload = json.loads(row[9])
         self.assertEqual(saved_payload["username"], "tester")
         self.assertEqual(saved_payload["review"]["failed_flow_stage"], "address_collection")
         self.assertEqual(saved_payload["review"]["username"], "tester")
         self.assertEqual(saved_payload["review"]["notes"], "地址追问层级不对")
+        self.assertRegex(saved_payload["started_at"], r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$")
+        self.assertRegex(saved_payload["ended_at"], r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$")
+        self.assertEqual(saved_payload["status"], "aborted")
+        self.assertEqual(saved_payload["call_start_time"], "2026-04-18 09:30:45")
+        self.assertEqual(saved_payload["session_config"]["known_address"], "浙江省杭州市余杭区良渚街道玉鸟路1号")
+        self.assertEqual(saved_payload["session_config"]["call_start_time"], "2026-04-18 09:30:45")
+        self.assertIn("issue_description", saved_payload["collected_slots"])
         self.assertIn("previous_user_intent_model_inference_used", saved_payload["transcript"][1])
         self.assertEqual(
             saved_payload["transcript"][1]["previous_user_intent_model_inference_used"],
             saved_payload["transcript"][1]["model_intent_inference_used"],
         )
-        self.assertEqual(
-            saved_payload["trace"][0]["previous_user_intent_model_inference_used"],
-            saved_payload["trace"][0]["used_model_intent_inference"],
-        )
+        self.assertNotIn("trace", saved_payload)
+        self.assertNotIn("checkpoints", saved_payload)
+        self.assertNotIn("terminal_entries", saved_payload)
+        self.assertNotIn("scenario", saved_payload)
 
     def test_review_endpoint_migrates_existing_database_without_losing_rows(self):
         with sqlite3.connect(self.db_path) as conn:
@@ -621,7 +773,15 @@ class FrontendServerTests(unittest.TestCase):
                     "2026-01-01T00:00:00+00:00",
                     "2026-01-01T00:01:00+00:00",
                     "2026-01-01T00:02:00+00:00",
-                    json.dumps({"session_id": "legacy-session"}, ensure_ascii=False),
+                    json.dumps(
+                        {
+                            "session_id": "legacy-session",
+                            "call_start_time": "2026-01-01 09:30:00",
+                            "session_config": {"known_address": "上海市浦东新区张江镇博云路2号"},
+                            "collected_slots": {"surname": "张", "address": "上海市浦东新区张江镇博云路2号"},
+                        },
+                        ensure_ascii=False,
+                    ),
                 ),
             )
             conn.commit()
@@ -652,18 +812,65 @@ class FrontendServerTests(unittest.TestCase):
             columns = [row[1] for row in conn.execute("PRAGMA table_info(manual_test_reviews)").fetchall()]
             count = conn.execute("SELECT COUNT(*) FROM manual_test_reviews").fetchone()[0]
             legacy_row = conn.execute(
-                "SELECT session_id, username FROM manual_test_reviews WHERE session_id = ?",
+                "SELECT session_id, username, started_at, ended_at, reviewed_at, review_payload_json "
+                "FROM manual_test_reviews WHERE session_id = ?",
                 ("legacy-session",),
             ).fetchone()
             new_row = conn.execute(
-                "SELECT session_id, username FROM manual_test_reviews WHERE session_id = ?",
+                "SELECT session_id, username, started_at, ended_at, reviewed_at, review_payload_json "
+                "FROM manual_test_reviews WHERE session_id = ?",
                 (session_id,),
             ).fetchone()
 
         self.assertIn("username", columns)
         self.assertEqual(count, 2)
-        self.assertEqual(legacy_row, ("legacy-session", None))
-        self.assertEqual(new_row, (session_id, "tester"))
+        self.assertEqual(legacy_row[0], "legacy-session")
+        self.assertIsNone(legacy_row[1])
+        self.assertEqual(legacy_row[2], "2026-01-01 08:00:00")
+        self.assertEqual(legacy_row[3], "2026-01-01 08:01:00")
+        self.assertEqual(legacy_row[4], "2026-01-01 08:02:00")
+        legacy_payload = json.loads(legacy_row[5])
+        self.assertEqual(legacy_payload["session_id"], "legacy-session")
+        self.assertEqual(legacy_payload["call_start_time"], "2026-01-01 09:30:00")
+        self.assertEqual(legacy_payload["session_config"]["known_address"], "上海市浦东新区张江镇博云路2号")
+        self.assertEqual(legacy_payload["collected_slots"]["surname"], "张")
+        self.assertEqual(new_row[0], session_id)
+        self.assertEqual(new_row[1], "tester")
+        self.assertRegex(new_row[2], r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$")
+        self.assertRegex(new_row[3], r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$")
+        self.assertRegex(new_row[4], r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$")
+
+    def test_review_endpoint_rebuilds_corrupt_database_and_persists_new_row(self):
+        self.db_path.write_bytes(b"not-a-valid-sqlite-database")
+
+        self._login()
+        start_payload = self.client.post(
+            "/api/session/start",
+            json={"scenario_id": "frontend_case", "persist_to_db": True},
+        ).json()
+        session_id = start_payload["session_id"]
+        self.client.post(
+            "/api/session/respond",
+            json={"session_id": session_id, "text": "/quit"},
+        )
+
+        review_response = self.client.post(
+            "/api/session/review",
+            json={
+                "session_id": session_id,
+                "is_correct": True,
+                "failed_flow_stage": "",
+                "notes": "",
+                "persist_to_db": True,
+            },
+        )
+
+        self.assertEqual(review_response.status_code, 200)
+        archived = list(self.db_path.parent.glob(f"{self.db_path.name}.malformed_*"))
+        self.assertTrue(archived)
+        with sqlite3.connect(self.db_path) as conn:
+            count = conn.execute("SELECT COUNT(*) FROM manual_test_reviews").fetchone()[0]
+        self.assertEqual(count, 1)
 
     def test_review_endpoint_requires_failed_stage_when_marked_incorrect(self):
         self._login()

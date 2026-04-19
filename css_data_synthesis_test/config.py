@@ -138,6 +138,8 @@ class AppConfig:
     data_dir: Path
     output_dir: Path
     hidden_settings_store: Path | None
+    utterance_reference_library_path: Path
+    utterance_reference_sample_probability: float
     product_routing_enabled: bool
     product_routing_apply_probability: float
     hidden_settings_similarity_threshold: float
@@ -309,6 +311,10 @@ def load_config() -> AppConfig:
         data_dir=ROOT_DIR / "data",
         output_dir=ROOT_DIR / "outputs",
         hidden_settings_store=ROOT_DIR / "data" / "hidden_settings_history.jsonl",
+        utterance_reference_library_path=ROOT_DIR / "data" / "utterance_reference_library.json",
+        utterance_reference_sample_probability=float(
+            os.getenv("UTTERANCE_REFERENCE_SAMPLE_PROBABILITY", "0.9")
+        ),
         product_routing_enabled=_load_bool("PRODUCT_ROUTING_ENABLED", True),
         product_routing_apply_probability=float(
             os.getenv("PRODUCT_ROUTING_APPLY_PROBABILITY", "1.0")
