@@ -37,6 +37,12 @@ class FrontendServerTests(unittest.TestCase):
                             "display_name": "前端测试账号",
                             "password": "pass123",
                             "enabled": True,
+                        },
+                        {
+                            "username": "chat-admin",
+                            "display_name": "测试管理员",
+                            "password": "admin123",
+                            "enabled": True,
                         }
                     ]
                 },
@@ -49,6 +55,9 @@ class FrontendServerTests(unittest.TestCase):
         frontend_server.sessions.clear()
         frontend_server.auth_sessions.clear()
         frontend_server.SESSION_REVIEW_DB_PATH = self.db_path
+        frontend_server.CHAT_STORAGE_PATH = Path(self.temp_dir.name) / "frontend_chat_messages.json"
+        frontend_server.chat_state = {"messages": [], "last_message_id": 0}
+        frontend_server.chat_state_loaded = False
         frontend_server._SESSION_REVIEW_DB_STATE_PATH = None
         frontend_server._mark_review_db_unready()
         frontend_server.config = SimpleNamespace(
@@ -71,6 +80,8 @@ class FrontendServerTests(unittest.TestCase):
     def tearDown(self):
         frontend_server.sessions.clear()
         frontend_server.auth_sessions.clear()
+        frontend_server.chat_state = {"messages": [], "last_message_id": 0}
+        frontend_server.chat_state_loaded = False
         if self.previous_accounts_file is None:
             os.environ.pop("FRONTEND_REGISTERED_ACCOUNTS_FILE", None)
         else:
@@ -85,6 +96,16 @@ class FrontendServerTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         payload = response.json()
         self.assertEqual(payload["user"]["username"], "tester")
+        return payload
+
+    def _login_admin(self):
+        response = self.client.post(
+            "/api/auth/login",
+            json={"username": "chat-admin", "password": "admin123"},
+        )
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["user"]["username"], "chat-admin")
         return payload
 
     def test_protected_api_requires_login(self):
@@ -158,6 +179,116 @@ class FrontendServerTests(unittest.TestCase):
             payload["categories"],
             ["不制热/无热水", "故障码（P1/P4/P2/P5/PF等）", "设备不启动/通电不工作"],
         )
+
+    def test_chat_state_lists_online_users_and_accepts_group_messages(self):
+        self._login()
+
+        initial_state = self.client.get("/api/chat/state", params={"chat_visible": True})
+        self.assertEqual(initial_state.status_code, 200)
+        initial_payload = initial_state.json()
+        self.assertFalse(initial_payload["chat_admin"])
+        self.assertTrue(initial_payload["chat_visible"])
+        self.assertEqual(initial_payload["online_count"], 1)
+        self.assertEqual(initial_payload["online_users"][0]["username"], "tester")
+        self.assertEqual(initial_payload["messages"], [])
+
+        post_response = self.client.post("/api/chat/messages", json={"text": "大家先看前端回归结果。"})
+        self.assertEqual(post_response.status_code, 200)
+        post_payload = post_response.json()
+        self.assertEqual(post_payload["message"]["id"], 1)
+        self.assertEqual(post_payload["message"]["display_name"], "前端测试账号")
+
+        latest_state = self.client.get("/api/chat/state", params={"since_message_id": 0, "chat_visible": True})
+        self.assertEqual(latest_state.status_code, 200)
+        latest_payload = latest_state.json()
+        self.assertEqual(latest_payload["latest_message_id"], 1)
+        self.assertEqual(len(latest_payload["messages"]), 1)
+        self.assertEqual(latest_payload["messages"][0]["text"], "大家先看前端回归结果。")
+        self.assertEqual(latest_payload["storage_path"], str(frontend_server.CHAT_STORAGE_PATH))
+
+    def test_chat_messages_persist_to_local_file_and_can_be_reloaded(self):
+        self._login()
+
+        response = self.client.post("/api/chat/messages", json={"text": "这条消息需要落盘。"})
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(frontend_server.CHAT_STORAGE_PATH.exists())
+
+        persisted_payload = json.loads(frontend_server.CHAT_STORAGE_PATH.read_text(encoding="utf-8"))
+        self.assertEqual(persisted_payload["last_message_id"], 1)
+        self.assertEqual(persisted_payload["messages"][0]["text"], "这条消息需要落盘。")
+
+        frontend_server.chat_state = {"messages": [], "last_message_id": 0}
+        frontend_server.chat_state_loaded = False
+
+        reloaded_state = self.client.get("/api/chat/state")
+        self.assertEqual(reloaded_state.status_code, 200)
+        reloaded_payload = reloaded_state.json()
+        self.assertEqual(len(reloaded_payload["messages"]), 1)
+        self.assertEqual(reloaded_payload["messages"][0]["text"], "这条消息需要落盘。")
+
+    def test_chat_state_returns_all_existing_messages_on_initial_load(self):
+        self._login()
+        self.client.post("/api/chat/messages", json={"text": "第一条历史消息"})
+        self.client.post("/api/chat/messages", json={"text": "第二条历史消息"})
+
+        initial_state = self.client.get("/api/chat/state", params={"since_message_id": 0, "chat_visible": True})
+
+        self.assertEqual(initial_state.status_code, 200)
+        payload = initial_state.json()
+        self.assertEqual([item["text"] for item in payload["messages"]], ["第一条历史消息", "第二条历史消息"])
+
+    def test_only_admin_can_clear_chat_history(self):
+        self._login()
+        self.client.post("/api/chat/messages", json={"text": "普通账号消息"})
+
+        forbidden = self.client.post("/api/chat/history/clear")
+        self.assertEqual(forbidden.status_code, 403)
+
+        self.client.post("/api/auth/logout")
+        self._login_admin()
+
+        allowed = self.client.post("/api/chat/history/clear")
+        self.assertEqual(allowed.status_code, 200)
+        payload = allowed.json()
+        self.assertTrue(payload["cleared"])
+        self.assertEqual(payload["messages"], [])
+        self.assertEqual(payload["latest_message_id"], 0)
+        self.assertFalse(frontend_server.CHAT_STORAGE_PATH.exists())
+
+        state_after_clear = self.client.get("/api/chat/state")
+        self.assertEqual(state_after_clear.status_code, 200)
+        self.assertEqual(state_after_clear.json()["messages"], [])
+
+    def test_latest_self_message_readers_only_include_users_with_visible_chat(self):
+        reader_client = TestClient(frontend_server.app)
+
+        self._login()
+        self.client.get("/api/chat/state", params={"chat_visible": True})
+        self.client.post("/api/chat/messages", json={"text": "请确认这条消息的已读成员"})
+
+        reader_login = reader_client.post(
+            "/api/auth/login",
+            json={"username": "chat-admin", "password": "admin123"},
+        )
+        self.assertEqual(reader_login.status_code, 200)
+
+        hidden_reader_state = reader_client.get("/api/chat/state", params={"chat_visible": False})
+        self.assertEqual(hidden_reader_state.status_code, 200)
+
+        hidden_readers = self.client.get("/api/chat/messages/latest-readers", params={"chat_visible": True})
+        self.assertEqual(hidden_readers.status_code, 200)
+        hidden_payload = hidden_readers.json()
+        self.assertEqual(hidden_payload["latest_self_message_text"], "请确认这条消息的已读成员")
+        self.assertEqual(hidden_payload["read_by"], [])
+
+        visible_reader_state = reader_client.get("/api/chat/state", params={"chat_visible": True})
+        self.assertEqual(visible_reader_state.status_code, 200)
+
+        visible_readers = self.client.get("/api/chat/messages/latest-readers", params={"chat_visible": True})
+        self.assertEqual(visible_readers.status_code, 200)
+        visible_payload = visible_readers.json()
+        self.assertGreater(visible_payload["latest_self_message_id"], 0)
+        self.assertEqual([item["username"] for item in visible_payload["read_by"]], ["chat-admin"])
 
     def test_session_view_exposes_started_and_ended_timestamps(self):
         self._login()
@@ -908,8 +1039,15 @@ class FrontendServerTests(unittest.TestCase):
         self.assertEqual(app_response.status_code, 200)
         self.assertIn("打开评审", app_response.text)
         self.assertIn("/api/session/rewind", app_response.text)
+        self.assertIn("/api/chat/state", app_response.text)
+        self.assertIn("/api/chat/messages", app_response.text)
+        self.assertIn("/api/chat/history/clear", app_response.text)
+        self.assertIn("/api/chat/messages/latest-readers", app_response.text)
         self.assertIn("terminal-turn-trigger", app_response.text)
         self.assertNotIn("/api/session/review/dismiss", app_response.text)
+        self.assertIn('id="chat-window"', index_response.text)
+        self.assertIn('id="chat-launcher"', index_response.text)
+        self.assertIn('id="chat-admin-controls"', index_response.text)
 
     def test_user_requested_human_handoff_closes_session_and_keeps_review_flow(self):
         self._login()

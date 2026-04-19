@@ -235,6 +235,64 @@
         </aside>
     </div>
 
+    <button id="chat-launcher" class="chat-launcher hidden" type="button" aria-expanded="false">
+        <span>群聊</span>
+        <span id="chat-launcher-online" class="chat-launcher-online">0 人在线</span>
+        <span id="chat-launcher-unread" class="chat-launcher-unread hidden">0</span>
+    </button>
+
+    <aside id="chat-window" class="chat-window hidden" aria-hidden="true">
+        <header id="chat-window-header" class="chat-window-header">
+            <div>
+                <p class="eyebrow">Group Chat</p>
+                <h2>测试群聊</h2>
+            </div>
+            <div class="chat-window-actions">
+                <button id="chat-hide-btn" class="ghost-btn chat-window-action-btn" type="button">隐藏</button>
+            </div>
+        </header>
+
+        <div class="chat-window-body">
+            <section class="chat-presence-panel">
+                <div class="chat-presence-header">
+                    <button id="chat-online-count" class="chat-online-count-btn" type="button" aria-expanded="false">在线 0 人</button>
+                    <span id="chat-storage-status" class="chat-storage-status">本地持久化未连接</span>
+                </div>
+                <div class="chat-presence-row">
+                    <div id="chat-online-preview" class="chat-online-preview">
+                        <p class="terminal-hint">登录后显示在线成员</p>
+                    </div>
+                    <div id="chat-admin-controls" class="chat-admin-controls hidden">
+                        <div class="chat-admin-row">
+                            <label class="toggle chat-admin-toggle">
+                                <input id="chat-clear-history-checkbox" type="checkbox">
+                                <span>清空全部聊天历史</span>
+                            </label>
+                            <button id="chat-clear-history-btn" class="ghost-btn chat-admin-clear-btn" type="button" disabled>立即清空</button>
+                        </div>
+                        <p id="chat-admin-status" class="chat-admin-status hidden"></p>
+                    </div>
+                </div>
+                <div id="chat-online-users" class="chat-online-drawer hidden">
+                    <p class="terminal-hint">登录后显示全部在线成员</p>
+                </div>
+            </section>
+
+            <section id="chat-message-list" class="chat-message-list">
+                <p class="terminal-hint">登录后显示群聊记录</p>
+            </section>
+        </div>
+
+        <footer class="chat-composer">
+            <label class="chat-composer-label" for="chat-input">群聊消息</label>
+            <textarea id="chat-input" rows="2" placeholder="输入群聊消息，Enter 发送，Shift + Enter 换行"></textarea>
+            <div class="chat-composer-actions">
+                <span id="chat-send-status" class="chat-send-status">聊天记录将持久化到本地</span>
+                <button id="chat-send-btn" class="primary-btn" type="button">发送</button>
+            </div>
+        </footer>
+    </aside>
+
     <div id="review-modal" class="modal-shell hidden" aria-hidden="true">
         <div class="modal-backdrop"></div>
         <section class="modal-card" role="dialog" aria-modal="true" aria-labelledby="review-title">

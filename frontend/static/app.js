@@ -31,6 +31,27 @@ let cursorTrailInitialized = false;
 let cursorTrailPoints = [];
 let cursorTrailLastTimestamp = 0;
 let sessionIdCopyFeedbackTimer = null;
+let chatMessages = [];
+let chatLatestMessageId = 0;
+let chatPollTimer = null;
+let chatPollInFlight = false;
+let chatUnreadCount = 0;
+let chatStoragePath = '';
+let chatWindowState = null;
+let chatDragState = null;
+let chatResizeObserver = null;
+let chatOnlineUserCount = 0;
+let chatOnlineUsersCache = [];
+let chatOnlineDrawerOpen = false;
+let chatOnlineDrawerPosition = null;
+let chatAdminEnabled = false;
+let chatLatestSelfMessageId = 0;
+let chatReadReceiptOpenMessageId = 0;
+let chatReadReceiptMembers = [];
+let chatMessageHoldTimer = null;
+let chatMessageHoldPointerId = null;
+let chatMessageHoldStartPoint = null;
+let chatMessageHoldMessageId = 0;
 
 const authGate = document.getElementById('auth-gate');
 const appShell = document.getElementById('app-shell');
@@ -83,6 +104,24 @@ const cursorTrailCanvas = document.getElementById('cursor-trail-canvas');
 const cursorTrailContext = cursorTrailCanvas?.getContext('2d');
 const textMagnifier = document.getElementById('text-magnifier');
 const textMagnifierViewport = document.getElementById('text-magnifier-viewport');
+const chatLauncher = document.getElementById('chat-launcher');
+const chatLauncherOnline = document.getElementById('chat-launcher-online');
+const chatLauncherUnread = document.getElementById('chat-launcher-unread');
+const chatWindow = document.getElementById('chat-window');
+const chatWindowHeader = document.getElementById('chat-window-header');
+const chatHideButton = document.getElementById('chat-hide-btn');
+const chatOnlineCount = document.getElementById('chat-online-count');
+const chatOnlinePreview = document.getElementById('chat-online-preview');
+const chatOnlineUsers = document.getElementById('chat-online-users');
+const chatStorageStatus = document.getElementById('chat-storage-status');
+const chatAdminControls = document.getElementById('chat-admin-controls');
+const chatClearHistoryCheckbox = document.getElementById('chat-clear-history-checkbox');
+const chatClearHistoryButton = document.getElementById('chat-clear-history-btn');
+const chatAdminStatus = document.getElementById('chat-admin-status');
+const chatMessageList = document.getElementById('chat-message-list');
+const chatInput = document.getElementById('chat-input');
+const chatSendButton = document.getElementById('chat-send-btn');
+const chatSendStatus = document.getElementById('chat-send-status');
 const PERSONA_HIDDEN_CONTEXT_FIELDS = [
     ['gender', '性别'],
     ['emotion', '当前情绪'],
@@ -116,6 +155,14 @@ const CURSOR_TRAIL_EASE = 0.16;
 const CURSOR_TRAIL_SETTLE_DISTANCE = 0.8;
 const CURSOR_TRAIL_POINT_SPACING = 5;
 const CURSOR_TRAIL_MAX_POINTS = 24;
+const CHAT_POLL_INTERVAL_MS = 4000;
+const CHAT_WINDOW_STORAGE_KEY = 'frontend-chat-window-preferences';
+const CHAT_MIN_WIDTH = 320;
+const CHAT_MIN_HEIGHT = 352;
+const CHAT_VIEWPORT_MARGIN = 12;
+const CHAT_UNREAD_CAP = 99;
+const CHAT_MESSAGE_HOLD_MS = 420;
+const CHAT_MESSAGE_HOLD_MOVE_TOLERANCE = 10;
 
 function formatDisplayTimestamp(date) {
     const year = date.getFullYear();
@@ -125,6 +172,147 @@ function formatDisplayTimestamp(date) {
     const minute = String(date.getMinutes()).padStart(2, '0');
     const second = String(date.getSeconds()).padStart(2, '0');
     return `${year}-${month}-${day} ${hour}:${minute}:${second}`;
+}
+
+function clamp(value, min, max) {
+    return Math.min(Math.max(value, min), max);
+}
+
+function safeLocalStorageGet(key) {
+    try {
+        return window.localStorage.getItem(key);
+    } catch (error) {
+        return null;
+    }
+}
+
+function safeLocalStorageSet(key, value) {
+    try {
+        window.localStorage.setItem(key, value);
+    } catch (error) {
+        // Ignore localStorage failures such as private mode restrictions.
+    }
+}
+
+function loadChatWindowState() {
+    const fallback = { visible: true, width: 384, height: 544, left: null, top: null };
+    const raw = safeLocalStorageGet(CHAT_WINDOW_STORAGE_KEY);
+    if (!raw) return fallback;
+    try {
+        const parsed = JSON.parse(raw);
+        return {
+            visible: parsed.visible !== false,
+            width: Number(parsed.width) || fallback.width,
+            height: Number(parsed.height) || fallback.height,
+            left: Number.isFinite(Number(parsed.left)) ? Number(parsed.left) : null,
+            top: Number.isFinite(Number(parsed.top)) ? Number(parsed.top) : null,
+        };
+    } catch (error) {
+        return fallback;
+    }
+}
+
+function persistChatWindowState() {
+    if (!chatWindowState) return;
+    safeLocalStorageSet(CHAT_WINDOW_STORAGE_KEY, JSON.stringify(chatWindowState));
+}
+
+function getChatViewportBounds() {
+    return {
+        width: Math.max(window.innerWidth, CHAT_MIN_WIDTH + (CHAT_VIEWPORT_MARGIN * 2)),
+        height: Math.max(window.innerHeight, CHAT_MIN_HEIGHT + (CHAT_VIEWPORT_MARGIN * 2)),
+    };
+}
+
+function resolveChatWindowRect() {
+    const bounds = getChatViewportBounds();
+    const maxWidth = Math.max(bounds.width - (CHAT_VIEWPORT_MARGIN * 2), CHAT_MIN_WIDTH);
+    const maxHeight = Math.max(bounds.height - (CHAT_VIEWPORT_MARGIN * 2), CHAT_MIN_HEIGHT);
+    const width = clamp(Number(chatWindowState?.width) || 384, CHAT_MIN_WIDTH, maxWidth);
+    const height = clamp(Number(chatWindowState?.height) || 544, CHAT_MIN_HEIGHT, maxHeight);
+    const defaultLeft = bounds.width - width - 24;
+    const defaultTop = Math.max(84, bounds.height - height - 24);
+    const maxLeft = Math.max(CHAT_VIEWPORT_MARGIN, bounds.width - width - CHAT_VIEWPORT_MARGIN);
+    const maxTop = Math.max(CHAT_VIEWPORT_MARGIN, bounds.height - height - CHAT_VIEWPORT_MARGIN);
+    const left = clamp(
+        Number.isFinite(chatWindowState?.left) ? Number(chatWindowState.left) : defaultLeft,
+        CHAT_VIEWPORT_MARGIN,
+        maxLeft,
+    );
+    const top = clamp(
+        Number.isFinite(chatWindowState?.top) ? Number(chatWindowState.top) : defaultTop,
+        CHAT_VIEWPORT_MARGIN,
+        maxTop,
+    );
+    return { width, height, left, top };
+}
+
+function applyChatWindowRect() {
+    if (!chatWindow || !chatWindowState) return;
+    const rect = resolveChatWindowRect();
+    chatWindow.style.width = `${rect.width}px`;
+    chatWindow.style.height = `${rect.height}px`;
+    chatWindow.style.left = `${rect.left}px`;
+    chatWindow.style.top = `${rect.top}px`;
+    chatWindowState = { ...chatWindowState, ...rect };
+}
+
+function syncChatWindowStateFromDom() {
+    if (!chatWindow || !chatWindowState) return;
+    const bounds = getChatViewportBounds();
+    const width = clamp(chatWindow.offsetWidth || chatWindowState.width, CHAT_MIN_WIDTH, bounds.width - (CHAT_VIEWPORT_MARGIN * 2));
+    const height = clamp(chatWindow.offsetHeight || chatWindowState.height, CHAT_MIN_HEIGHT, bounds.height - (CHAT_VIEWPORT_MARGIN * 2));
+    const maxLeft = Math.max(CHAT_VIEWPORT_MARGIN, bounds.width - width - CHAT_VIEWPORT_MARGIN);
+    const maxTop = Math.max(CHAT_VIEWPORT_MARGIN, bounds.height - height - CHAT_VIEWPORT_MARGIN);
+    const left = clamp(parseFloat(chatWindow.style.left) || 0, CHAT_VIEWPORT_MARGIN, maxLeft);
+    const top = clamp(parseFloat(chatWindow.style.top) || 0, CHAT_VIEWPORT_MARGIN, maxTop);
+    chatWindowState = {
+        ...chatWindowState,
+        width,
+        height,
+        left,
+        top,
+    };
+    chatWindow.style.width = `${width}px`;
+    chatWindow.style.height = `${height}px`;
+    chatWindow.style.left = `${left}px`;
+    chatWindow.style.top = `${top}px`;
+}
+
+function updateChatLauncher() {
+    const authenticated = Boolean(authenticatedUser);
+    const visible = authenticated && chatWindowState?.visible !== false;
+    chatLauncher.classList.toggle('hidden', !authenticated || visible);
+    chatLauncher.setAttribute('aria-expanded', visible ? 'true' : 'false');
+    chatLauncherOnline.textContent = `${chatOnlineUserCount} 人在线`;
+    chatLauncherUnread.textContent = chatUnreadCount > CHAT_UNREAD_CAP ? '99+' : String(chatUnreadCount);
+    chatLauncherUnread.classList.toggle('hidden', chatUnreadCount < 1);
+}
+
+function setChatWindowVisibility(visible, { persist = true, scrollToBottom = false } = {}) {
+    if (!chatWindowState) {
+        chatWindowState = loadChatWindowState();
+    }
+    chatWindowState.visible = Boolean(visible);
+    const shouldShow = Boolean(authenticatedUser) && Boolean(visible);
+    chatWindow.classList.toggle('hidden', !shouldShow);
+    chatWindow.setAttribute('aria-hidden', shouldShow ? 'false' : 'true');
+    if (shouldShow) {
+        applyChatWindowRect();
+        if (scrollToBottom) {
+            window.requestAnimationFrame(() => {
+                chatMessageList.scrollTop = chatMessageList.scrollHeight;
+            });
+        }
+        chatUnreadCount = 0;
+    } else {
+        setChatOnlineDrawerOpen(false);
+    }
+    if (persist) persistChatWindowState();
+    updateChatLauncher();
+    if (authenticatedUser) {
+        refreshChatState({ forceScroll: shouldShow }).catch(() => {});
+    }
 }
 
 function resizeCursorTrailCanvas() {
@@ -513,6 +701,7 @@ function isWithinTerminalScrollRegion(clientX, clientY) {
 function shouldEnableTextMagnifier(target) {
     if (!target) return false;
     if (target.closest('#text-magnifier')) return false;
+    if (target.closest('#chat-window')) return false;
     return true;
 }
 
@@ -1050,6 +1239,503 @@ function updateInspector(slots = {}, state = {}, scenario = null) {
     });
 }
 
+function renderChatAdminControls() {
+    if (!chatAdminControls || !chatAdminStatus || !chatClearHistoryButton || !chatClearHistoryCheckbox) return;
+    const shouldShow = Boolean(chatAdminEnabled);
+    chatAdminControls.classList.toggle('hidden', !shouldShow);
+    if (!shouldShow) {
+        chatClearHistoryCheckbox.checked = false;
+        chatClearHistoryButton.disabled = true;
+        chatAdminStatus.textContent = '';
+        chatAdminStatus.classList.add('hidden');
+        chatAdminStatus.classList.remove('is-error');
+        return;
+    }
+    chatClearHistoryButton.disabled = !chatClearHistoryCheckbox.checked;
+}
+
+function setChatOnlineDrawerOpen(open) {
+    chatOnlineDrawerOpen = Boolean(open);
+    chatOnlineCount.setAttribute('aria-expanded', chatOnlineDrawerOpen ? 'true' : 'false');
+    chatOnlineUsers.classList.toggle('hidden', !chatOnlineDrawerOpen);
+    if (!chatOnlineDrawerOpen) {
+        chatOnlineDrawerPosition = null;
+        chatOnlineUsers.style.left = '';
+        chatOnlineUsers.style.top = '';
+    }
+}
+
+function positionChatOnlineDrawer(clientX, clientY) {
+    if (!chatOnlineUsers) return;
+    const drawerWidth = Math.min(288, Math.max(window.innerWidth - 16, 160));
+    const drawerHeight = Math.min(256, Math.max(window.innerHeight - 16, 120));
+    const maxLeft = Math.max(8, window.innerWidth - drawerWidth - 8);
+    const maxTop = Math.max(8, window.innerHeight - drawerHeight - 8);
+    const left = clamp((clientX || 0) + 14, 8, maxLeft);
+    const top = clamp((clientY || 0) - 8, 8, maxTop);
+    chatOnlineDrawerPosition = { clientX: Number(clientX || 0), clientY: Number(clientY || 0) };
+    chatOnlineUsers.style.left = `${left}px`;
+    chatOnlineUsers.style.top = `${top}px`;
+}
+
+function clearChatMessageHold() {
+    if (chatMessageHoldTimer !== null) {
+        window.clearTimeout(chatMessageHoldTimer);
+        chatMessageHoldTimer = null;
+    }
+    chatMessageHoldPointerId = null;
+    chatMessageHoldStartPoint = null;
+    chatMessageHoldMessageId = 0;
+}
+
+function resetChatRuntime() {
+    chatMessages = [];
+    chatLatestMessageId = 0;
+    chatLatestSelfMessageId = 0;
+    chatReadReceiptOpenMessageId = 0;
+    chatReadReceiptMembers = [];
+    chatUnreadCount = 0;
+    chatStoragePath = '';
+    chatOnlineUserCount = 0;
+    chatOnlineUsersCache = [];
+    chatOnlineDrawerOpen = false;
+    chatOnlineDrawerPosition = null;
+    chatAdminEnabled = false;
+    chatPollInFlight = false;
+    clearChatMessageHold();
+    if (chatSendButton) chatSendButton.disabled = false;
+    if (chatInput) chatInput.value = '';
+    if (chatStorageStatus) {
+        chatStorageStatus.textContent = '';
+        chatStorageStatus.classList.add('hidden');
+    }
+    if (chatSendStatus) chatSendStatus.textContent = 'Enter 发送，Shift + Enter 换行';
+    if (chatOnlineCount) chatOnlineCount.textContent = '在线 0 人';
+    if (chatOnlinePreview) chatOnlinePreview.innerHTML = '<p class="terminal-hint">登录后显示在线成员</p>';
+    if (chatOnlineUsers) chatOnlineUsers.innerHTML = '<p class="terminal-hint">登录后显示全部在线成员</p>';
+    setChatOnlineDrawerOpen(false);
+    if (chatMessageList) chatMessageList.innerHTML = '<p class="terminal-hint">登录后显示群聊记录</p>';
+    renderChatAdminControls();
+    updateChatLauncher();
+}
+
+function stopChatPolling() {
+    if (chatPollTimer !== null) {
+        window.clearInterval(chatPollTimer);
+        chatPollTimer = null;
+    }
+    chatPollInFlight = false;
+}
+
+function isChatNearBottom() {
+    if (!chatMessageList) return true;
+    const distance = chatMessageList.scrollHeight - chatMessageList.scrollTop - chatMessageList.clientHeight;
+    return distance < 36;
+}
+
+function renderChatOnlineUsers(users = []) {
+    chatOnlineUsersCache = Array.isArray(users) ? users : [];
+    chatOnlineUserCount = users.length;
+    chatOnlineCount.textContent = `在线 ${users.length} 人`;
+
+    clearElement(chatOnlinePreview);
+    if (users.length === 0) {
+        chatOnlinePreview.innerHTML = '<p class="terminal-hint">当前暂无在线成员</p>';
+        chatOnlineUsers.innerHTML = '<p class="terminal-hint">当前暂无在线成员</p>';
+        setChatOnlineDrawerOpen(false);
+        updateChatLauncher();
+        return;
+    }
+
+    users.slice(0, 3).forEach((user) => {
+        const item = document.createElement('div');
+        item.className = 'chat-user-chip is-preview';
+
+        const name = document.createElement('span');
+        name.className = 'chat-user-chip-name';
+        name.textContent = `${user.display_name || user.username || '匿名用户'} @${user.username || '-'}`;
+
+        item.appendChild(name);
+        chatOnlinePreview.appendChild(item);
+    });
+
+    clearElement(chatOnlineUsers);
+    users.forEach((user) => {
+        const item = document.createElement('div');
+        item.className = 'chat-user-chip';
+
+        const name = document.createElement('span');
+        name.className = 'chat-user-chip-name';
+        name.textContent = user.display_name || user.username || '匿名用户';
+
+        const meta = document.createElement('span');
+        meta.className = 'chat-user-chip-meta';
+        meta.textContent = `@${user.username || '-'}`;
+
+        item.appendChild(name);
+        item.appendChild(meta);
+        chatOnlineUsers.appendChild(item);
+    });
+
+    if (chatOnlineDrawerOpen && chatOnlineDrawerPosition) {
+        positionChatOnlineDrawer(chatOnlineDrawerPosition.clientX, chatOnlineDrawerPosition.clientY);
+    } else {
+        setChatOnlineDrawerOpen(false);
+    }
+    updateChatLauncher();
+}
+
+function latestSelfChatMessageId(messages = []) {
+    if (!authenticatedUser) return 0;
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+        const message = messages[index];
+        if (message && message.username === authenticatedUser.username) {
+            return Number(message.id || 0);
+        }
+    }
+    return 0;
+}
+
+function renderChatMessages({ forceScroll = false } = {}) {
+    const shouldScroll = forceScroll || isChatNearBottom();
+    clearElement(chatMessageList);
+    if (chatMessages.length === 0) {
+        chatMessageList.innerHTML = '<p class="terminal-hint">还没有群聊消息，发一条试试。</p>';
+        return;
+    }
+    chatMessages.forEach((message) => {
+        const item = document.createElement('article');
+        item.className = 'chat-message-item';
+        const isSelf = Boolean(authenticatedUser && message.username === authenticatedUser.username);
+        const isLatestSelf = isSelf && Number(message.id || 0) === chatLatestSelfMessageId;
+        item.dataset.messageId = String(message.id || 0);
+        if (isSelf) {
+            item.classList.add('is-self');
+        }
+        if (isLatestSelf) {
+            item.classList.add('is-latest-self');
+        }
+
+        const meta = document.createElement('div');
+        meta.className = 'chat-message-meta';
+
+        const author = document.createElement('span');
+        author.className = 'chat-message-author';
+        author.textContent = message.display_name || message.username || '匿名用户';
+
+        const sentAt = document.createElement('span');
+        sentAt.textContent = message.sent_at || '-';
+
+        const text = document.createElement('p');
+        text.className = 'chat-message-text';
+        text.textContent = message.text || '';
+
+        meta.appendChild(author);
+        meta.appendChild(sentAt);
+        item.appendChild(meta);
+        item.appendChild(text);
+
+        if (isLatestSelf) {
+            const hint = document.createElement('div');
+            hint.className = 'chat-message-read-hint';
+            hint.textContent = '长按查看已读成员';
+            item.appendChild(hint);
+        }
+
+        if (chatReadReceiptOpenMessageId === Number(message.id || 0)) {
+            const drawer = document.createElement('section');
+            drawer.className = 'chat-readers-drawer';
+
+            const drawerTitle = document.createElement('div');
+            drawerTitle.className = 'chat-readers-title';
+            drawerTitle.textContent = '已读成员';
+            drawer.appendChild(drawerTitle);
+
+            if (chatReadReceiptMembers.length === 0) {
+                const empty = document.createElement('p');
+                empty.className = 'chat-readers-empty';
+                empty.textContent = '暂时还没有成员已读';
+                drawer.appendChild(empty);
+            } else {
+                const list = document.createElement('div');
+                list.className = 'chat-readers-list';
+                chatReadReceiptMembers.forEach((member) => {
+                    const chip = document.createElement('span');
+                    chip.className = 'chat-readers-chip';
+                    chip.textContent = member.username || member.display_name || '-';
+                    list.appendChild(chip);
+                });
+                drawer.appendChild(list);
+            }
+            item.appendChild(drawer);
+        }
+        chatMessageList.appendChild(item);
+    });
+    if (shouldScroll && chatWindowState?.visible !== false) {
+        window.requestAnimationFrame(() => {
+            chatMessageList.scrollTop = chatMessageList.scrollHeight;
+        });
+    }
+}
+
+function isChatPersistenceAdmin() {
+    return Boolean(chatAdminEnabled);
+}
+
+function mergeChatState(data, { forceScroll = false } = {}) {
+    if (!data || !authenticatedUser) return;
+    chatStoragePath = String(data.storage_path || '').trim();
+    if (typeof data.chat_admin === 'boolean') {
+        chatAdminEnabled = data.chat_admin;
+    }
+    if (chatStorageStatus) {
+        if (chatStoragePath && isChatPersistenceAdmin()) {
+            chatStorageStatus.textContent = '本地持久化已开启';
+            chatStorageStatus.classList.remove('hidden');
+        } else {
+            chatStorageStatus.textContent = '';
+            chatStorageStatus.classList.add('hidden');
+        }
+    }
+    if (chatSendStatus) chatSendStatus.textContent = 'Enter 发送，Shift + Enter 换行';
+    renderChatAdminControls();
+    if (Array.isArray(data.online_users)) {
+        renderChatOnlineUsers(data.online_users);
+    }
+
+    const incoming = Array.isArray(data.messages) ? data.messages : [];
+    const isInitialSnapshot = chatLatestMessageId === 0;
+    const previousLatest = chatLatestMessageId;
+    if (isInitialSnapshot) {
+        chatMessages = incoming;
+    } else if (incoming.length > 0) {
+        const knownIds = new Set(chatMessages.map((item) => item.id));
+        incoming.forEach((message) => {
+            if (!knownIds.has(message.id)) {
+                chatMessages.push(message);
+            }
+        });
+    }
+
+    chatMessages = chatMessages
+        .filter((message) => message && Number(message.id) > 0)
+        .sort((left, right) => Number(left.id) - Number(right.id));
+    chatLatestSelfMessageId = latestSelfChatMessageId(chatMessages);
+    if (chatReadReceiptOpenMessageId && chatReadReceiptOpenMessageId !== chatLatestSelfMessageId) {
+        chatReadReceiptOpenMessageId = 0;
+        chatReadReceiptMembers = [];
+    }
+    chatLatestMessageId = Math.max(Number(data.latest_message_id || 0), ...chatMessages.map((item) => Number(item.id || 0)), previousLatest);
+
+    const newMessageCount = isInitialSnapshot
+        ? 0
+        : incoming.filter((message) => Number(message.id || 0) > previousLatest).length;
+    if (chatWindowState?.visible === false && newMessageCount > 0) {
+        chatUnreadCount += newMessageCount;
+    } else if (chatWindowState?.visible !== false) {
+        chatUnreadCount = 0;
+    }
+
+    renderChatMessages({ forceScroll: forceScroll || isInitialSnapshot });
+    updateChatLauncher();
+}
+
+async function refreshChatState({ forceScroll = false } = {}) {
+    if (!authenticatedUser || chatPollInFlight) return;
+    chatPollInFlight = true;
+    try {
+        const params = new URLSearchParams({
+            since_message_id: String(chatLatestMessageId || 0),
+            chat_visible: chatWindowState?.visible === false ? 'false' : 'true',
+        });
+        const data = await apiFetch(`/api/chat/state?${params.toString()}`);
+        mergeChatState(data, { forceScroll });
+    } finally {
+        chatPollInFlight = false;
+    }
+}
+
+function startChatPolling() {
+    stopChatPolling();
+    resetChatRuntime();
+    refreshChatState({ forceScroll: true });
+    chatPollTimer = window.setInterval(() => {
+        refreshChatState();
+    }, CHAT_POLL_INTERVAL_MS);
+}
+
+function beginChatDrag(event) {
+    if (!chatWindowState?.visible) return;
+    if (event.target.closest('button, textarea, input')) return;
+    event.preventDefault();
+    const currentLeft = parseFloat(chatWindow.style.left) || 0;
+    const currentTop = parseFloat(chatWindow.style.top) || 0;
+    chatDragState = {
+        pointerId: event.pointerId,
+        offsetX: event.clientX - currentLeft,
+        offsetY: event.clientY - currentTop,
+    };
+}
+
+function handleChatDrag(event) {
+    if (!chatDragState || event.pointerId !== chatDragState.pointerId) return;
+    const width = chatWindow.offsetWidth || chatWindowState.width || CHAT_MIN_WIDTH;
+    const height = chatWindow.offsetHeight || chatWindowState.height || CHAT_MIN_HEIGHT;
+    const bounds = getChatViewportBounds();
+    const nextLeft = clamp(event.clientX - chatDragState.offsetX, CHAT_VIEWPORT_MARGIN, bounds.width - width - CHAT_VIEWPORT_MARGIN);
+    const nextTop = clamp(event.clientY - chatDragState.offsetY, CHAT_VIEWPORT_MARGIN, bounds.height - height - CHAT_VIEWPORT_MARGIN);
+    chatWindow.style.left = `${nextLeft}px`;
+    chatWindow.style.top = `${nextTop}px`;
+}
+
+function endChatDrag(event) {
+    if (!chatDragState || (event && event.pointerId !== chatDragState.pointerId)) return;
+    chatDragState = null;
+    syncChatWindowStateFromDom();
+    persistChatWindowState();
+}
+
+async function sendChatMessage() {
+    if (!authenticatedUser) return;
+    const text = chatInput.value.trim();
+    if (!text) return;
+    chatSendButton.disabled = true;
+    chatSendStatus.textContent = '正在发送...';
+    try {
+        const data = await apiFetch('/api/chat/messages', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ text }),
+        });
+        chatInput.value = '';
+        mergeChatState(
+            {
+                messages: [data.message],
+                latest_message_id: data.message?.id || chatLatestMessageId,
+                storage_path: data.storage_path || chatStoragePath,
+            },
+            { forceScroll: true },
+        );
+        await refreshChatState({ forceScroll: true });
+    } catch (error) {
+        chatSendStatus.textContent = error.message;
+        throw error;
+    } finally {
+        chatSendButton.disabled = false;
+        if (chatSendStatus && chatSendStatus.textContent === '正在发送...') {
+            chatSendStatus.textContent = 'Enter 发送，Shift + Enter 换行';
+        }
+    }
+}
+
+async function showLatestSelfMessageReaders(messageId) {
+    if (!authenticatedUser || !messageId || messageId !== chatLatestSelfMessageId) return;
+    const params = new URLSearchParams({
+        chat_visible: chatWindowState?.visible === false ? 'false' : 'true',
+    });
+    const data = await apiFetch(`/api/chat/messages/latest-readers?${params.toString()}`);
+    if (Number(data.latest_self_message_id || 0) !== Number(messageId)) {
+        chatReadReceiptOpenMessageId = 0;
+        chatReadReceiptMembers = [];
+        renderChatMessages();
+        return;
+    }
+    chatReadReceiptOpenMessageId = Number(messageId);
+    chatReadReceiptMembers = Array.isArray(data.read_by) ? data.read_by : [];
+    renderChatMessages();
+}
+
+function beginChatMessageHold(event) {
+    const messageNode = event.target.closest('.chat-message-item.is-self.is-latest-self');
+    if (!messageNode) return;
+    if (event.button !== 0) return;
+    clearChatMessageHold();
+    chatMessageHoldPointerId = event.pointerId;
+    chatMessageHoldStartPoint = { x: event.clientX, y: event.clientY };
+    chatMessageHoldMessageId = Number(messageNode.dataset.messageId || 0);
+    chatMessageHoldTimer = window.setTimeout(() => {
+        const targetMessageId = chatMessageHoldMessageId;
+        clearChatMessageHold();
+        showLatestSelfMessageReaders(targetMessageId).catch(() => {});
+    }, CHAT_MESSAGE_HOLD_MS);
+}
+
+function trackChatMessageHold(event) {
+    if (chatMessageHoldPointerId !== event.pointerId || !chatMessageHoldStartPoint) return;
+    const movedX = event.clientX - chatMessageHoldStartPoint.x;
+    const movedY = event.clientY - chatMessageHoldStartPoint.y;
+    if (Math.hypot(movedX, movedY) > CHAT_MESSAGE_HOLD_MOVE_TOLERANCE) {
+        clearChatMessageHold();
+    }
+}
+
+function endChatMessageHold(event) {
+    if (chatMessageHoldPointerId !== null && event && event.pointerId !== chatMessageHoldPointerId) return;
+    clearChatMessageHold();
+}
+
+async function clearChatHistory() {
+    if (!chatAdminEnabled) return;
+    if (!chatClearHistoryCheckbox.checked) {
+        chatAdminStatus.textContent = '请先勾选“清空全部聊天历史”。';
+        chatAdminStatus.classList.remove('hidden');
+        chatAdminStatus.classList.add('is-error');
+        return;
+    }
+    const confirmed = window.confirm('确认清空全部聊天历史吗？该操作会同时删除本地持久化内容，且不可恢复。');
+    if (!confirmed) return;
+
+    chatClearHistoryButton.disabled = true;
+    chatAdminStatus.textContent = '正在清空聊天历史...';
+    chatAdminStatus.classList.remove('hidden');
+    chatAdminStatus.classList.remove('is-error');
+
+    try {
+        const data = await apiFetch('/api/chat/history/clear', {
+            method: 'POST',
+        });
+        chatMessages = [];
+        chatLatestMessageId = 0;
+        chatStoragePath = String(data.storage_path || '').trim();
+        chatClearHistoryCheckbox.checked = false;
+        renderChatAdminControls();
+        mergeChatState(
+            {
+                messages: [],
+                latest_message_id: 0,
+                storage_path: data.storage_path || '',
+                chat_admin: true,
+            },
+            { forceScroll: true },
+        );
+        renderChatMessages({ forceScroll: true });
+        chatAdminStatus.textContent = '聊天历史已清空，本地持久化内容已同步删除。';
+        chatAdminStatus.classList.remove('hidden');
+        chatAdminStatus.classList.remove('is-error');
+        await refreshChatState({ forceScroll: true });
+    } catch (error) {
+        chatAdminStatus.textContent = error.message;
+        chatAdminStatus.classList.remove('hidden');
+        chatAdminStatus.classList.add('is-error');
+        renderChatAdminControls();
+        throw error;
+    }
+}
+
+function initializeChatWindow() {
+    chatWindowState = loadChatWindowState();
+    applyChatWindowRect();
+    setChatWindowVisibility(chatWindowState.visible !== false, { persist: false });
+    if ('ResizeObserver' in window && !chatResizeObserver) {
+        chatResizeObserver = new ResizeObserver(() => {
+            if (chatWindow.classList.contains('hidden')) return;
+            syncChatWindowStateFromDom();
+            persistChatWindowState();
+        });
+        chatResizeObserver.observe(chatWindow);
+    }
+}
+
 function setAuthError(message = '') {
     authError.textContent = message;
     authError.classList.toggle('hidden', !message);
@@ -1099,6 +1785,8 @@ function applyAuthenticatedState(user) {
     setAuthError('');
     updateCallStartTimeValidationState();
     updateStartSessionButtonState();
+    initializeChatWindow();
+    startChatPolling();
 }
 
 function applyLoggedOutState(message = '') {
@@ -1107,6 +1795,11 @@ function applyLoggedOutState(message = '') {
     authUserMeta.textContent = '只有备案账号可访问测试台。';
     appShell.classList.add('hidden');
     authGate.classList.remove('hidden');
+    stopChatPolling();
+    resetChatRuntime();
+    chatLauncher.classList.add('hidden');
+    chatWindow.classList.add('hidden');
+    chatWindow.setAttribute('aria-hidden', 'true');
     setPasswordVisibility(false);
     loginPassword.value = '';
     setAuthError(message);
@@ -1190,6 +1883,8 @@ function selectScenario(scenario, element) {
 
 async function checkAuth() {
     resetWorkspace();
+    stopChatPolling();
+    resetChatRuntime();
     const response = await fetch('/api/auth/me');
     const data = await safeJson(response);
     if (!response.ok) {
@@ -1455,6 +2150,47 @@ document.getElementById('logout-btn').onclick = logout;
 startSessionButton.onclick = startSession;
 document.getElementById('end-session-btn').onclick = forceEndSession;
 document.getElementById('send-btn').onclick = sendMessage;
+chatLauncher.addEventListener('click', () => {
+    setChatWindowVisibility(true, { scrollToBottom: true });
+});
+chatHideButton.addEventListener('click', () => {
+    setChatWindowVisibility(false);
+});
+chatOnlineCount.addEventListener('click', (event) => {
+    if (chatOnlineUsersCache.length === 0) return;
+    if (chatOnlineDrawerOpen) {
+        setChatOnlineDrawerOpen(false);
+        return;
+    }
+    positionChatOnlineDrawer(event.clientX, event.clientY);
+    setChatOnlineDrawerOpen(true);
+});
+chatWindowHeader.addEventListener('pointerdown', beginChatDrag);
+chatMessageList.addEventListener('pointerdown', beginChatMessageHold);
+chatMessageList.addEventListener('pointermove', trackChatMessageHold);
+chatMessageList.addEventListener('pointerup', endChatMessageHold);
+chatMessageList.addEventListener('pointercancel', endChatMessageHold);
+chatMessageList.addEventListener('pointerleave', endChatMessageHold);
+chatClearHistoryCheckbox.addEventListener('change', () => {
+    if (chatAdminStatus) {
+        chatAdminStatus.textContent = '';
+        chatAdminStatus.classList.add('hidden');
+        chatAdminStatus.classList.remove('is-error');
+    }
+    renderChatAdminControls();
+});
+chatClearHistoryButton.addEventListener('click', () => {
+    clearChatHistory().catch(() => {});
+});
+chatSendButton.addEventListener('click', () => {
+    sendChatMessage().catch(() => {});
+});
+chatInput.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter' && !event.shiftKey) {
+        event.preventDefault();
+        sendChatMessage().catch(() => {});
+    }
+});
 document.getElementById('review-submit-btn').onclick = submitReview;
 document.getElementById('review-close-btn').onclick = dismissReview;
 document.getElementById('review-toggle-btn').onclick = reopenReviewModal;
@@ -1527,20 +2263,55 @@ document.addEventListener('click', (event) => {
         hideIssueReferencePopover();
     }
 });
+document.addEventListener('click', (event) => {
+    if (!chatOnlineDrawerOpen) return;
+    const clickedCount = event.target.closest('#chat-online-count');
+    const clickedDrawer = event.target.closest('#chat-online-users');
+    if (!clickedCount && !clickedDrawer) {
+        setChatOnlineDrawerOpen(false);
+    }
+});
+document.addEventListener('click', (event) => {
+    if (!chatReadReceiptOpenMessageId) return;
+    if (event.target.closest('.chat-readers-drawer')) return;
+    if (event.target.closest('.chat-message-item.is-self.is-latest-self')) return;
+    chatReadReceiptOpenMessageId = 0;
+    chatReadReceiptMembers = [];
+    renderChatMessages();
+});
 window.addEventListener('resize', () => {
     hideIssueReferencePopover();
     resizeCursorTrailCanvas();
+    if (chatOnlineDrawerOpen && chatOnlineDrawerPosition) {
+        positionChatOnlineDrawer(chatOnlineDrawerPosition.clientX, chatOnlineDrawerPosition.clientY);
+    }
+    if (chatWindowState) {
+        applyChatWindowRect();
+        persistChatWindowState();
+    }
 });
 window.addEventListener('pointermove', updateCursorGlow, { passive: true });
+window.addEventListener('pointermove', handleChatDrag);
+window.addEventListener('pointermove', trackChatMessageHold);
 window.addEventListener('pointermove', trackTextMagnifierPointer);
+window.addEventListener('pointerup', endChatDrag);
+window.addEventListener('pointerup', endChatMessageHold);
 window.addEventListener('pointerup', endTextMagnifierPress);
 window.addEventListener('pointercancel', endTextMagnifierPress);
+window.addEventListener('pointercancel', endChatDrag);
+window.addEventListener('pointercancel', endChatMessageHold);
 window.addEventListener('pointerleave', (event) => {
     if (event.target === document.body || event.target === document.documentElement) {
+        endChatMessageHold(event);
+        endChatDrag(event);
         endTextMagnifierPress(event);
     }
 });
-window.addEventListener('blur', hideTextMagnifier);
+window.addEventListener('blur', () => {
+    endChatMessageHold();
+    endChatDrag();
+    hideTextMagnifier();
+});
 document.addEventListener('pointerleave', hideCursorGlow, true);
 document.addEventListener('pointerout', (event) => {
     if (!event.relatedTarget) {
@@ -1569,4 +2340,7 @@ prefillMockCallStartTime(true);
 updateCallStartTimeValidationState();
 updateStartSessionButtonState();
 resizeCursorTrailCanvas();
+chatWindowState = loadChatWindowState();
+resetChatRuntime();
+setChatWindowVisibility(chatWindowState.visible !== false, { persist: false });
 checkAuth();

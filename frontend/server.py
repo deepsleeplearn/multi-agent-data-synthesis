@@ -103,6 +103,11 @@ _SESSION_REVIEW_DB_SCHEMA_READY = False
 _SESSION_REVIEW_DB_NORMALIZED = False
 SESSION_REDIS_URL = os.getenv("FRONTEND_SESSION_REDIS_URL", "").strip()
 SESSION_REDIS_TTL_SECONDS = int(os.getenv("FRONTEND_SESSION_REDIS_TTL_SECONDS", "43200") or "43200")
+CHAT_STORAGE_PATH = PROJECT_ROOT / "outputs" / "frontend_chat_messages.json"
+CHAT_STORAGE_LOCK = threading.RLock()
+CHAT_PRESENCE_TTL = timedelta(seconds=int(os.getenv("FRONTEND_CHAT_PRESENCE_TTL_SECONDS", "30") or "30"))
+chat_state: dict[str, Any] = {"messages": [], "last_message_id": 0}
+chat_state_loaded = False
 FLOW_REVIEW_OPTIONS = [
     {"key": "opening_confirmation", "label": "开场确认"},
     {"key": "issue_collection", "label": "故障/诉求采集"},
@@ -178,6 +183,10 @@ class ReviewSessionRequest(BaseModel):
     failed_flow_stage: str = ""
     notes: str = ""
     persist_to_db: bool = False
+
+
+class ChatMessageRequest(BaseModel):
+    text: str
 
 
 def _scenario_file() -> Path:
@@ -393,6 +402,157 @@ def _verify_registered_account(account: dict[str, Any], password: str) -> bool:
     return bool(stored_password) and secrets.compare_digest(password, stored_password)
 
 
+def _copy_chat_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    copied: list[dict[str, Any]] = []
+    for item in messages:
+        copied.append(
+            {
+                "id": int(item.get("id", 0) or 0),
+                "username": str(item.get("username", "")).strip(),
+                "display_name": str(item.get("display_name", "")).strip(),
+                "text": str(item.get("text", "")),
+                "sent_at": str(item.get("sent_at", "")).strip(),
+            }
+        )
+    return copied
+
+
+def _load_chat_state() -> None:
+    global chat_state_loaded, chat_state
+
+    with CHAT_STORAGE_LOCK:
+        if chat_state_loaded:
+            return
+
+        if not CHAT_STORAGE_PATH.exists():
+            chat_state = {"messages": [], "last_message_id": 0}
+            chat_state_loaded = True
+            return
+
+        try:
+            payload = json.loads(CHAT_STORAGE_PATH.read_text(encoding="utf-8"))
+        except Exception:
+            chat_state = {"messages": [], "last_message_id": 0}
+            chat_state_loaded = True
+            return
+
+        loaded_messages = payload.get("messages", [])
+        normalized_messages = _copy_chat_messages(loaded_messages if isinstance(loaded_messages, list) else [])
+        last_message_id = payload.get("last_message_id", 0)
+        if not isinstance(last_message_id, int):
+            last_message_id = 0
+        if normalized_messages:
+            last_message_id = max(last_message_id, max(message["id"] for message in normalized_messages))
+        chat_state = {
+            "messages": normalized_messages,
+            "last_message_id": last_message_id,
+        }
+        chat_state_loaded = True
+
+
+def _persist_chat_state() -> None:
+    CHAT_STORAGE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "last_message_id": int(chat_state.get("last_message_id", 0) or 0),
+        "messages": _copy_chat_messages(list(chat_state.get("messages", []))),
+    }
+    CHAT_STORAGE_PATH.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _build_online_chat_users(now: datetime | None = None) -> list[dict[str, str]]:
+    current_time = now or datetime.now(timezone.utc)
+    active_cutoff = current_time - CHAT_PRESENCE_TTL
+    users_by_username: dict[str, dict[str, Any]] = {}
+
+    for session in auth_sessions.values():
+        last_seen_at = session.get("last_seen_at")
+        if not isinstance(last_seen_at, datetime) or last_seen_at < active_cutoff:
+            continue
+
+        username = str(session.get("username", "")).strip()
+        if not username:
+            continue
+        existing = users_by_username.get(username)
+        if existing is None or last_seen_at > existing["last_seen_at"]:
+            users_by_username[username] = {
+                "username": username,
+                "display_name": str(session.get("display_name", username)).strip() or username,
+                "last_seen_at": last_seen_at,
+            }
+
+    ordered_users = sorted(
+        users_by_username.values(),
+        key=lambda item: (str(item["display_name"]).lower(), str(item["username"]).lower()),
+    )
+    return [
+        {
+            "username": str(item["username"]),
+            "display_name": str(item["display_name"]),
+            "last_seen_at": item["last_seen_at"].astimezone(DISPLAY_TIMEZONE).strftime(DISPLAY_TIME_FORMAT),
+        }
+        for item in ordered_users
+    ]
+
+
+def _is_chat_admin(user: dict[str, str] | None) -> bool:
+    if not isinstance(user, dict):
+        return False
+    return str(user.get("display_name", "")).strip() == "测试管理员"
+
+
+def _update_chat_visibility(auth_token: str | None, visible: bool) -> None:
+    if not auth_token:
+        return
+    session = auth_sessions.get(auth_token)
+    if session is None:
+        return
+    session["chat_visible"] = bool(visible)
+
+
+def _chat_visible_user_summaries(
+    *,
+    exclude_username: str = "",
+    now: datetime | None = None,
+) -> list[dict[str, str]]:
+    current_time = now or datetime.now(timezone.utc)
+    active_cutoff = current_time - CHAT_PRESENCE_TTL
+    normalized_exclude = str(exclude_username or "").strip()
+    users_by_username: dict[str, dict[str, str]] = {}
+
+    for session in auth_sessions.values():
+        last_seen_at = session.get("last_seen_at")
+        if not isinstance(last_seen_at, datetime) or last_seen_at < active_cutoff:
+            continue
+        if not bool(session.get("chat_visible", False)):
+            continue
+
+        username = str(session.get("username", "")).strip()
+        if not username or username == normalized_exclude:
+            continue
+        users_by_username[username] = {
+            "username": username,
+            "display_name": str(session.get("display_name", username)).strip() or username,
+        }
+
+    return [
+        users_by_username[key]
+        for key in sorted(users_by_username.keys(), key=lambda item: item.lower())
+    ]
+
+
+def _latest_chat_message_for_username(username: str) -> dict[str, Any] | None:
+    normalized_username = str(username or "").strip()
+    if not normalized_username:
+        return None
+
+    _load_chat_state()
+    with CHAT_STORAGE_LOCK:
+        for message in reversed(list(chat_state.get("messages", []))):
+            if str(message.get("username", "")).strip() == normalized_username:
+                return dict(message)
+    return None
+
+
 def _prune_auth_sessions(now: datetime | None = None) -> None:
     current_time = now or datetime.now(timezone.utc)
     expired_tokens = [
@@ -421,10 +581,13 @@ def _delete_auth_cookie(response: Response) -> None:
 def _create_auth_session(account: dict[str, Any]) -> str:
     _prune_auth_sessions()
     token = secrets.token_urlsafe(32)
+    now = datetime.now(timezone.utc)
     auth_sessions[token] = {
         "username": account["username"],
         "display_name": account["display_name"],
-        "expires_at": datetime.now(timezone.utc) + AUTH_SESSION_TTL,
+        "expires_at": now + AUTH_SESSION_TTL,
+        "last_seen_at": now,
+        "chat_visible": False,
     }
     return token
 
@@ -446,10 +609,13 @@ def _require_authenticated_user(
             detail="登录状态已失效，请重新登录。",
         )
 
-    session["expires_at"] = datetime.now(timezone.utc) + AUTH_SESSION_TTL
+    now = datetime.now(timezone.utc)
+    session["expires_at"] = now + AUTH_SESSION_TTL
+    session["last_seen_at"] = now
     return {
         "username": str(session["username"]),
         "display_name": str(session["display_name"]),
+        "auth_token": auth_token,
     }
 
 
@@ -1355,6 +1521,118 @@ def auth_logout(
         auth_sessions.pop(auth_token, None)
     _delete_auth_cookie(response)
     return {"ok": True}
+
+
+@app.get("/api/chat/state")
+def chat_state_view(
+    since_message_id: int = 0,
+    chat_visible: bool = False,
+    current_user: dict[str, str] = Depends(_require_authenticated_user),
+):
+    _load_chat_state()
+    _update_chat_visibility(current_user.get("auth_token"), chat_visible)
+
+    with CHAT_STORAGE_LOCK:
+        known_messages = list(chat_state.get("messages", []))
+        normalized_since = max(int(since_message_id or 0), 0)
+        if normalized_since > 0:
+            message_slice = [message for message in known_messages if int(message.get("id", 0) or 0) > normalized_since]
+        else:
+            message_slice = known_messages
+
+        latest_message_id = int(chat_state.get("last_message_id", 0) or 0)
+
+    online_users = _build_online_chat_users()
+    chat_admin = _is_chat_admin(current_user)
+    return {
+        "ok": True,
+        "current_user": {
+            "username": current_user["username"],
+            "display_name": current_user["display_name"],
+        },
+        "chat_visible": bool(chat_visible),
+        "chat_admin": chat_admin,
+        "online_count": len(online_users),
+        "online_users": online_users,
+        "messages": _copy_chat_messages(message_slice),
+        "latest_message_id": latest_message_id,
+        "storage_path": str(CHAT_STORAGE_PATH),
+    }
+
+
+@app.post("/api/chat/messages")
+def create_chat_message(
+    req: ChatMessageRequest,
+    current_user: dict[str, str] = Depends(_require_authenticated_user),
+):
+    normalized_text = str(req.text or "").strip()
+    if not normalized_text:
+        raise HTTPException(status_code=400, detail="聊天消息不能为空。")
+    if len(normalized_text) > 1000:
+        raise HTTPException(status_code=400, detail="聊天消息不能超过 1000 个字符。")
+
+    _load_chat_state()
+
+    with CHAT_STORAGE_LOCK:
+        next_message_id = int(chat_state.get("last_message_id", 0) or 0) + 1
+        message = {
+            "id": next_message_id,
+            "username": current_user["username"],
+            "display_name": current_user["display_name"],
+            "text": normalized_text,
+            "sent_at": _current_display_timestamp(),
+        }
+        chat_messages = list(chat_state.get("messages", []))
+        chat_messages.append(message)
+        chat_state["messages"] = chat_messages
+        chat_state["last_message_id"] = next_message_id
+        _persist_chat_state()
+
+    return {
+        "ok": True,
+        "message": dict(message),
+        "storage_path": str(CHAT_STORAGE_PATH),
+    }
+
+
+@app.get("/api/chat/messages/latest-readers")
+def latest_chat_message_readers(
+    chat_visible: bool = False,
+    current_user: dict[str, str] = Depends(_require_authenticated_user),
+):
+    _update_chat_visibility(current_user.get("auth_token"), chat_visible)
+    latest_message = _latest_chat_message_for_username(current_user["username"])
+    readers = _chat_visible_user_summaries(exclude_username=current_user["username"])
+    return {
+        "ok": True,
+        "latest_self_message_id": int(latest_message.get("id", 0) or 0) if latest_message else 0,
+        "latest_self_message_text": str(latest_message.get("text", "")) if latest_message else "",
+        "read_by": readers,
+    }
+
+
+@app.post("/api/chat/history/clear")
+def clear_chat_history(
+    current_user: dict[str, str] = Depends(_require_authenticated_user),
+):
+    if not _is_chat_admin(current_user):
+        raise HTTPException(status_code=403, detail="只有测试管理员可以清空聊天历史。")
+
+    _load_chat_state()
+
+    with CHAT_STORAGE_LOCK:
+        chat_state["messages"] = []
+        chat_state["last_message_id"] = 0
+        if CHAT_STORAGE_PATH.exists():
+            CHAT_STORAGE_PATH.unlink()
+
+    return {
+        "ok": True,
+        "cleared": True,
+        "latest_message_id": 0,
+        "messages": [],
+        "storage_path": str(CHAT_STORAGE_PATH),
+    }
 
 
 @app.get("/api/scenarios")
