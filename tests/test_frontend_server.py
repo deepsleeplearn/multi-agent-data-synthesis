@@ -259,6 +259,31 @@ class FrontendServerTests(unittest.TestCase):
         self.assertEqual(state_after_clear.status_code, 200)
         self.assertEqual(state_after_clear.json()["messages"], [])
 
+    def test_clear_chat_history_is_visible_to_other_logged_in_clients(self):
+        viewer_client = TestClient(frontend_server.app)
+
+        self._login()
+        self.client.post("/api/chat/messages", json={"text": "需要被全员清空的消息"})
+
+        viewer_login = viewer_client.post(
+            "/api/auth/login",
+            json={"username": "tester", "password": "pass123"},
+        )
+        self.assertEqual(viewer_login.status_code, 200)
+        viewer_state_before = viewer_client.get("/api/chat/state", params={"since_message_id": 0, "chat_visible": False})
+        self.assertEqual(viewer_state_before.status_code, 200)
+        self.assertEqual(len(viewer_state_before.json()["messages"]), 1)
+
+        self.client.post("/api/auth/logout")
+        self._login_admin()
+        clear_response = self.client.post("/api/chat/history/clear")
+        self.assertEqual(clear_response.status_code, 200)
+
+        viewer_state_after = viewer_client.get("/api/chat/state", params={"since_message_id": 1, "chat_visible": False})
+        self.assertEqual(viewer_state_after.status_code, 200)
+        self.assertEqual(viewer_state_after.json()["latest_message_id"], 0)
+        self.assertEqual(viewer_state_after.json()["messages"], [])
+
     def test_latest_self_message_readers_only_include_users_with_visible_chat(self):
         reader_client = TestClient(frontend_server.app)
 

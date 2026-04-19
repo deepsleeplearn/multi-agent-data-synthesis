@@ -36,6 +36,7 @@ let chatLatestMessageId = 0;
 let chatPollTimer = null;
 let chatPollInFlight = false;
 let chatUnreadCount = 0;
+let chatStateInitialized = false;
 let chatStoragePath = '';
 let chatWindowState = null;
 let chatDragState = null;
@@ -45,6 +46,12 @@ let chatOnlineUsersCache = [];
 let chatOnlineDrawerOpen = false;
 let chatOnlineDrawerPosition = null;
 let chatAdminEnabled = false;
+let chatMentionState = null;
+let chatMentionOptions = [];
+let chatMentionActiveIndex = 0;
+let chatMentionAlertActive = false;
+let chatLauncherDragState = null;
+let chatLauncherSuppressClickUntil = 0;
 let chatLatestSelfMessageId = 0;
 let chatReadReceiptOpenMessageId = 0;
 let chatReadReceiptMembers = [];
@@ -107,6 +114,7 @@ const textMagnifierViewport = document.getElementById('text-magnifier-viewport')
 const chatLauncher = document.getElementById('chat-launcher');
 const chatLauncherOnline = document.getElementById('chat-launcher-online');
 const chatLauncherUnread = document.getElementById('chat-launcher-unread');
+const chatMentionDropdown = document.getElementById('chat-mention-dropdown');
 const chatWindow = document.getElementById('chat-window');
 const chatWindowHeader = document.getElementById('chat-window-header');
 const chatHideButton = document.getElementById('chat-hide-btn');
@@ -163,6 +171,7 @@ const CHAT_VIEWPORT_MARGIN = 12;
 const CHAT_UNREAD_CAP = 99;
 const CHAT_MESSAGE_HOLD_MS = 420;
 const CHAT_MESSAGE_HOLD_MOVE_TOLERANCE = 10;
+const CHAT_MENTION_OPTION_LIMIT = 12;
 
 function formatDisplayTimestamp(date) {
     const year = date.getFullYear();
@@ -194,8 +203,17 @@ function safeLocalStorageSet(key, value) {
     }
 }
 
+function escapeHtml(value) {
+    return String(value ?? '')
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#39;');
+}
+
 function loadChatWindowState() {
-    const fallback = { visible: true, width: 384, height: 544, left: null, top: null };
+    const fallback = { visible: true, width: 384, height: 544, left: null, top: null, launcher_left: null, launcher_top: null };
     const raw = safeLocalStorageGet(CHAT_WINDOW_STORAGE_KEY);
     if (!raw) return fallback;
     try {
@@ -206,6 +224,8 @@ function loadChatWindowState() {
             height: Number(parsed.height) || fallback.height,
             left: Number.isFinite(Number(parsed.left)) ? Number(parsed.left) : null,
             top: Number.isFinite(Number(parsed.top)) ? Number(parsed.top) : null,
+            launcher_left: Number.isFinite(Number(parsed.launcher_left)) ? Number(parsed.launcher_left) : null,
+            launcher_top: Number.isFinite(Number(parsed.launcher_top)) ? Number(parsed.launcher_top) : null,
         };
     } catch (error) {
         return fallback;
@@ -215,6 +235,15 @@ function loadChatWindowState() {
 function persistChatWindowState() {
     if (!chatWindowState) return;
     safeLocalStorageSet(CHAT_WINDOW_STORAGE_KEY, JSON.stringify(chatWindowState));
+}
+
+function clearChatMentionDropdown() {
+    chatMentionState = null;
+    chatMentionOptions = [];
+    chatMentionActiveIndex = 0;
+    chatMentionDropdown.innerHTML = '';
+    chatMentionDropdown.classList.add('hidden');
+    chatMentionDropdown.setAttribute('aria-hidden', 'true');
 }
 
 function getChatViewportBounds() {
@@ -284,9 +313,57 @@ function updateChatLauncher() {
     const visible = authenticated && chatWindowState?.visible !== false;
     chatLauncher.classList.toggle('hidden', !authenticated || visible);
     chatLauncher.setAttribute('aria-expanded', visible ? 'true' : 'false');
+    chatLauncher.classList.toggle('is-mention-alert', !visible && chatMentionAlertActive);
     chatLauncherOnline.textContent = `${chatOnlineUserCount} 人在线`;
     chatLauncherUnread.textContent = chatUnreadCount > CHAT_UNREAD_CAP ? '99+' : String(chatUnreadCount);
     chatLauncherUnread.classList.toggle('hidden', chatUnreadCount < 1);
+}
+
+function resolveChatLauncherRect() {
+    const bounds = getChatViewportBounds();
+    const launcherWidth = Math.max(chatLauncher.offsetWidth || 172, 120);
+    const launcherHeight = Math.max(chatLauncher.offsetHeight || 50, 40);
+    const maxLeft = Math.max(CHAT_VIEWPORT_MARGIN, bounds.width - launcherWidth - CHAT_VIEWPORT_MARGIN);
+    const maxTop = Math.max(CHAT_VIEWPORT_MARGIN, bounds.height - launcherHeight - CHAT_VIEWPORT_MARGIN);
+    const hasStoredPosition = Number.isFinite(chatWindowState?.launcher_left) && Number.isFinite(chatWindowState?.launcher_top);
+    const left = hasStoredPosition
+        ? clamp(Number(chatWindowState.launcher_left), CHAT_VIEWPORT_MARGIN, maxLeft)
+        : null;
+    const top = hasStoredPosition
+        ? clamp(Number(chatWindowState.launcher_top), CHAT_VIEWPORT_MARGIN, maxTop)
+        : null;
+    return { left, top };
+}
+
+function applyChatLauncherRect() {
+    if (!chatLauncher || chatLauncher.classList.contains('hidden')) return;
+    const rect = resolveChatLauncherRect();
+    if (rect.left === null || rect.top === null) {
+        chatLauncher.style.left = '';
+        chatLauncher.style.top = '';
+        chatLauncher.style.right = '';
+        chatLauncher.style.bottom = '';
+        return;
+    }
+    chatLauncher.style.left = `${rect.left}px`;
+    chatLauncher.style.top = `${rect.top}px`;
+    chatLauncher.style.right = 'auto';
+    chatLauncher.style.bottom = 'auto';
+    chatWindowState.launcher_left = rect.left;
+    chatWindowState.launcher_top = rect.top;
+}
+
+function syncChatLauncherStateFromDom() {
+    if (!chatLauncher || chatLauncher.classList.contains('hidden') || !chatWindowState) return;
+    const bounds = getChatViewportBounds();
+    const width = Math.max(chatLauncher.offsetWidth || 172, 120);
+    const height = Math.max(chatLauncher.offsetHeight || 50, 40);
+    const maxLeft = Math.max(CHAT_VIEWPORT_MARGIN, bounds.width - width - CHAT_VIEWPORT_MARGIN);
+    const maxTop = Math.max(CHAT_VIEWPORT_MARGIN, bounds.height - height - CHAT_VIEWPORT_MARGIN);
+    chatWindowState.launcher_left = clamp(parseFloat(chatLauncher.style.left) || 0, CHAT_VIEWPORT_MARGIN, maxLeft);
+    chatWindowState.launcher_top = clamp(parseFloat(chatLauncher.style.top) || 0, CHAT_VIEWPORT_MARGIN, maxTop);
+    chatLauncher.style.left = `${chatWindowState.launcher_left}px`;
+    chatLauncher.style.top = `${chatWindowState.launcher_top}px`;
 }
 
 function setChatWindowVisibility(visible, { persist = true, scrollToBottom = false } = {}) {
@@ -305,11 +382,18 @@ function setChatWindowVisibility(visible, { persist = true, scrollToBottom = fal
             });
         }
         chatUnreadCount = 0;
+        chatMentionAlertActive = false;
+        clearChatMentionDropdown();
     } else {
         setChatOnlineDrawerOpen(false);
     }
     if (persist) persistChatWindowState();
     updateChatLauncher();
+    if (!shouldShow) {
+        window.requestAnimationFrame(() => {
+            applyChatLauncherRect();
+        });
+    }
     if (authenticatedUser) {
         refreshChatState({ forceScroll: shouldShow }).catch(() => {});
     }
@@ -1254,6 +1338,190 @@ function renderChatAdminControls() {
     chatClearHistoryButton.disabled = !chatClearHistoryCheckbox.checked;
 }
 
+function setChatSendStatus(message = '', { isError = false } = {}) {
+    if (!chatSendStatus) return;
+    chatSendStatus.textContent = String(message || '');
+    chatSendStatus.classList.toggle('hidden', !message);
+    chatSendStatus.classList.toggle('is-error', Boolean(message) && isError);
+}
+
+function getChatMentionCandidates(query = '') {
+    const normalizedQuery = String(query || '').trim().toLowerCase();
+    const uniqueByUsername = new Map();
+    chatOnlineUsersCache.forEach((user) => {
+        const username = String(user.username || '').trim();
+        if (!username || username === authenticatedUser?.username) return;
+        if (!normalizedQuery) {
+            uniqueByUsername.set(username, user);
+            return;
+        }
+        const displayName = String(user.display_name || '').trim().toLowerCase();
+        if (username.toLowerCase().includes(normalizedQuery) || displayName.includes(normalizedQuery)) {
+            uniqueByUsername.set(username, user);
+        }
+    });
+    return Array.from(uniqueByUsername.values()).slice(0, CHAT_MENTION_OPTION_LIMIT);
+}
+
+function getTextareaCaretCoordinates(textarea, position) {
+    const mirror = document.createElement('div');
+    const style = window.getComputedStyle(textarea);
+    const properties = [
+        'boxSizing', 'width', 'height', 'overflowX', 'overflowY',
+        'borderTopWidth', 'borderRightWidth', 'borderBottomWidth', 'borderLeftWidth',
+        'paddingTop', 'paddingRight', 'paddingBottom', 'paddingLeft',
+        'fontStyle', 'fontVariant', 'fontWeight', 'fontStretch', 'fontSize',
+        'fontSizeAdjust', 'lineHeight', 'fontFamily', 'textAlign', 'textTransform',
+        'textIndent', 'textDecoration', 'letterSpacing', 'wordSpacing',
+        'tabSize', 'MozTabSize', 'whiteSpace', 'wordBreak', 'overflowWrap',
+    ];
+    mirror.style.position = 'fixed';
+    mirror.style.left = '-9999px';
+    mirror.style.top = '0';
+    mirror.style.visibility = 'hidden';
+    properties.forEach((property) => {
+        mirror.style[property] = style[property];
+    });
+    mirror.style.whiteSpace = 'pre-wrap';
+    mirror.style.wordBreak = 'break-word';
+    mirror.style.overflowWrap = 'anywhere';
+    mirror.textContent = textarea.value.slice(0, position);
+    const marker = document.createElement('span');
+    marker.textContent = textarea.value.slice(position) || '.';
+    mirror.appendChild(marker);
+    document.body.appendChild(mirror);
+    const textareaRect = textarea.getBoundingClientRect();
+    const markerRect = marker.getBoundingClientRect();
+    const result = {
+        left: textareaRect.left + (markerRect.left - mirror.getBoundingClientRect().left) - textarea.scrollLeft,
+        top: textareaRect.top + (markerRect.top - mirror.getBoundingClientRect().top) - textarea.scrollTop,
+        height: markerRect.height || parseFloat(style.lineHeight) || 20,
+    };
+    document.body.removeChild(mirror);
+    return result;
+}
+
+function renderChatMentionDropdown() {
+    if (!chatMentionState || chatMentionOptions.length === 0) {
+        clearChatMentionDropdown();
+        return;
+    }
+    const optionsMarkup = chatMentionOptions.map((user, index) => `
+        <button
+            class="chat-mention-option ${index === chatMentionActiveIndex ? 'is-active' : ''}"
+            type="button"
+            data-username="${escapeHtml(user.username || '')}"
+        >
+            <span class="chat-mention-option-name">${escapeHtml(user.display_name || user.username || '匿名用户')}</span>
+            <span class="chat-mention-option-meta">@${escapeHtml(user.username || '-')}</span>
+        </button>
+    `).join('');
+    chatMentionDropdown.innerHTML = optionsMarkup;
+    chatMentionDropdown.classList.remove('hidden');
+    chatMentionDropdown.setAttribute('aria-hidden', 'false');
+}
+
+function positionChatMentionDropdown() {
+    if (!chatMentionState || chatMentionDropdown.classList.contains('hidden')) return;
+    const caret = getTextareaCaretCoordinates(chatInput, chatMentionState.cursorIndex);
+    const width = Math.min(240, Math.max(window.innerWidth - 16, 160));
+    const dropdownWidth = Math.min(width, 240);
+    const dropdownHeight = Math.min(224, Math.max(window.innerHeight - 16, 96));
+    const maxLeft = Math.max(8, window.innerWidth - dropdownWidth - 8);
+    const maxTop = Math.max(8, window.innerHeight - dropdownHeight - 8);
+    const left = clamp(caret.left + 12, 8, maxLeft);
+    const top = clamp(caret.top + caret.height + 8, 8, maxTop);
+    chatMentionDropdown.style.left = `${left}px`;
+    chatMentionDropdown.style.top = `${top}px`;
+}
+
+function updateChatMentionDropdown() {
+    if (!authenticatedUser || !chatInput) return;
+    const cursorIndex = Number(chatInput.selectionStart || 0);
+    const valueBeforeCursor = chatInput.value.slice(0, cursorIndex);
+    const mentionMatch = valueBeforeCursor.match(/(^|[\s(（\[【])@([^\s@]*)$/);
+    if (!mentionMatch) {
+        clearChatMentionDropdown();
+        return;
+    }
+    const query = mentionMatch[2] || '';
+    const options = getChatMentionCandidates(query);
+    if (options.length === 0) {
+        clearChatMentionDropdown();
+        return;
+    }
+    chatMentionState = {
+        startIndex: cursorIndex - query.length - 1,
+        cursorIndex,
+        query,
+    };
+    chatMentionOptions = options;
+    chatMentionActiveIndex = 0;
+    renderChatMentionDropdown();
+    positionChatMentionDropdown();
+}
+
+function applyChatMention(user) {
+    if (!user || !chatMentionState) return;
+    const before = chatInput.value.slice(0, chatMentionState.startIndex);
+    const after = chatInput.value.slice(chatInput.selectionStart || chatMentionState.cursorIndex);
+    const mentionText = `@${user.username} `;
+    const nextValue = `${before}${mentionText}${after}`;
+    const nextCursorIndex = before.length + mentionText.length;
+    chatInput.value = nextValue;
+    chatInput.focus();
+    chatInput.setSelectionRange(nextCursorIndex, nextCursorIndex);
+    clearChatMentionDropdown();
+}
+
+function extractMentionedUsernames(text) {
+    const usernames = new Set();
+    const mentionPattern = /@([A-Za-z0-9._-]+)/g;
+    let matched;
+    while ((matched = mentionPattern.exec(String(text || ''))) !== null) {
+        usernames.add(matched[1]);
+    }
+    return usernames;
+}
+
+function beginChatLauncherDrag(event) {
+    if (chatLauncher.classList.contains('hidden') || event.button !== 0) return;
+    const currentRect = chatLauncher.getBoundingClientRect();
+    chatLauncherDragState = {
+        pointerId: event.pointerId,
+        offsetX: event.clientX - currentRect.left,
+        offsetY: event.clientY - currentRect.top,
+        moved: false,
+    };
+}
+
+function handleChatLauncherDrag(event) {
+    if (!chatLauncherDragState || event.pointerId !== chatLauncherDragState.pointerId) return;
+    const bounds = getChatViewportBounds();
+    const width = Math.max(chatLauncher.offsetWidth || 172, 120);
+    const height = Math.max(chatLauncher.offsetHeight || 50, 40);
+    const maxLeft = Math.max(CHAT_VIEWPORT_MARGIN, bounds.width - width - CHAT_VIEWPORT_MARGIN);
+    const maxTop = Math.max(CHAT_VIEWPORT_MARGIN, bounds.height - height - CHAT_VIEWPORT_MARGIN);
+    const nextLeft = clamp(event.clientX - chatLauncherDragState.offsetX, CHAT_VIEWPORT_MARGIN, maxLeft);
+    const nextTop = clamp(event.clientY - chatLauncherDragState.offsetY, CHAT_VIEWPORT_MARGIN, maxTop);
+    chatLauncher.style.left = `${nextLeft}px`;
+    chatLauncher.style.top = `${nextTop}px`;
+    chatLauncher.style.right = 'auto';
+    chatLauncher.style.bottom = 'auto';
+    chatLauncherDragState.moved = true;
+}
+
+function endChatLauncherDrag(event) {
+    if (!chatLauncherDragState || (event && event.pointerId !== chatLauncherDragState.pointerId)) return;
+    const moved = chatLauncherDragState.moved;
+    chatLauncherDragState = null;
+    if (moved) {
+        chatLauncherSuppressClickUntil = Date.now() + 240;
+        syncChatLauncherStateFromDom();
+        persistChatWindowState();
+    }
+}
+
 function setChatOnlineDrawerOpen(open) {
     chatOnlineDrawerOpen = Boolean(open);
     chatOnlineCount.setAttribute('aria-expanded', chatOnlineDrawerOpen ? 'true' : 'false');
@@ -1295,21 +1563,25 @@ function resetChatRuntime() {
     chatReadReceiptOpenMessageId = 0;
     chatReadReceiptMembers = [];
     chatUnreadCount = 0;
+    chatStateInitialized = false;
     chatStoragePath = '';
     chatOnlineUserCount = 0;
     chatOnlineUsersCache = [];
     chatOnlineDrawerOpen = false;
     chatOnlineDrawerPosition = null;
     chatAdminEnabled = false;
+    chatMentionAlertActive = false;
     chatPollInFlight = false;
+    endChatLauncherDrag();
     clearChatMessageHold();
+    clearChatMentionDropdown();
     if (chatSendButton) chatSendButton.disabled = false;
     if (chatInput) chatInput.value = '';
     if (chatStorageStatus) {
         chatStorageStatus.textContent = '';
         chatStorageStatus.classList.add('hidden');
     }
-    if (chatSendStatus) chatSendStatus.textContent = 'Enter 发送，Shift + Enter 换行';
+    setChatSendStatus('');
     if (chatOnlineCount) chatOnlineCount.textContent = '在线 0 人';
     if (chatOnlinePreview) chatOnlinePreview.innerHTML = '<p class="terminal-hint">登录后显示在线成员</p>';
     if (chatOnlineUsers) chatOnlineUsers.innerHTML = '<p class="terminal-hint">登录后显示全部在线成员</p>';
@@ -1497,15 +1769,32 @@ function mergeChatState(data, { forceScroll = false } = {}) {
             chatStorageStatus.classList.add('hidden');
         }
     }
-    if (chatSendStatus) chatSendStatus.textContent = 'Enter 发送，Shift + Enter 换行';
+    setChatSendStatus('');
     renderChatAdminControls();
     if (Array.isArray(data.online_users)) {
         renderChatOnlineUsers(data.online_users);
     }
 
     const incoming = Array.isArray(data.messages) ? data.messages : [];
-    const isInitialSnapshot = chatLatestMessageId === 0;
+    const isInitialSnapshot = !chatStateInitialized;
     const previousLatest = chatLatestMessageId;
+    const serverLatest = Number(data.latest_message_id || 0);
+    const serverReset = serverLatest < previousLatest;
+
+    if (serverReset) {
+        chatMessages = incoming;
+        chatLatestMessageId = serverLatest;
+        chatLatestSelfMessageId = latestSelfChatMessageId(chatMessages);
+        chatReadReceiptOpenMessageId = 0;
+        chatReadReceiptMembers = [];
+        chatUnreadCount = 0;
+        chatMentionAlertActive = false;
+        chatStateInitialized = true;
+        renderChatMessages({ forceScroll: true });
+        updateChatLauncher();
+        return;
+    }
+
     if (isInitialSnapshot) {
         chatMessages = incoming;
     } else if (incoming.length > 0) {
@@ -1525,18 +1814,28 @@ function mergeChatState(data, { forceScroll = false } = {}) {
         chatReadReceiptOpenMessageId = 0;
         chatReadReceiptMembers = [];
     }
-    chatLatestMessageId = Math.max(Number(data.latest_message_id || 0), ...chatMessages.map((item) => Number(item.id || 0)), previousLatest);
+    chatLatestMessageId = Math.max(serverLatest, ...chatMessages.map((item) => Number(item.id || 0)), previousLatest);
 
     const newMessageCount = isInitialSnapshot
         ? 0
         : incoming.filter((message) => Number(message.id || 0) > previousLatest).length;
+    const hasMentionForCurrentUser = !isInitialSnapshot && incoming.some((message) => (
+        message
+        && String(message.username || '') !== String(authenticatedUser?.username || '')
+        && extractMentionedUsernames(message.text || '').has(String(authenticatedUser?.username || ''))
+    ));
     if (chatWindowState?.visible === false && newMessageCount > 0) {
         chatUnreadCount += newMessageCount;
+        if (hasMentionForCurrentUser) {
+            chatMentionAlertActive = true;
+        }
     } else if (chatWindowState?.visible !== false) {
         chatUnreadCount = 0;
+        chatMentionAlertActive = false;
     }
 
     renderChatMessages({ forceScroll: forceScroll || isInitialSnapshot });
+    chatStateInitialized = true;
     updateChatLauncher();
 }
 
@@ -1600,7 +1899,7 @@ async function sendChatMessage() {
     const text = chatInput.value.trim();
     if (!text) return;
     chatSendButton.disabled = true;
-    chatSendStatus.textContent = '正在发送...';
+    setChatSendStatus('');
     try {
         const data = await apiFetch('/api/chat/messages', {
             method: 'POST',
@@ -1617,14 +1916,12 @@ async function sendChatMessage() {
             { forceScroll: true },
         );
         await refreshChatState({ forceScroll: true });
+        clearChatMentionDropdown();
     } catch (error) {
-        chatSendStatus.textContent = error.message;
+        setChatSendStatus(error.message, { isError: true });
         throw error;
     } finally {
         chatSendButton.disabled = false;
-        if (chatSendStatus && chatSendStatus.textContent === '正在发送...') {
-            chatSendStatus.textContent = 'Enter 发送，Shift + Enter 换行';
-        }
     }
 }
 
@@ -2151,8 +2448,10 @@ startSessionButton.onclick = startSession;
 document.getElementById('end-session-btn').onclick = forceEndSession;
 document.getElementById('send-btn').onclick = sendMessage;
 chatLauncher.addEventListener('click', () => {
+    if (Date.now() < chatLauncherSuppressClickUntil) return;
     setChatWindowVisibility(true, { scrollToBottom: true });
 });
+chatLauncher.addEventListener('pointerdown', beginChatLauncherDrag);
 chatHideButton.addEventListener('click', () => {
     setChatWindowVisibility(false);
 });
@@ -2182,14 +2481,52 @@ chatClearHistoryCheckbox.addEventListener('change', () => {
 chatClearHistoryButton.addEventListener('click', () => {
     clearChatHistory().catch(() => {});
 });
+chatMentionDropdown.addEventListener('click', (event) => {
+    const option = event.target.closest('.chat-mention-option');
+    if (!option) return;
+    const matched = chatMentionOptions.find((user) => user.username === option.dataset.username);
+    if (!matched) return;
+    applyChatMention(matched);
+});
 chatSendButton.addEventListener('click', () => {
     sendChatMessage().catch(() => {});
 });
 chatInput.addEventListener('keydown', (event) => {
+    if (!chatMentionDropdown.classList.contains('hidden')) {
+        if (event.key === 'ArrowDown') {
+            event.preventDefault();
+            chatMentionActiveIndex = (chatMentionActiveIndex + 1) % chatMentionOptions.length;
+            renderChatMentionDropdown();
+            positionChatMentionDropdown();
+            return;
+        }
+        if (event.key === 'ArrowUp') {
+            event.preventDefault();
+            chatMentionActiveIndex = (chatMentionActiveIndex - 1 + chatMentionOptions.length) % chatMentionOptions.length;
+            renderChatMentionDropdown();
+            positionChatMentionDropdown();
+            return;
+        }
+        if (event.key === 'Enter' && chatMentionOptions.length > 0) {
+            event.preventDefault();
+            applyChatMention(chatMentionOptions[chatMentionActiveIndex]);
+            return;
+        }
+        if (event.key === 'Escape') {
+            clearChatMentionDropdown();
+            return;
+        }
+    }
     if (event.key === 'Enter' && !event.shiftKey) {
         event.preventDefault();
         sendChatMessage().catch(() => {});
     }
+});
+chatInput.addEventListener('input', updateChatMentionDropdown);
+chatInput.addEventListener('click', updateChatMentionDropdown);
+chatInput.addEventListener('keyup', (event) => {
+    if (['ArrowDown', 'ArrowUp', 'Enter', 'Escape'].includes(event.key)) return;
+    updateChatMentionDropdown();
 });
 document.getElementById('review-submit-btn').onclick = submitReview;
 document.getElementById('review-close-btn').onclick = dismissReview;
@@ -2279,6 +2616,14 @@ document.addEventListener('click', (event) => {
     chatReadReceiptMembers = [];
     renderChatMessages();
 });
+document.addEventListener('click', (event) => {
+    if (chatMentionDropdown.classList.contains('hidden')) return;
+    const clickedInput = event.target.closest('#chat-input');
+    const clickedDropdown = event.target.closest('#chat-mention-dropdown');
+    if (!clickedInput && !clickedDropdown) {
+        clearChatMentionDropdown();
+    }
+});
 window.addEventListener('resize', () => {
     hideIssueReferencePopover();
     resizeCursorTrailCanvas();
@@ -2289,25 +2634,37 @@ window.addEventListener('resize', () => {
         applyChatWindowRect();
         persistChatWindowState();
     }
+    if (!chatLauncher.classList.contains('hidden')) {
+        applyChatLauncherRect();
+        persistChatWindowState();
+    }
+    if (!chatMentionDropdown.classList.contains('hidden')) {
+        positionChatMentionDropdown();
+    }
 });
 window.addEventListener('pointermove', updateCursorGlow, { passive: true });
+window.addEventListener('pointermove', handleChatLauncherDrag);
 window.addEventListener('pointermove', handleChatDrag);
 window.addEventListener('pointermove', trackChatMessageHold);
 window.addEventListener('pointermove', trackTextMagnifierPointer);
+window.addEventListener('pointerup', endChatLauncherDrag);
 window.addEventListener('pointerup', endChatDrag);
 window.addEventListener('pointerup', endChatMessageHold);
 window.addEventListener('pointerup', endTextMagnifierPress);
 window.addEventListener('pointercancel', endTextMagnifierPress);
+window.addEventListener('pointercancel', endChatLauncherDrag);
 window.addEventListener('pointercancel', endChatDrag);
 window.addEventListener('pointercancel', endChatMessageHold);
 window.addEventListener('pointerleave', (event) => {
     if (event.target === document.body || event.target === document.documentElement) {
+        endChatLauncherDrag(event);
         endChatMessageHold(event);
         endChatDrag(event);
         endTextMagnifierPress(event);
     }
 });
 window.addEventListener('blur', () => {
+    endChatLauncherDrag();
     endChatMessageHold();
     endChatDrag();
     hideTextMagnifier();

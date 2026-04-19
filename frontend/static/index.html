@@ -241,6 +241,8 @@
         <span id="chat-launcher-unread" class="chat-launcher-unread hidden">0</span>
     </button>
 
+    <div id="chat-mention-dropdown" class="chat-mention-dropdown hidden" aria-hidden="true"></div>
+
     <aside id="chat-window" class="chat-window hidden" aria-hidden="true">
         <header id="chat-window-header" class="chat-window-header">
             <div>
@@ -285,11 +287,11 @@
 
         <footer class="chat-composer">
             <label class="chat-composer-label" for="chat-input">群聊消息</label>
-            <textarea id="chat-input" rows="2" placeholder="输入群聊消息，Enter 发送，Shift + Enter 换行"></textarea>
-            <div class="chat-composer-actions">
-                <span id="chat-send-status" class="chat-send-status">聊天记录将持久化到本地</span>
-                <button id="chat-send-btn" class="primary-btn" type="button">发送</button>
+            <div class="chat-compose-row">
+                <textarea id="chat-input" rows="1" placeholder="输入群聊消息"></textarea>
+                <button id="chat-send-btn" class="primary-btn chat-send-btn-inline" type="button">发送</button>
             </div>
+            <span id="chat-send-status" class="chat-send-status hidden" aria-live="polite"></span>
         </footer>
     </aside>
 
