@@ -37,6 +37,31 @@ PROVINCE_PREFIXES = (
     "香港",
     "澳门",
 )
+PROVINCE_DISPLAY_NAMES = {
+    "河北": "河北省",
+    "山西": "山西省",
+    "辽宁": "辽宁省",
+    "吉林": "吉林省",
+    "黑龙江": "黑龙江省",
+    "江苏": "江苏省",
+    "浙江": "浙江省",
+    "安徽": "安徽省",
+    "福建": "福建省",
+    "江西": "江西省",
+    "山东": "山东省",
+    "河南": "河南省",
+    "湖北": "湖北省",
+    "湖南": "湖南省",
+    "广东": "广东省",
+    "海南": "海南省",
+    "四川": "四川省",
+    "贵州": "贵州省",
+    "云南": "云南省",
+    "陕西": "陕西省",
+    "甘肃": "甘肃省",
+    "青海": "青海省",
+    "台湾": "台湾省",
+}
 MUNICIPALITY_PREFIXES = ("北京", "上海", "天津", "重庆")
 COMMUNITY_SUFFIXES = (
     "小区",
@@ -185,6 +210,18 @@ def _strip_province_suffix(text: str) -> str:
     return stripped
 
 
+def canonicalize_province_name(name: str) -> str:
+    normalized = normalize_address_text(name)
+    if not normalized:
+        return ""
+    compact = re.sub(
+        r"(省|壮族自治区|回族自治区|维吾尔自治区|自治区|特别行政区)$",
+        "",
+        normalized,
+    )
+    return PROVINCE_DISPLAY_NAMES.get(compact, normalized)
+
+
 def _compact_municipality_prefix(text: str) -> str:
     for municipality in MUNICIPALITY_PREFIXES:
         if text.startswith(f"{municipality}市"):
@@ -220,6 +257,42 @@ def compact_address_text(text: str) -> str:
     return re.sub(r"^([^市区县]{2,9})市", r"\1", normalized, count=1)
 
 
+def canonicalize_address_text(text: str) -> str:
+    normalized = normalize_address_text(text)
+    if not normalized:
+        return ""
+
+    components = extract_address_components(normalized)
+    ordered = "".join(
+        part
+        for part in (
+            components.province,
+            components.city,
+            components.district,
+            components.town,
+            components.road,
+            components.community,
+            components.building,
+            components.unit,
+            components.floor,
+            components.room,
+        )
+        if part
+    )
+    if ordered:
+        return ordered
+
+    province_prefix = next(
+        (candidate for candidate in PROVINCE_PREFIXES if normalized.startswith(candidate)),
+        "",
+    )
+    if province_prefix:
+        remainder = normalized[len(province_prefix) :]
+        remainder = _strip_province_suffix(remainder)
+        return f"{canonicalize_province_name(province_prefix)}{remainder}"
+    return normalized
+
+
 def extract_address_components(text: str) -> AddressComponents:
     normalized = normalize_address_text(text)
     if not normalized:
@@ -250,11 +323,11 @@ def extract_address_components(text: str) -> AddressComponents:
             "",
         )
         if province_prefix:
-            province = f"{province_prefix}省" if remainder.startswith(f"{province_prefix}省") else province_prefix
+            province = canonicalize_province_name(province_prefix)
             remainder = remainder[len(province_prefix) :]
             remainder = _strip_province_suffix(remainder)
 
-        city_match = re.match(r"^[\u4e00-\u9fa5]{2,9}市", remainder)
+        city_match = re.match(r"^[\u4e00-\u9fa5]{2,9}市(?!场|集)", remainder)
         if city_match:
             city = city_match.group(0)
             remainder = remainder[city_match.end() :]

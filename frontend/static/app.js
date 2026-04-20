@@ -176,6 +176,8 @@ const CHAT_UNREAD_CAP = 99;
 const CHAT_MESSAGE_HOLD_MS = 420;
 const CHAT_MESSAGE_HOLD_MOVE_TOLERANCE = 10;
 const CHAT_MENTION_OPTION_LIMIT = 12;
+const DEFAULT_DOCUMENT_TITLE = document.title;
+const CHAT_FAVICON_SIZE = 64;
 
 function formatDisplayTimestamp(date) {
     const year = date.getFullYear();
@@ -321,6 +323,95 @@ function updateChatLauncher() {
     chatLauncherOnline.textContent = `${chatOnlineUserCount} 人在线`;
     chatLauncherUnread.textContent = chatUnreadCount > CHAT_UNREAD_CAP ? '99+' : String(chatUnreadCount);
     chatLauncherUnread.classList.toggle('hidden', chatUnreadCount < 1);
+    updateChatPageIndicator();
+}
+
+function ensureChatFaviconLink() {
+    const existing = document.querySelector('link[rel~="icon"]');
+    if (existing instanceof HTMLLinkElement) {
+        return existing;
+    }
+    const link = document.createElement('link');
+    link.rel = 'icon';
+    link.type = 'image/png';
+    document.head.appendChild(link);
+    return link;
+}
+
+function drawRoundedRect(context, x, y, width, height, radius) {
+    const normalizedRadius = Math.max(0, Math.min(Number(radius || 0), width / 2, height / 2));
+    context.beginPath();
+    context.moveTo(x + normalizedRadius, y);
+    context.lineTo(x + width - normalizedRadius, y);
+    context.quadraticCurveTo(x + width, y, x + width, y + normalizedRadius);
+    context.lineTo(x + width, y + height - normalizedRadius);
+    context.quadraticCurveTo(x + width, y + height, x + width - normalizedRadius, y + height);
+    context.lineTo(x + normalizedRadius, y + height);
+    context.quadraticCurveTo(x, y + height, x, y + height - normalizedRadius);
+    context.lineTo(x, y + normalizedRadius);
+    context.quadraticCurveTo(x, y, x + normalizedRadius, y);
+    context.closePath();
+}
+
+function buildChatFaviconDataUrl(unreadCount = 0) {
+    const canvas = document.createElement('canvas');
+    canvas.width = CHAT_FAVICON_SIZE;
+    canvas.height = CHAT_FAVICON_SIZE;
+    const context = canvas.getContext('2d');
+    if (!context) return '';
+
+    context.clearRect(0, 0, CHAT_FAVICON_SIZE, CHAT_FAVICON_SIZE);
+
+    context.fillStyle = '#14324b';
+    drawRoundedRect(context, 4, 4, CHAT_FAVICON_SIZE - 8, CHAT_FAVICON_SIZE - 8, 16);
+    context.fill();
+
+    context.fillStyle = '#2a7fff';
+    drawRoundedRect(context, 10, 10, CHAT_FAVICON_SIZE - 20, CHAT_FAVICON_SIZE - 20, 12);
+    context.fill();
+
+    context.fillStyle = '#f4f7fb';
+    context.font = 'bold 28px sans-serif';
+    context.textAlign = 'center';
+    context.textBaseline = 'middle';
+    context.fillText('群', CHAT_FAVICON_SIZE / 2, CHAT_FAVICON_SIZE / 2);
+
+    if (unreadCount > 0) {
+        const badgeText = unreadCount > CHAT_UNREAD_CAP ? '99+' : String(unreadCount);
+        const badgeRadius = badgeText.length > 2 ? 18 : 16;
+        const badgeCenterX = CHAT_FAVICON_SIZE - badgeRadius - 2;
+        const badgeCenterY = badgeRadius + 2;
+
+        context.fillStyle = '#ef4444';
+        context.beginPath();
+        context.arc(badgeCenterX, badgeCenterY, badgeRadius, 0, Math.PI * 2);
+        context.fill();
+
+        context.fillStyle = '#ffffff';
+        context.font = `bold ${badgeText.length > 2 ? 15 : 18}px sans-serif`;
+        context.textAlign = 'center';
+        context.textBaseline = 'middle';
+        context.fillText(badgeText, badgeCenterX, badgeCenterY + 1);
+    }
+
+    return canvas.toDataURL('image/png');
+}
+
+function updateChatPageIndicator() {
+    const unreadCount = Math.max(Number(chatUnreadCount || 0), 0);
+    const titlePrefix = unreadCount > 0
+        ? `(${unreadCount > CHAT_UNREAD_CAP ? '99+' : unreadCount}) `
+        : '';
+    const titleLabel = chatMentionAlertActive ? '群聊有人@你' : '群聊新消息';
+    document.title = unreadCount > 0
+        ? `${titlePrefix}${titleLabel} - ${DEFAULT_DOCUMENT_TITLE}`
+        : DEFAULT_DOCUMENT_TITLE;
+
+    const faviconLink = ensureChatFaviconLink();
+    const faviconUrl = buildChatFaviconDataUrl(unreadCount);
+    if (faviconLink && faviconUrl) {
+        faviconLink.href = faviconUrl;
+    }
 }
 
 function resolveChatLauncherRect() {
@@ -2753,6 +2844,10 @@ document.addEventListener('pointerout', (event) => {
         hideCursorGlow();
     }
 }, true);
+document.addEventListener('visibilitychange', () => {
+    if (document.hidden || !authenticatedUser) return;
+    refreshChatState({ forceScroll: chatWindowState?.visible !== false }).catch(() => {});
+});
 document.addEventListener('pointerdown', beginTextMagnifierPress);
 document.addEventListener('scroll', handleDocumentScroll, true);
 

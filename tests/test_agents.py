@@ -77,6 +77,36 @@ class RecordingAddressClient:
         raise AssertionError("Async path is not used in ServiceAgent.")
 
 
+class RecordingCityProvinceBackfillClient:
+    def __init__(self):
+        self.calls: list[dict] = []
+
+    def complete_json(self, **kwargs):
+        self.calls.append(kwargs)
+        system_prompt = str(kwargs.get("messages", [{}, {}])[0].get("content", ""))
+        user_prompt = str(kwargs.get("messages", [{}, {}])[-1].get("content", ""))
+        if "用户说“武汉市江夏区”" not in system_prompt:
+            raise AssertionError("City-to-province backfill instruction is missing from prompt.")
+        if "用户只说“江夏区”或“幸福家园10号楼402室”" not in system_prompt:
+            raise AssertionError("District/detail-only anti-backfill instruction is missing from prompt.")
+        if "用户本轮原话：\n武汉市江夏区" in user_prompt:
+            return {
+                "address_candidate": "武汉市江夏区",
+                "merged_address_candidate": "湖北省武汉市江夏区",
+                "granularity": "admin_region",
+            }
+        if "用户本轮原话：\n幸福家园 10 号楼 402" in user_prompt:
+            return {
+                "address_candidate": "幸福家园10号楼402室",
+                "merged_address_candidate": "湖北省武汉市江夏区幸福家园10号楼402室",
+                "granularity": "locality_with_detail",
+            }
+        raise AssertionError("Unexpected address model input.")
+
+    async def complete_json_async(self, **kwargs):
+        raise AssertionError("Async path is not used in ServiceAgent.")
+
+
 class RecordingRoutingClient:
     def __init__(self):
         self.calls: list[dict] = []
@@ -311,6 +341,84 @@ class UserAgentTests(unittest.IsolatedAsyncioTestCase):
 
 
 class ServiceAgentTests(unittest.TestCase):
+    def test_service_agent_backfills_province_when_user_provides_prefecture_level_city(self):
+        client = RecordingCityProvinceBackfillClient()
+        agent = ServiceAgent(
+            client,
+            model="qwen3-32b",
+            temperature=0.7,
+            ok_prefix_probability=0.0,
+            product_routing_enabled=False,
+        )
+        scenario_data = build_scenario().to_dict()
+        scenario_data["customer"]["address"] = "湖北省武汉市江夏区幸福家园10号楼402室"
+        scenario = Scenario.from_dict(scenario_data)
+        collected_slots = {
+            "issue_description": "热水器不制热。",
+            "surname": "张",
+            "phone": "13800000001",
+            "address": "",
+            "product_model": "",
+            "request_type": "fault",
+            "availability": "",
+            "phone_contactable": "yes",
+            "phone_contact_owner": "本人当前来电",
+            "phone_collection_attempts": "0",
+        }
+        state = ServiceRuntimeState(awaiting_full_address=True)
+
+        region_result = agent.respond(
+            scenario=scenario,
+            transcript=[
+                DialogueTurn(
+                    speaker="service",
+                    text="需要登记下您的地址，麻烦您完整的说下省、市、区、乡镇，精确到门牌号。",
+                    round_index=8,
+                ),
+                DialogueTurn(
+                    speaker="user",
+                    text="武汉市江夏区",
+                    round_index=8,
+                ),
+            ],
+            collected_slots=collected_slots,
+            runtime_state=state,
+        )
+
+        self.assertEqual(
+            region_result["reply"],
+            "请问具体是在哪个小区或村呢？尽量详细到门牌号。",
+        )
+        self.assertEqual(state.partial_address_candidate, "湖北省武汉市江夏区")
+
+        detail_result = agent.respond(
+            scenario=scenario,
+            transcript=[
+                DialogueTurn(
+                    speaker="service",
+                    text="请问具体是在哪个小区或村呢？尽量详细到门牌号。",
+                    round_index=9,
+                ),
+                DialogueTurn(
+                    speaker="user",
+                    text="幸福家园 10 号楼 402",
+                    round_index=9,
+                ),
+            ],
+            collected_slots=collected_slots,
+            runtime_state=state,
+        )
+
+        self.assertEqual(
+            detail_result["reply"],
+            "跟您确认一下，地址是湖北省武汉市江夏区幸福家园10号楼402室，对吗？",
+        )
+        self.assertEqual(
+            state.pending_address_confirmation,
+            "湖北省武汉市江夏区幸福家园10号楼402室",
+        )
+        self.assertGreaterEqual(len(client.calls), 2)
+
     def test_service_agent_uses_model_fallback_for_address_correction(self):
         client = RecordingAddressClient()
         agent = ServiceAgent(
