@@ -13,6 +13,7 @@ from css_data_synthesis_test.product_routing import (
     ROUTING_RESULT_BUILDING,
     ROUTING_RESULT_HOME,
     build_product_routing_plan,
+    infer_model_lookup_answer_key,
     infer_product_routing_answer_key,
     next_product_routing_steps_from_observed_trace,
 )
@@ -133,6 +134,16 @@ class ProductRoutingPlanTests(unittest.TestCase):
 
         self.assertEqual(answer_key, "entry.unknown")
 
+    def test_infer_product_routing_answer_key_maps_zhensheng_series_to_home_series(self):
+        answer_key = infer_product_routing_answer_key("brand_or_series", "买的时候,店家说叫什么真省")
+
+        self.assertEqual(answer_key, "brand_series.home_series")
+
+    def test_infer_product_routing_answer_key_maps_colloquial_zhensheng_reply_to_home_series(self):
+        answer_key = infer_product_routing_answer_key("brand_or_series", "那个真省的好像")
+
+        self.assertEqual(answer_key, "brand_series.home_series")
+
     def test_infer_product_routing_answer_key_maps_colloquial_water_usage_to_water_branch(self):
         answer_key = infer_product_routing_answer_key("usage_purpose", "单独生活的")
 
@@ -238,8 +249,203 @@ class ProductRoutingPlanTests(unittest.TestCase):
         self.assertEqual(next_steps, [])
         self.assertEqual(result, ROUTING_RESULT_BUILDING)
 
+    def test_infer_model_lookup_answer_key_defaults_known_homeish_model_to_unknown(self):
+        answer_key = infer_model_lookup_answer_key("KF66/200L-MI(E4)")
+
+        self.assertEqual(answer_key, "model_lookup.unknown")
+
+    def test_infer_model_lookup_answer_key_maps_large_capacity_model_to_building(self):
+        answer_key = infer_model_lookup_answer_key("KF110/500L-D")
+
+        self.assertEqual(answer_key, "model_lookup.building")
+
 
 class ProductRoutingServicePolicyTests(unittest.TestCase):
+    def test_service_policy_routes_zhensheng_series_to_home_without_handoff(self):
+        plan = {
+            "enabled": True,
+            "result": ROUTING_RESULT_HOME,
+            "trace": ["brand_series.home_series"],
+            "summary": "brand_series.home_series -> 家用 + 可直接确认机型",
+            "steps": [
+                {
+                    "prompt_key": "brand_or_series",
+                    "prompt": PROMPT_BRAND_OR_SERIES,
+                    "answer_key": "entry.unknown",
+                    "answer_value": "真省",
+                    "answer_instruction": "自然表达副品牌/系列是真省。",
+                }
+            ],
+        }
+        scenario = build_scenario_with_routing(plan)
+        policy = ServiceDialoguePolicy(ok_prefix_probability=0.0)
+        state = ServiceRuntimeState(
+            expected_product_routing_response=True,
+            product_routing_step_index=0,
+            product_routing_observed_trace=[],
+        )
+
+        result = policy.respond(
+            scenario=scenario,
+            transcript=[
+                DialogueTurn(speaker="service", text=PROMPT_BRAND_OR_SERIES, round_index=2),
+                DialogueTurn(speaker="user", text="买的时候,店家说叫什么真省", round_index=3),
+            ],
+            collected_slots={
+                "issue_description": "热水不稳定",
+                "surname": "",
+                "phone": "",
+                "address": "",
+                "request_type": "fault",
+                "phone_contactable": "",
+                "phone_contact_owner": "",
+                "phone_collection_attempts": "",
+                "product_arrived": "",
+                "product_routing_result": "",
+            },
+            runtime_state=state,
+        )
+
+        self.assertEqual(result.reply, "请问您贵姓？")
+        self.assertEqual(result.close_status, "")
+        self.assertEqual(result.close_reason, "")
+        self.assertEqual(result.slot_updates["product_routing_result"], ROUTING_RESULT_HOME)
+        self.assertEqual(state.product_routing_observed_trace, ["brand_series.home_series"])
+
+    def test_service_policy_routes_colloquial_zhensheng_reply_to_home_without_handoff(self):
+        plan = {
+            "enabled": True,
+            "result": ROUTING_RESULT_HOME,
+            "trace": ["brand_series.home_series"],
+            "summary": "brand_series.home_series -> 家用 + 可直接确认机型",
+            "steps": [
+                {
+                    "prompt_key": "brand_or_series",
+                    "prompt": PROMPT_BRAND_OR_SERIES,
+                    "answer_key": "entry.unknown",
+                    "answer_value": "真省",
+                    "answer_instruction": "自然表达副品牌/系列是真省。",
+                }
+            ],
+        }
+        scenario = build_scenario_with_routing(plan)
+        policy = ServiceDialoguePolicy(ok_prefix_probability=0.0)
+        state = ServiceRuntimeState(
+            expected_product_routing_response=True,
+            product_routing_step_index=0,
+            product_routing_observed_trace=[],
+        )
+
+        result = policy.respond(
+            scenario=scenario,
+            transcript=[
+                DialogueTurn(speaker="service", text=PROMPT_BRAND_OR_SERIES, round_index=2),
+                DialogueTurn(speaker="user", text="那个真省的好像", round_index=3),
+            ],
+            collected_slots={
+                "issue_description": "热水不稳定",
+                "surname": "",
+                "phone": "",
+                "address": "",
+                "request_type": "fault",
+                "phone_contactable": "",
+                "phone_contact_owner": "",
+                "phone_collection_attempts": "",
+                "product_arrived": "",
+                "product_routing_result": "",
+            },
+            runtime_state=state,
+        )
+
+        self.assertEqual(result.reply, "请问您贵姓？")
+        self.assertEqual(result.close_status, "")
+        self.assertEqual(result.close_reason, "")
+        self.assertEqual(result.slot_updates["product_routing_result"], ROUTING_RESULT_HOME)
+        self.assertEqual(state.product_routing_observed_trace, ["brand_series.home_series"])
+
+    def test_service_policy_resets_hidden_plan_trace_before_brand_answer_and_then_records_actual_answer(self):
+        plan = {
+            "enabled": True,
+            "result": ROUTING_RESULT_HOME,
+            "trace": ["brand_series.colmo"],
+            "summary": "brand_series.colmo -> 家用 + 可直接确认机型",
+            "steps": [
+                {
+                    "prompt_key": "brand_or_series",
+                    "prompt": PROMPT_BRAND_OR_SERIES,
+                    "answer_key": "brand_series.colmo",
+                    "answer_value": "COLMO",
+                    "answer_instruction": "自然表达品牌或系列是 COLMO。",
+                }
+            ],
+        }
+        scenario = build_scenario_with_routing(plan)
+        policy = ServiceDialoguePolicy(ok_prefix_probability=0.0)
+        state = ServiceRuntimeState()
+
+        opening_result = policy.respond(
+            scenario=scenario,
+            transcript=[
+                DialogueTurn(
+                    speaker="service",
+                    text="您好，很高兴为您服务，请问是美的空气能热水器需要维修吗？",
+                    round_index=1,
+                ),
+                DialogueTurn(
+                    speaker="user",
+                    text="是的",
+                    round_index=2,
+                ),
+            ],
+            collected_slots={
+                "issue_description": "",
+                "surname": "",
+                "phone": "",
+                "address": "",
+                "request_type": "",
+                "phone_contactable": "",
+                "phone_contact_owner": "",
+                "phone_collection_attempts": "",
+                "product_arrived": "",
+                "product_routing_result": "",
+            },
+            runtime_state=state,
+        )
+
+        self.assertEqual(opening_result.reply, PROMPT_BRAND_OR_SERIES)
+        self.assertEqual(state.product_routing_observed_trace, [])
+        self.assertEqual(scenario.hidden_context["product_routing_trace"], [])
+        self.assertEqual(scenario.hidden_context["product_routing_plan"]["trace"], [])
+
+        answer_result = policy.respond(
+            scenario=scenario,
+            transcript=[
+                DialogueTurn(speaker="service", text=PROMPT_BRAND_OR_SERIES, round_index=2),
+                DialogueTurn(speaker="user", text="那个真省的好像", round_index=3),
+            ],
+            collected_slots={
+                "issue_description": "热水不稳定",
+                "surname": "",
+                "phone": "",
+                "address": "",
+                "request_type": "fault",
+                "phone_contactable": "",
+                "phone_contact_owner": "",
+                "phone_collection_attempts": "",
+                "product_arrived": "",
+                "product_routing_result": "",
+            },
+            runtime_state=ServiceRuntimeState(
+                expected_product_routing_response=True,
+                product_routing_step_index=0,
+                product_routing_observed_trace=[],
+            ),
+        )
+
+        self.assertEqual(answer_result.reply, "请问您贵姓？")
+        self.assertEqual(scenario.hidden_context["product_routing_trace"], ["brand_series.home_series"])
+        self.assertEqual(scenario.hidden_context["product_routing_plan"]["trace"], ["brand_series.home_series"])
+
     def test_service_policy_uses_hidden_model_lookup_trace_after_user_provides_model_but_lookup_is_unknown(self):
         plan = {
             "enabled": True,
@@ -299,6 +505,54 @@ class ProductRoutingServicePolicyTests(unittest.TestCase):
             ["entry.model", "model_lookup.unknown"],
         )
         self.assertTrue(state.expected_product_routing_response)
+
+    def test_service_policy_appends_fallback_model_lookup_trace_when_step_has_no_post_trace(self):
+        plan = {
+            "enabled": True,
+            "result": ROUTING_RESULT_HOME,
+            "trace": ["entry.model", "model_lookup.unknown", "purchase.self_buy"],
+            "summary": "entry.model -> model_lookup.unknown -> purchase.self_buy -> 家用 + 可直接确认机型",
+            "steps": [
+                {
+                    "prompt_key": "brand_or_series",
+                    "prompt": PROMPT_BRAND_OR_SERIES,
+                    "answer_key": "entry.model",
+                    "answer_value": "KF66/200L-MI(E4)",
+                    "answer_instruction": "自然提供一个具体型号，不要说自己不知道。",
+                }
+            ],
+        }
+        scenario = build_scenario_with_routing(plan)
+        policy = ServiceDialoguePolicy(ok_prefix_probability=0.0, rng=random.Random(0))
+        state = ServiceRuntimeState(
+            expected_product_routing_response=True,
+            product_routing_step_index=0,
+            product_routing_observed_trace=[],
+        )
+
+        result = policy.respond(
+            scenario=scenario,
+            transcript=[
+                DialogueTurn(speaker="service", text=PROMPT_BRAND_OR_SERIES, round_index=2),
+                DialogueTurn(speaker="user", text="型号是KF66/200L-MI(E4)", round_index=3),
+            ],
+            collected_slots={
+                "issue_description": "热水不稳定",
+                "surname": "",
+                "phone": "",
+                "address": "",
+                "request_type": "fault",
+                "phone_contactable": "",
+                "phone_contact_owner": "",
+                "phone_collection_attempts": "",
+                "product_arrived": "",
+                "product_routing_result": "",
+            },
+            runtime_state=state,
+        )
+
+        self.assertEqual(result.reply, PROMPT_PURCHASE_OR_PROPERTY)
+        self.assertEqual(state.product_routing_observed_trace, ["entry.model", "model_lookup.unknown"])
 
     def test_service_policy_inserts_routing_between_opening_and_fault_question(self):
         plan = {
@@ -503,7 +757,7 @@ class ProductRoutingServicePolicyTests(unittest.TestCase):
 
         self.assertEqual(
             result.reply,
-            "非常抱歉，给您添麻烦了，我这就安排是否上门维修，请问您的空气能是什么具体品牌或系列呢？",
+            "非常抱歉，给您添麻烦了，我这就安排师傅上门维修，请问您的空气能是什么具体品牌或系列呢？",
         )
 
     def test_service_policy_reroutes_unknown_usage_purpose_to_usage_scene(self):

@@ -10,6 +10,7 @@ import hashlib
 import os
 import re
 import secrets
+import copy
 from datetime import datetime, timedelta, timezone
 from dataclasses import asdict, replace
 from pathlib import Path
@@ -1053,13 +1054,13 @@ def _routing_prompt_key_from_text(text: str) -> str:
 def _rebuild_scenario_for_checkpoint(session: dict[str, Any], checkpoint: dict[str, Any]) -> Scenario:
     checkpoint_scenario = checkpoint.get("scenario")
     if isinstance(checkpoint_scenario, dict):
-        return Scenario.from_dict(dict(checkpoint_scenario))
-
-    base_scenario_payload = session.get("base_scenario")
-    if isinstance(base_scenario_payload, dict) and base_scenario_payload:
-        scenario = Scenario.from_dict(dict(base_scenario_payload))
+        scenario = Scenario.from_dict(dict(checkpoint_scenario))
     else:
-        scenario = Scenario.from_dict(session["scenario"].to_dict())
+        base_scenario_payload = session.get("base_scenario")
+        if isinstance(base_scenario_payload, dict) and base_scenario_payload:
+            scenario = Scenario.from_dict(dict(base_scenario_payload))
+        else:
+            scenario = Scenario.from_dict(session["scenario"].to_dict())
 
     runtime_state_payload = dict(checkpoint.get("runtime_state", {}))
     observed_trace = list(runtime_state_payload.get("product_routing_observed_trace", []))
@@ -2105,7 +2106,7 @@ def rewind_session(
     session["transcript"] = _deserialize_turns_from_storage(checkpoint.get("transcript"))
     session["terminal_entries"] = _copy_terminal_entries(checkpoint.get("terminal_entries", []))
     session["collected_slots"] = dict(checkpoint.get("collected_slots", {}))
-    session["runtime_state"] = ServiceRuntimeState(**dict(checkpoint.get("runtime_state", {})))
+    session["runtime_state"] = ServiceRuntimeState(**copy.deepcopy(dict(checkpoint.get("runtime_state", {}))))
     session["status"] = "active"
     session["aborted_reason"] = ""
     session["ended_at"] = ""

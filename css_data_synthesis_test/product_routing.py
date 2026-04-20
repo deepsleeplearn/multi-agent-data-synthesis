@@ -108,6 +108,10 @@ MODEL_FALLBACKS = (
     "KF75/300L-MI(E5)",
     "KF110/500L-D",
 )
+KNOWN_BUILDING_MODEL_HINT_PATTERNS = (
+    re.compile(r"KF110/500L-D", re.IGNORECASE),
+    re.compile(r"/(?:7[5-9]\d|[89]\d{2}|\d{4,})L", re.IGNORECASE),
+)
 CHINESE_DIGITS = {
     "零": 0,
     "一": 1,
@@ -305,6 +309,16 @@ def _weighted_choice(rng: random.Random, weights: dict[str, float]) -> str:
 def _pick_model_value(rng: random.Random, model_hint: str) -> str:
     normalized_hint = str(model_hint or "").strip()
     return normalized_hint if normalized_hint and normalized_hint != "未知" else rng.choice(MODEL_FALLBACKS)
+
+
+def infer_model_lookup_answer_key(model_hint: str) -> str:
+    normalized_hint = re.sub(r"\s+", "", str(model_hint or "").strip().upper())
+    if not normalized_hint or normalized_hint == "未知":
+        return "model_lookup.unknown"
+    for pattern in KNOWN_BUILDING_MODEL_HINT_PATTERNS:
+        if pattern.search(normalized_hint):
+            return "model_lookup.building"
+    return "model_lookup.unknown"
 
 
 def _answer_value(rng: random.Random, answer_key: str, *, model_hint: str = "") -> str:
@@ -879,6 +893,9 @@ def next_product_routing_steps_from_observed_trace(
         ], ""
 
     if current_answer_key == "entry.model":
+        fallback_model_lookup = infer_model_lookup_answer_key(model_hint)
+        if fallback_model_lookup == "model_lookup.building":
+            return [], ROUTING_RESULT_BUILDING
         return [
             _make_step(
                 "purchase_or_property",
@@ -1059,7 +1076,11 @@ def build_product_routing_plan(
             "lieyan": ROUTING_RESULT_BUILDING,
         }[brand_choice]
     elif entry == "model":
-        lookup_result = _weighted_choice(resolved_rng, MODEL_LOOKUP_WEIGHTS)
+        fallback_lookup_answer_key = infer_model_lookup_answer_key(model_hint)
+        if fallback_lookup_answer_key in {"model_lookup.home", "model_lookup.building", "model_lookup.unknown"}:
+            lookup_result = fallback_lookup_answer_key.removeprefix("model_lookup.")
+        else:
+            lookup_result = _weighted_choice(resolved_rng, MODEL_LOOKUP_WEIGHTS)
         model_step = _make_step(
             "brand_or_series",
             PROMPT_BRAND_OR_SERIES,

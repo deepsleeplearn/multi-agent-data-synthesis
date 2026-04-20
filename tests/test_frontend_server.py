@@ -875,6 +875,107 @@ class FrontendServerTests(unittest.TestCase):
         self.assertEqual(reply_payload["status"], "transferred")
         self.assertEqual(reply_payload["collected_slots"]["product_routing_result"], ROUTING_RESULT_HUMAN)
 
+    def test_rewind_clears_pending_product_routing_trace_without_aftereffects(self):
+        self._login()
+        start_payload = self.client.post(
+            "/api/session/start",
+            json={"scenario_id": "frontend_case"},
+        ).json()
+        session_id = start_payload["session_id"]
+        session = frontend_server.sessions[session_id]
+        frontend_server.config.product_routing_enabled = True
+        frontend_server.config.product_routing_apply_probability = 1.0
+        session["policy"] = frontend_server._build_service_policy()
+        session["scenario"].hidden_context["interactive_test_freeform"] = True
+        session["scenario"].hidden_context["product_routing_plan"] = {
+            "enabled": True,
+            "result": "",
+            "trace": ["brand_series.lieyan"],
+            "summary": "brand_series.lieyan -> 楼宇 + 可直接确认机型",
+            "steps": [
+                {
+                    "prompt_key": "brand_or_series",
+                    "prompt": "请问您的空气能是什么具体品牌或系列呢？",
+                    "answer_key": "brand_series.lieyan",
+                    "answer_value": "烈焰",
+                    "answer_instruction": "自然表达系列是烈焰。",
+                }
+            ],
+        }
+        session["scenario"].hidden_context["product_routing_result"] = ""
+        session["scenario"].hidden_context["product_routing_trace"] = ["brand_series.lieyan"]
+        session["checkpoints"][0]["scenario"] = session["scenario"].to_dict()
+
+        self.client.post(
+            "/api/session/respond",
+            json={"session_id": session_id, "text": "你好"},
+        )
+        self.client.post(
+            "/api/session/respond",
+            json={"session_id": session_id, "text": "是的"},
+        )
+
+        first_reply = self.client.post(
+            "/api/session/respond",
+            json={"session_id": session_id, "text": "烈焰"},
+        )
+        self.assertEqual(first_reply.status_code, 200)
+        self.assertEqual(
+            first_reply.json()["runtime_state"]["product_routing_observed_trace"],
+            ["brand_series.lieyan"],
+        )
+
+        rewind_response = self.client.post(
+            "/api/session/rewind",
+            json={
+                "session_id": session_id,
+                "clicked_user_round_index": 3,
+                "restore_checkpoint_index": 2,
+            },
+        )
+        self.assertEqual(rewind_response.status_code, 200)
+        rewind_payload = rewind_response.json()
+        self.assertEqual(rewind_payload["runtime_state"]["product_routing_observed_trace"], [])
+        self.assertEqual(
+            frontend_server.sessions[session_id]["scenario"].hidden_context["product_routing_trace"],
+            [],
+        )
+
+        second_reply = self.client.post(
+            "/api/session/respond",
+            json={"session_id": session_id, "text": "烈焰"},
+        )
+        self.assertEqual(second_reply.status_code, 200)
+        self.assertEqual(
+            second_reply.json()["runtime_state"]["product_routing_observed_trace"],
+            ["brand_series.lieyan"],
+        )
+
+        second_rewind = self.client.post(
+            "/api/session/rewind",
+            json={
+                "session_id": session_id,
+                "clicked_user_round_index": 3,
+                "restore_checkpoint_index": 2,
+            },
+        )
+        self.assertEqual(second_rewind.status_code, 200)
+        self.assertEqual(second_rewind.json()["runtime_state"]["product_routing_observed_trace"], [])
+        self.assertEqual(
+            frontend_server.sessions[session_id]["scenario"].hidden_context["product_routing_trace"],
+            [],
+        )
+
+        third_reply = self.client.post(
+            "/api/session/respond",
+            json={"session_id": session_id, "text": "烈焰"},
+        )
+        self.assertEqual(third_reply.status_code, 200)
+        self.assertEqual(
+            third_reply.json()["runtime_state"]["product_routing_observed_trace"],
+            ["brand_series.lieyan"],
+        )
+
     def test_review_endpoint_persists_session_to_sqlite_when_enabled(self):
         self._login()
         start_payload = self.client.post(

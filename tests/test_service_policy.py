@@ -218,7 +218,7 @@ class ServicePolicyTests(unittest.TestCase):
                 runtime_state=state,
             )
 
-            self.assertEqual(result.reply, "非常抱歉，给您添麻烦了，我这就安排是否上门维修，麻烦问下您姓什么？")
+            self.assertEqual(result.reply, "非常抱歉，给您添麻烦了，我这就安排师傅上门维修，麻烦问下您姓什么？")
         finally:
             ServiceDialoguePolicy.SURNAME_PROMPT = original_prompt
 
@@ -1273,7 +1273,7 @@ class ServicePolicyTests(unittest.TestCase):
 
         self.assertEqual(
             result.reply,
-            "非常抱歉，给您添麻烦了，我这就安排是否上门维修，请问您的空气能是什么品牌或系列呢？",
+            "非常抱歉，给您添麻烦了，我这就安排师傅上门维修，请问您的空气能是什么品牌或系列呢？",
         )
         self.assertEqual(result.slot_updates["issue_description"], "是的，热水器不加热，想报修。")
         self.assertTrue(state.expected_product_routing_response)
@@ -1392,7 +1392,7 @@ class ServicePolicyTests(unittest.TestCase):
         self.assertEqual(result.slot_updates["issue_description"], "出水太少，洗澡体验差")
         self.assertEqual(
             result.reply,
-            "非常抱歉，给您添麻烦了，我这就安排是否上门维修，请问您的空气能是什么品牌或系列呢？",
+            "非常抱歉，给您添麻烦了，我这就安排师傅上门维修，请问您的空气能是什么品牌或系列呢？",
         )
 
     def test_fault_opening_forces_model_intent_inference_before_product_routing(self):
@@ -1467,7 +1467,7 @@ class ServicePolicyTests(unittest.TestCase):
         self.assertEqual(result.slot_updates["issue_description"], "机器现在不出热水了")
         self.assertEqual(
             result.reply,
-            "非常抱歉，给您添麻烦了，我这就安排是否上门维修，请问您的空气能是什么具体品牌或系列呢？",
+            "非常抱歉，给您添麻烦了，我这就安排师傅上门维修，请问您的空气能是什么具体品牌或系列呢？",
         )
         self.assertTrue(state.expected_product_routing_response)
 
@@ -2442,7 +2442,7 @@ class ServicePolicyTests(unittest.TestCase):
         )
 
         self.assertEqual(result.slot_updates["issue_description"], "就是最近加热特别慢，洗澡的时候水还忽冷忽热。")
-        self.assertEqual(result.reply, "非常抱歉，给您添麻烦了，我这就安排是否上门维修，请问您贵姓？")
+        self.assertEqual(result.reply, "非常抱歉，给您添麻烦了，我这就安排师傅上门维修，请问您贵姓？")
 
     def test_fault_issue_followup_response_uses_model_extraction(self):
         def fake_issue_extraction(*, user_text: str, user_round_index: int):
@@ -2488,7 +2488,7 @@ class ServicePolicyTests(unittest.TestCase):
         transcript = [
             DialogueTurn(
                 speaker="service",
-                text="非常抱歉，给您添麻烦了，我这就安排是否上门维修，请问您贵姓",
+                text="非常抱歉，给您添麻烦了，我这就安排师傅上门维修，请问您贵姓",
                 round_index=2,
             ),
             DialogueTurn(speaker="user", text="姓孙。", round_index=2),
@@ -6799,7 +6799,7 @@ class ServicePolicyTests(unittest.TestCase):
         transcript = [
             DialogueTurn(
                 speaker="service",
-                text="非常抱歉，给您添麻烦了，我这就安排是否上门维修，请问您贵姓？",
+                text="非常抱歉，给您添麻烦了，我这就安排师傅上门维修，请问您贵姓？",
                 round_index=8,
             ),
             DialogueTurn(speaker="user", text="啊，我姓什么，东耳郑", round_index=9),

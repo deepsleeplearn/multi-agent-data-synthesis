@@ -22,6 +22,7 @@ from css_data_synthesis_test.product_routing import (
     allowed_product_routing_answer_keys,
     default_unknown_product_routing_answer_key,
     get_product_routing_steps,
+    infer_model_lookup_answer_key,
     infer_product_routing_answer_key,
     next_product_routing_steps_from_observed_trace,
 )
@@ -3966,9 +3967,14 @@ class ServiceDialoguePolicy:
         post_answer_trace: list[str] | None = None,
     ) -> ServicePolicyResult:
         runtime_state.product_routing_observed_trace.append(observed_answer_key)
-        if post_answer_trace:
+        resolved_post_answer_trace = list(post_answer_trace or [])
+        if observed_answer_key == "entry.model" and not resolved_post_answer_trace:
+            fallback_model_lookup = infer_model_lookup_answer_key(scenario.product.model)
+            if fallback_model_lookup:
+                resolved_post_answer_trace.append(fallback_model_lookup)
+        if resolved_post_answer_trace:
             runtime_state.product_routing_observed_trace.extend(
-                item for item in post_answer_trace if str(item).strip()
+                item for item in resolved_post_answer_trace if str(item).strip()
             )
         next_steps, result = next_product_routing_steps_from_observed_trace(
             runtime_state.product_routing_observed_trace,
@@ -4025,6 +4031,12 @@ class ServiceDialoguePolicy:
             runtime_state.product_routing_completed = True
             return ServicePolicyResult(reply="", slot_updates=slot_updates, is_ready_to_close=False)
 
+        self._update_product_routing_plan(
+            scenario=scenario,
+            steps=steps[runtime_state.product_routing_step_index :],
+            trace=runtime_state.product_routing_observed_trace,
+            result="",
+        )
         runtime_state.expected_product_routing_response = True
         reply = steps[runtime_state.product_routing_step_index]["prompt"]
         if prepend_fault_ack and runtime_state.product_routing_step_index == 0:
