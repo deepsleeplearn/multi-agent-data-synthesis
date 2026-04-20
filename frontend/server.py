@@ -104,9 +104,15 @@ _SESSION_REVIEW_DB_NORMALIZED = False
 SESSION_REDIS_URL = os.getenv("FRONTEND_SESSION_REDIS_URL", "").strip()
 SESSION_REDIS_TTL_SECONDS = int(os.getenv("FRONTEND_SESSION_REDIS_TTL_SECONDS", "43200") or "43200")
 CHAT_STORAGE_PATH = PROJECT_ROOT / "outputs" / "frontend_chat_messages.json"
+CHAT_RECALL_STORAGE_PATH = PROJECT_ROOT / "outputs" / "frontend_chat_message_recalls.json"
 CHAT_STORAGE_LOCK = threading.RLock()
 CHAT_PRESENCE_TTL = timedelta(seconds=int(os.getenv("FRONTEND_CHAT_PRESENCE_TTL_SECONDS", "30") or "30"))
-chat_state: dict[str, Any] = {"messages": [], "last_message_id": 0}
+chat_state: dict[str, Any] = {
+    "messages": [],
+    "last_message_id": 0,
+    "recalled_message_ids": [],
+    "snapshot_revision": 0,
+}
 chat_state_loaded = False
 FLOW_REVIEW_OPTIONS = [
     {"key": "opening_confirmation", "label": "开场确认"},
@@ -187,6 +193,15 @@ class ReviewSessionRequest(BaseModel):
 
 class ChatMessageRequest(BaseModel):
     text: str
+
+
+def _empty_chat_state() -> dict[str, Any]:
+    return {
+        "messages": [],
+        "last_message_id": 0,
+        "recalled_message_ids": [],
+        "snapshot_revision": 0,
+    }
 
 
 def _scenario_file() -> Path:
@@ -417,6 +432,31 @@ def _copy_chat_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return copied
 
 
+def _normalize_recalled_chat_message_ids(values: Any, *, known_message_ids: set[int] | None = None) -> list[int]:
+    normalized_ids: list[int] = []
+    seen: set[int] = set()
+    for value in values if isinstance(values, list) else []:
+        try:
+            normalized_id = int(value or 0)
+        except (TypeError, ValueError):
+            continue
+        if normalized_id <= 0 or normalized_id in seen:
+            continue
+        if known_message_ids is not None and normalized_id not in known_message_ids:
+            continue
+        seen.add(normalized_id)
+        normalized_ids.append(normalized_id)
+    return normalized_ids
+
+
+def _copy_chat_messages_for_response(messages: list[dict[str, Any]], recalled_message_ids: set[int] | None = None) -> list[dict[str, Any]]:
+    recalled_ids = recalled_message_ids or set()
+    copied = _copy_chat_messages(messages)
+    for item in copied:
+        item["recalled"] = int(item.get("id", 0) or 0) in recalled_ids
+    return copied
+
+
 def _load_chat_state() -> None:
     global chat_state_loaded, chat_state
 
@@ -425,27 +465,43 @@ def _load_chat_state() -> None:
             return
 
         if not CHAT_STORAGE_PATH.exists():
-            chat_state = {"messages": [], "last_message_id": 0}
-            chat_state_loaded = True
-            return
+            message_payload: dict[str, Any] = {}
+        else:
+            try:
+                message_payload = json.loads(CHAT_STORAGE_PATH.read_text(encoding="utf-8"))
+            except Exception:
+                message_payload = {}
 
-        try:
-            payload = json.loads(CHAT_STORAGE_PATH.read_text(encoding="utf-8"))
-        except Exception:
-            chat_state = {"messages": [], "last_message_id": 0}
-            chat_state_loaded = True
-            return
-
-        loaded_messages = payload.get("messages", [])
+        loaded_messages = message_payload.get("messages", [])
         normalized_messages = _copy_chat_messages(loaded_messages if isinstance(loaded_messages, list) else [])
-        last_message_id = payload.get("last_message_id", 0)
+        last_message_id = message_payload.get("last_message_id", 0)
         if not isinstance(last_message_id, int):
             last_message_id = 0
         if normalized_messages:
             last_message_id = max(last_message_id, max(message["id"] for message in normalized_messages))
+
+        known_message_ids = {int(message["id"]) for message in normalized_messages}
+        if CHAT_RECALL_STORAGE_PATH.exists():
+            try:
+                recall_payload = json.loads(CHAT_RECALL_STORAGE_PATH.read_text(encoding="utf-8"))
+            except Exception:
+                recall_payload = {}
+        else:
+            recall_payload = {}
+
+        recalled_message_ids = _normalize_recalled_chat_message_ids(
+            recall_payload.get("recalled_message_ids", []),
+            known_message_ids=known_message_ids,
+        )
+        snapshot_revision = recall_payload.get("snapshot_revision", 0)
+        if not isinstance(snapshot_revision, int) or snapshot_revision < 0:
+            snapshot_revision = 0
+
         chat_state = {
             "messages": normalized_messages,
             "last_message_id": last_message_id,
+            "recalled_message_ids": recalled_message_ids,
+            "snapshot_revision": snapshot_revision,
         }
         chat_state_loaded = True
 
@@ -457,6 +513,15 @@ def _persist_chat_state() -> None:
         "messages": _copy_chat_messages(list(chat_state.get("messages", []))),
     }
     CHAT_STORAGE_PATH.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _persist_chat_recall_state() -> None:
+    CHAT_RECALL_STORAGE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "snapshot_revision": int(chat_state.get("snapshot_revision", 0) or 0),
+        "recalled_message_ids": _normalize_recalled_chat_message_ids(chat_state.get("recalled_message_ids", [])),
+    }
+    CHAT_RECALL_STORAGE_PATH.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def _build_online_chat_users(now: datetime | None = None) -> list[dict[str, str]]:
@@ -547,7 +612,10 @@ def _latest_chat_message_for_username(username: str) -> dict[str, Any] | None:
 
     _load_chat_state()
     with CHAT_STORAGE_LOCK:
+        recalled_ids = set(_normalize_recalled_chat_message_ids(chat_state.get("recalled_message_ids", [])))
         for message in reversed(list(chat_state.get("messages", []))):
+            if int(message.get("id", 0) or 0) in recalled_ids:
+                continue
             if str(message.get("username", "")).strip() == normalized_username:
                 return dict(message)
     return None
@@ -1526,6 +1594,7 @@ def auth_logout(
 @app.get("/api/chat/state")
 def chat_state_view(
     since_message_id: int = 0,
+    since_snapshot_revision: int = 0,
     chat_visible: bool = False,
     current_user: dict[str, str] = Depends(_require_authenticated_user),
 ):
@@ -1535,12 +1604,16 @@ def chat_state_view(
     with CHAT_STORAGE_LOCK:
         known_messages = list(chat_state.get("messages", []))
         normalized_since = max(int(since_message_id or 0), 0)
-        if normalized_since > 0:
+        snapshot_revision = max(int(chat_state.get("snapshot_revision", 0) or 0), 0)
+        normalized_snapshot_revision = max(int(since_snapshot_revision or 0), 0)
+        requires_full_sync = normalized_since <= 0 or normalized_snapshot_revision != snapshot_revision
+        if normalized_since > 0 and not requires_full_sync:
             message_slice = [message for message in known_messages if int(message.get("id", 0) or 0) > normalized_since]
         else:
             message_slice = known_messages
 
         latest_message_id = int(chat_state.get("last_message_id", 0) or 0)
+        recalled_message_ids = set(_normalize_recalled_chat_message_ids(chat_state.get("recalled_message_ids", [])))
 
     online_users = _build_online_chat_users()
     chat_admin = _is_chat_admin(current_user)
@@ -1554,8 +1627,10 @@ def chat_state_view(
         "chat_admin": chat_admin,
         "online_count": len(online_users),
         "online_users": online_users,
-        "messages": _copy_chat_messages(message_slice),
+        "messages": _copy_chat_messages_for_response(message_slice, recalled_message_ids),
         "latest_message_id": latest_message_id,
+        "snapshot_revision": snapshot_revision,
+        "full_sync": requires_full_sync,
         "storage_path": str(CHAT_STORAGE_PATH),
     }
 
@@ -1587,10 +1662,58 @@ def create_chat_message(
         chat_state["messages"] = chat_messages
         chat_state["last_message_id"] = next_message_id
         _persist_chat_state()
+        snapshot_revision = int(chat_state.get("snapshot_revision", 0) or 0)
 
     return {
         "ok": True,
-        "message": dict(message),
+        "message": {**dict(message), "recalled": False},
+        "snapshot_revision": snapshot_revision,
+        "storage_path": str(CHAT_STORAGE_PATH),
+    }
+
+
+@app.post("/api/chat/messages/{message_id}/recall")
+def recall_chat_message(
+    message_id: int,
+    current_user: dict[str, str] = Depends(_require_authenticated_user),
+):
+    normalized_message_id = max(int(message_id or 0), 0)
+    if normalized_message_id <= 0:
+        raise HTTPException(status_code=400, detail="撤回消息编号无效。")
+
+    _load_chat_state()
+
+    with CHAT_STORAGE_LOCK:
+        known_messages = list(chat_state.get("messages", []))
+        target_message = next(
+            (message for message in known_messages if int(message.get("id", 0) or 0) == normalized_message_id),
+            None,
+        )
+        if target_message is None:
+            raise HTTPException(status_code=404, detail="未找到要撤回的消息。")
+        if str(target_message.get("username", "")).strip() != current_user["username"]:
+            raise HTTPException(status_code=403, detail="只能撤回自己发送的消息。")
+
+        recalled_message_ids = _normalize_recalled_chat_message_ids(chat_state.get("recalled_message_ids", []))
+        if normalized_message_id not in recalled_message_ids:
+            recalled_message_ids.append(normalized_message_id)
+            recalled_message_ids.sort()
+            chat_state["recalled_message_ids"] = recalled_message_ids
+            chat_state["snapshot_revision"] = int(chat_state.get("snapshot_revision", 0) or 0) + 1
+            _persist_chat_recall_state()
+
+        snapshot_revision = int(chat_state.get("snapshot_revision", 0) or 0)
+        latest_message_id = int(chat_state.get("last_message_id", 0) or 0)
+        recalled_ids = set(_normalize_recalled_chat_message_ids(chat_state.get("recalled_message_ids", [])))
+
+    return {
+        "ok": True,
+        "recalled": True,
+        "message_id": normalized_message_id,
+        "messages": _copy_chat_messages_for_response(known_messages, recalled_ids),
+        "latest_message_id": latest_message_id,
+        "snapshot_revision": snapshot_revision,
+        "full_sync": True,
         "storage_path": str(CHAT_STORAGE_PATH),
     }
 
@@ -1623,14 +1746,20 @@ def clear_chat_history(
     with CHAT_STORAGE_LOCK:
         chat_state["messages"] = []
         chat_state["last_message_id"] = 0
+        chat_state["recalled_message_ids"] = []
+        chat_state["snapshot_revision"] = int(chat_state.get("snapshot_revision", 0) or 0) + 1
         if CHAT_STORAGE_PATH.exists():
             CHAT_STORAGE_PATH.unlink()
+        if CHAT_RECALL_STORAGE_PATH.exists():
+            CHAT_RECALL_STORAGE_PATH.unlink()
 
     return {
         "ok": True,
         "cleared": True,
         "latest_message_id": 0,
         "messages": [],
+        "snapshot_revision": int(chat_state.get("snapshot_revision", 0) or 0),
+        "full_sync": True,
         "storage_path": str(CHAT_STORAGE_PATH),
     }
 

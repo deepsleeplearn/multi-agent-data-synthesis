@@ -56,7 +56,8 @@ class FrontendServerTests(unittest.TestCase):
         frontend_server.auth_sessions.clear()
         frontend_server.SESSION_REVIEW_DB_PATH = self.db_path
         frontend_server.CHAT_STORAGE_PATH = Path(self.temp_dir.name) / "frontend_chat_messages.json"
-        frontend_server.chat_state = {"messages": [], "last_message_id": 0}
+        frontend_server.CHAT_RECALL_STORAGE_PATH = Path(self.temp_dir.name) / "frontend_chat_message_recalls.json"
+        frontend_server.chat_state = frontend_server._empty_chat_state()
         frontend_server.chat_state_loaded = False
         frontend_server._SESSION_REVIEW_DB_STATE_PATH = None
         frontend_server._mark_review_db_unready()
@@ -80,7 +81,7 @@ class FrontendServerTests(unittest.TestCase):
     def tearDown(self):
         frontend_server.sessions.clear()
         frontend_server.auth_sessions.clear()
-        frontend_server.chat_state = {"messages": [], "last_message_id": 0}
+        frontend_server.chat_state = frontend_server._empty_chat_state()
         frontend_server.chat_state_loaded = False
         if self.previous_accounts_file is None:
             os.environ.pop("FRONTEND_REGISTERED_ACCOUNTS_FILE", None)
@@ -217,7 +218,7 @@ class FrontendServerTests(unittest.TestCase):
         self.assertEqual(persisted_payload["last_message_id"], 1)
         self.assertEqual(persisted_payload["messages"][0]["text"], "这条消息需要落盘。")
 
-        frontend_server.chat_state = {"messages": [], "last_message_id": 0}
+        frontend_server.chat_state = frontend_server._empty_chat_state()
         frontend_server.chat_state_loaded = False
 
         reloaded_state = self.client.get("/api/chat/state")
@@ -237,6 +238,83 @@ class FrontendServerTests(unittest.TestCase):
         payload = initial_state.json()
         self.assertEqual([item["text"] for item in payload["messages"]], ["第一条历史消息", "第二条历史消息"])
 
+    def test_user_can_recall_own_message_without_mutating_persisted_message_file(self):
+        self._login()
+        post_response = self.client.post("/api/chat/messages", json={"text": "这条消息稍后撤回。"})
+        self.assertEqual(post_response.status_code, 200)
+
+        recall_response = self.client.post("/api/chat/messages/1/recall")
+        self.assertEqual(recall_response.status_code, 200)
+        recall_payload = recall_response.json()
+        self.assertTrue(recall_payload["recalled"])
+        self.assertTrue(recall_payload["full_sync"])
+        self.assertEqual(recall_payload["snapshot_revision"], 1)
+        self.assertTrue(recall_payload["messages"][0]["recalled"])
+
+        latest_state = self.client.get(
+            "/api/chat/state",
+            params={"since_message_id": 1, "since_snapshot_revision": 0, "chat_visible": True},
+        )
+        self.assertEqual(latest_state.status_code, 200)
+        state_payload = latest_state.json()
+        self.assertTrue(state_payload["full_sync"])
+        self.assertEqual(state_payload["snapshot_revision"], 1)
+        self.assertTrue(state_payload["messages"][0]["recalled"])
+
+        persisted_payload = json.loads(frontend_server.CHAT_STORAGE_PATH.read_text(encoding="utf-8"))
+        self.assertEqual(persisted_payload["messages"][0]["text"], "这条消息稍后撤回。")
+        self.assertNotIn("recalled", persisted_payload["messages"][0])
+
+        recall_payload = json.loads(frontend_server.CHAT_RECALL_STORAGE_PATH.read_text(encoding="utf-8"))
+        self.assertEqual(recall_payload["recalled_message_ids"], [1])
+
+    def test_user_cannot_recall_other_users_message(self):
+        author_client = TestClient(frontend_server.app)
+
+        author_login = author_client.post(
+            "/api/auth/login",
+            json={"username": "tester", "password": "pass123"},
+        )
+        self.assertEqual(author_login.status_code, 200)
+        create_response = author_client.post("/api/chat/messages", json={"text": "这条消息不允许别人撤回。"})
+        self.assertEqual(create_response.status_code, 200)
+
+        self._login_admin()
+        forbidden = self.client.post("/api/chat/messages/1/recall")
+        self.assertEqual(forbidden.status_code, 403)
+
+    def test_recalled_message_is_visible_to_other_logged_in_clients(self):
+        viewer_client = TestClient(frontend_server.app)
+
+        self._login()
+        self.client.post("/api/chat/messages", json={"text": "这条消息会被撤回。"})
+
+        viewer_login = viewer_client.post(
+            "/api/auth/login",
+            json={"username": "chat-admin", "password": "admin123"},
+        )
+        self.assertEqual(viewer_login.status_code, 200)
+        viewer_state_before = viewer_client.get(
+            "/api/chat/state",
+            params={"since_message_id": 0, "since_snapshot_revision": 0, "chat_visible": False},
+        )
+        self.assertEqual(viewer_state_before.status_code, 200)
+        self.assertFalse(viewer_state_before.json()["messages"][0]["recalled"])
+
+        recall_response = self.client.post("/api/chat/messages/1/recall")
+        self.assertEqual(recall_response.status_code, 200)
+
+        viewer_state_after = viewer_client.get(
+            "/api/chat/state",
+            params={"since_message_id": 1, "since_snapshot_revision": 0, "chat_visible": False},
+        )
+        self.assertEqual(viewer_state_after.status_code, 200)
+        viewer_payload = viewer_state_after.json()
+        self.assertTrue(viewer_payload["full_sync"])
+        self.assertEqual(viewer_payload["snapshot_revision"], 1)
+        self.assertEqual(len(viewer_payload["messages"]), 1)
+        self.assertTrue(viewer_payload["messages"][0]["recalled"])
+
     def test_only_admin_can_clear_chat_history(self):
         self._login()
         self.client.post("/api/chat/messages", json={"text": "普通账号消息"})
@@ -254,6 +332,7 @@ class FrontendServerTests(unittest.TestCase):
         self.assertEqual(payload["messages"], [])
         self.assertEqual(payload["latest_message_id"], 0)
         self.assertFalse(frontend_server.CHAT_STORAGE_PATH.exists())
+        self.assertFalse(frontend_server.CHAT_RECALL_STORAGE_PATH.exists())
 
         state_after_clear = self.client.get("/api/chat/state")
         self.assertEqual(state_after_clear.status_code, 200)

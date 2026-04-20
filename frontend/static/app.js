@@ -37,6 +37,7 @@ let chatPollTimer = null;
 let chatPollInFlight = false;
 let chatUnreadCount = 0;
 let chatStateInitialized = false;
+let chatSnapshotRevision = 0;
 let chatStoragePath = '';
 let chatWindowState = null;
 let chatDragState = null;
@@ -59,6 +60,7 @@ let chatMessageHoldTimer = null;
 let chatMessageHoldPointerId = null;
 let chatMessageHoldStartPoint = null;
 let chatMessageHoldMessageId = 0;
+let chatContextMenuMessageId = 0;
 
 const authGate = document.getElementById('auth-gate');
 const appShell = document.getElementById('app-shell');
@@ -115,6 +117,8 @@ const chatLauncher = document.getElementById('chat-launcher');
 const chatLauncherOnline = document.getElementById('chat-launcher-online');
 const chatLauncherUnread = document.getElementById('chat-launcher-unread');
 const chatMentionDropdown = document.getElementById('chat-mention-dropdown');
+const chatMessageMenu = document.getElementById('chat-message-menu');
+const chatRecallButton = document.getElementById('chat-recall-btn');
 const chatWindow = document.getElementById('chat-window');
 const chatWindowHeader = document.getElementById('chat-window-header');
 const chatHideButton = document.getElementById('chat-hide-btn');
@@ -1556,6 +1560,32 @@ function clearChatMessageHold() {
     chatMessageHoldMessageId = 0;
 }
 
+function closeChatMessageMenu() {
+    chatContextMenuMessageId = 0;
+    if (!chatMessageMenu) return;
+    chatMessageMenu.classList.add('hidden');
+    chatMessageMenu.setAttribute('aria-hidden', 'true');
+    chatMessageMenu.style.left = '';
+    chatMessageMenu.style.top = '';
+}
+
+function openChatMessageMenu(messageId, clientX, clientY) {
+    if (!chatMessageMenu || !chatRecallButton || !messageId) return;
+    chatContextMenuMessageId = Number(messageId || 0);
+    chatMessageMenu.classList.remove('hidden');
+    chatMessageMenu.setAttribute('aria-hidden', 'false');
+    chatRecallButton.disabled = false;
+
+    const menuWidth = Math.max(chatMessageMenu.offsetWidth || 148, 132);
+    const menuHeight = Math.max(chatMessageMenu.offsetHeight || 54, 48);
+    const maxLeft = Math.max(8, window.innerWidth - menuWidth - 8);
+    const maxTop = Math.max(8, window.innerHeight - menuHeight - 8);
+    const left = clamp(Number(clientX || 0), 8, maxLeft);
+    const top = clamp(Number(clientY || 0), 8, maxTop);
+    chatMessageMenu.style.left = `${left}px`;
+    chatMessageMenu.style.top = `${top}px`;
+}
+
 function resetChatRuntime() {
     chatMessages = [];
     chatLatestMessageId = 0;
@@ -1564,6 +1594,7 @@ function resetChatRuntime() {
     chatReadReceiptMembers = [];
     chatUnreadCount = 0;
     chatStateInitialized = false;
+    chatSnapshotRevision = 0;
     chatStoragePath = '';
     chatOnlineUserCount = 0;
     chatOnlineUsersCache = [];
@@ -1575,6 +1606,7 @@ function resetChatRuntime() {
     endChatLauncherDrag();
     clearChatMessageHold();
     clearChatMentionDropdown();
+    closeChatMessageMenu();
     if (chatSendButton) chatSendButton.disabled = false;
     if (chatInput) chatInput.value = '';
     if (chatStorageStatus) {
@@ -1605,6 +1637,11 @@ function isChatNearBottom() {
     return distance < 36;
 }
 
+function formatChatUserHandle(username) {
+    const normalizedUsername = String(username || '').trim();
+    return normalizedUsername ? `@${normalizedUsername}` : '@-';
+}
+
 function renderChatOnlineUsers(users = []) {
     chatOnlineUsersCache = Array.isArray(users) ? users : [];
     chatOnlineUserCount = users.length;
@@ -1625,7 +1662,7 @@ function renderChatOnlineUsers(users = []) {
 
         const name = document.createElement('span');
         name.className = 'chat-user-chip-name';
-        name.textContent = `${user.display_name || user.username || '匿名用户'} @${user.username || '-'}`;
+        name.textContent = formatChatUserHandle(user.username);
 
         item.appendChild(name);
         chatOnlinePreview.appendChild(item);
@@ -1638,14 +1675,9 @@ function renderChatOnlineUsers(users = []) {
 
         const name = document.createElement('span');
         name.className = 'chat-user-chip-name';
-        name.textContent = user.display_name || user.username || '匿名用户';
-
-        const meta = document.createElement('span');
-        meta.className = 'chat-user-chip-meta';
-        meta.textContent = `@${user.username || '-'}`;
+        name.textContent = formatChatUserHandle(user.username);
 
         item.appendChild(name);
-        item.appendChild(meta);
         chatOnlineUsers.appendChild(item);
     });
 
@@ -1661,7 +1693,7 @@ function latestSelfChatMessageId(messages = []) {
     if (!authenticatedUser) return 0;
     for (let index = messages.length - 1; index >= 0; index -= 1) {
         const message = messages[index];
-        if (message && message.username === authenticatedUser.username) {
+        if (message && !message.recalled && message.username === authenticatedUser.username) {
             return Number(message.id || 0);
         }
     }
@@ -1679,10 +1711,15 @@ function renderChatMessages({ forceScroll = false } = {}) {
         const item = document.createElement('article');
         item.className = 'chat-message-item';
         const isSelf = Boolean(authenticatedUser && message.username === authenticatedUser.username);
-        const isLatestSelf = isSelf && Number(message.id || 0) === chatLatestSelfMessageId;
+        const isRecalled = Boolean(message.recalled);
+        const isLatestSelf = isSelf && !isRecalled && Number(message.id || 0) === chatLatestSelfMessageId;
         item.dataset.messageId = String(message.id || 0);
+        item.dataset.recalled = isRecalled ? 'true' : 'false';
         if (isSelf) {
             item.classList.add('is-self');
+        }
+        if (isRecalled) {
+            item.classList.add('is-recalled');
         }
         if (isLatestSelf) {
             item.classList.add('is-latest-self');
@@ -1691,19 +1728,22 @@ function renderChatMessages({ forceScroll = false } = {}) {
         const meta = document.createElement('div');
         meta.className = 'chat-message-meta';
 
-        const author = document.createElement('span');
-        author.className = 'chat-message-author';
-        author.textContent = message.display_name || message.username || '匿名用户';
-
         const sentAt = document.createElement('span');
         sentAt.textContent = message.sent_at || '-';
 
+        const author = document.createElement('span');
+        author.className = 'chat-message-author';
+        author.textContent = formatChatUserHandle(message.username);
+
         const text = document.createElement('p');
         text.className = 'chat-message-text';
-        text.textContent = message.text || '';
+        text.textContent = isRecalled ? '--该条信息已撤回--' : (message.text || '');
+        if (isRecalled) {
+            text.classList.add('is-recalled-notice');
+        }
 
-        meta.appendChild(author);
         meta.appendChild(sentAt);
+        meta.appendChild(author);
         item.appendChild(meta);
         item.appendChild(text);
 
@@ -1757,6 +1797,7 @@ function isChatPersistenceAdmin() {
 function mergeChatState(data, { forceScroll = false } = {}) {
     if (!data || !authenticatedUser) return;
     chatStoragePath = String(data.storage_path || '').trim();
+    const serverSnapshotRevision = Math.max(Number(data.snapshot_revision || 0), 0);
     if (typeof data.chat_admin === 'boolean') {
         chatAdminEnabled = data.chat_admin;
     }
@@ -1780,22 +1821,9 @@ function mergeChatState(data, { forceScroll = false } = {}) {
     const previousLatest = chatLatestMessageId;
     const serverLatest = Number(data.latest_message_id || 0);
     const serverReset = serverLatest < previousLatest;
+    const shouldReplaceMessages = serverReset || Boolean(data.full_sync) || isInitialSnapshot;
 
-    if (serverReset) {
-        chatMessages = incoming;
-        chatLatestMessageId = serverLatest;
-        chatLatestSelfMessageId = latestSelfChatMessageId(chatMessages);
-        chatReadReceiptOpenMessageId = 0;
-        chatReadReceiptMembers = [];
-        chatUnreadCount = 0;
-        chatMentionAlertActive = false;
-        chatStateInitialized = true;
-        renderChatMessages({ forceScroll: true });
-        updateChatLauncher();
-        return;
-    }
-
-    if (isInitialSnapshot) {
+    if (shouldReplaceMessages) {
         chatMessages = incoming;
     } else if (incoming.length > 0) {
         const knownIds = new Set(chatMessages.map((item) => item.id));
@@ -1815,6 +1843,7 @@ function mergeChatState(data, { forceScroll = false } = {}) {
         chatReadReceiptMembers = [];
     }
     chatLatestMessageId = Math.max(serverLatest, ...chatMessages.map((item) => Number(item.id || 0)), previousLatest);
+    chatSnapshotRevision = serverSnapshotRevision;
 
     const newMessageCount = isInitialSnapshot
         ? 0
@@ -1833,6 +1862,10 @@ function mergeChatState(data, { forceScroll = false } = {}) {
         chatUnreadCount = 0;
         chatMentionAlertActive = false;
     }
+    if (serverReset) {
+        chatUnreadCount = 0;
+        chatMentionAlertActive = false;
+    }
 
     renderChatMessages({ forceScroll: forceScroll || isInitialSnapshot });
     chatStateInitialized = true;
@@ -1845,6 +1878,7 @@ async function refreshChatState({ forceScroll = false } = {}) {
     try {
         const params = new URLSearchParams({
             since_message_id: String(chatLatestMessageId || 0),
+            since_snapshot_revision: String(chatSnapshotRevision || 0),
             chat_visible: chatWindowState?.visible === false ? 'false' : 'true',
         });
         const data = await apiFetch(`/api/chat/state?${params.toString()}`);
@@ -1911,6 +1945,7 @@ async function sendChatMessage() {
             {
                 messages: [data.message],
                 latest_message_id: data.message?.id || chatLatestMessageId,
+                snapshot_revision: data.snapshot_revision || chatSnapshotRevision,
                 storage_path: data.storage_path || chatStoragePath,
             },
             { forceScroll: true },
@@ -1922,6 +1957,26 @@ async function sendChatMessage() {
         throw error;
     } finally {
         chatSendButton.disabled = false;
+    }
+}
+
+async function recallChatMessage(messageId) {
+    if (!authenticatedUser || !messageId) return;
+    chatRecallButton.disabled = true;
+    setChatSendStatus('');
+    try {
+        const data = await apiFetch(`/api/chat/messages/${messageId}/recall`, {
+            method: 'POST',
+        });
+        closeChatMessageMenu();
+        mergeChatState(data, { forceScroll: false });
+    } catch (error) {
+        setChatSendStatus(error.message, { isError: true });
+        throw error;
+    } finally {
+        if (chatRecallButton) {
+            chatRecallButton.disabled = false;
+        }
     }
 }
 
@@ -2000,6 +2055,8 @@ async function clearChatHistory() {
             {
                 messages: [],
                 latest_message_id: 0,
+                snapshot_revision: data.snapshot_revision || 0,
+                full_sync: true,
                 storage_path: data.storage_path || '',
                 chat_admin: true,
             },
@@ -2470,6 +2527,15 @@ chatMessageList.addEventListener('pointermove', trackChatMessageHold);
 chatMessageList.addEventListener('pointerup', endChatMessageHold);
 chatMessageList.addEventListener('pointercancel', endChatMessageHold);
 chatMessageList.addEventListener('pointerleave', endChatMessageHold);
+chatMessageList.addEventListener('contextmenu', (event) => {
+    const messageNode = event.target.closest('.chat-message-item.is-self');
+    if (!messageNode || messageNode.dataset.recalled === 'true') {
+        closeChatMessageMenu();
+        return;
+    }
+    event.preventDefault();
+    openChatMessageMenu(Number(messageNode.dataset.messageId || 0), event.clientX, event.clientY);
+});
 chatClearHistoryCheckbox.addEventListener('change', () => {
     if (chatAdminStatus) {
         chatAdminStatus.textContent = '';
@@ -2487,6 +2553,9 @@ chatMentionDropdown.addEventListener('click', (event) => {
     const matched = chatMentionOptions.find((user) => user.username === option.dataset.username);
     if (!matched) return;
     applyChatMention(matched);
+});
+chatRecallButton.addEventListener('click', () => {
+    recallChatMessage(chatContextMenuMessageId).catch(() => {});
 });
 chatSendButton.addEventListener('click', () => {
     sendChatMessage().catch(() => {});
@@ -2624,6 +2693,11 @@ document.addEventListener('click', (event) => {
         clearChatMentionDropdown();
     }
 });
+document.addEventListener('click', (event) => {
+    if (!chatMessageMenu || chatMessageMenu.classList.contains('hidden')) return;
+    if (event.target.closest('#chat-message-menu')) return;
+    closeChatMessageMenu();
+});
 window.addEventListener('resize', () => {
     hideIssueReferencePopover();
     resizeCursorTrailCanvas();
@@ -2640,6 +2714,9 @@ window.addEventListener('resize', () => {
     }
     if (!chatMentionDropdown.classList.contains('hidden')) {
         positionChatMentionDropdown();
+    }
+    if (!chatMessageMenu.classList.contains('hidden')) {
+        closeChatMessageMenu();
     }
 });
 window.addEventListener('pointermove', updateCursorGlow, { passive: true });
@@ -2667,6 +2744,7 @@ window.addEventListener('blur', () => {
     endChatLauncherDrag();
     endChatMessageHold();
     endChatDrag();
+    closeChatMessageMenu();
     hideTextMagnifier();
 });
 document.addEventListener('pointerleave', hideCursorGlow, true);
