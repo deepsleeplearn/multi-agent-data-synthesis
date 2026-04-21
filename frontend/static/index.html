@@ -244,6 +244,7 @@
     <div id="chat-mention-dropdown" class="chat-mention-dropdown hidden" aria-hidden="true"></div>
     <div id="chat-message-menu" class="chat-message-menu hidden" aria-hidden="true">
         <button id="chat-reply-btn" class="chat-message-menu-btn" type="button">回复</button>
+        <button id="chat-edit-btn" class="chat-message-menu-btn" type="button">编辑</button>
         <button id="chat-recall-btn" class="chat-message-menu-btn chat-message-menu-btn-danger" type="button">撤回</button>
     </div>
     <div id="terminal-turn-menu" class="chat-message-menu hidden" aria-hidden="true">
@@ -294,6 +295,13 @@
 
         <footer class="chat-composer">
             <label class="chat-composer-label" for="chat-input">群聊消息</label>
+            <div id="chat-edit-preview" class="chat-reply-preview hidden">
+                <div class="chat-reply-preview-copy">
+                    <span id="chat-edit-preview-author" class="chat-reply-preview-author">正在编辑</span>
+                    <span id="chat-edit-preview-text" class="chat-reply-preview-text">编辑中的消息内容</span>
+                </div>
+                <button id="chat-edit-cancel-btn" class="chat-reply-cancel-btn" type="button" aria-label="取消编辑">取消</button>
+            </div>
             <div id="chat-reply-preview" class="chat-reply-preview hidden">
                 <div class="chat-reply-preview-copy">
                     <span id="chat-reply-preview-author" class="chat-reply-preview-author">回复对象</span>

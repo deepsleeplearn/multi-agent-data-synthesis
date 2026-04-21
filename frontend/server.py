@@ -230,6 +230,10 @@ class ChatMessageRequest(BaseModel):
     reply_to_message_id: int | None = None
 
 
+class ChatMessageUpdateRequest(BaseModel):
+    text: str
+
+
 def _empty_chat_state() -> dict[str, Any]:
     return {
         "messages": [],
@@ -570,6 +574,7 @@ def _copy_chat_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "text": str(item.get("text", "")),
                 "reply_to_message_id": int(item.get("reply_to_message_id", 0) or 0),
                 "sent_at": str(item.get("sent_at", "")).strip(),
+                "edited_at": str(item.get("edited_at", "")).strip(),
             }
         )
     return copied
@@ -1332,11 +1337,21 @@ def _append_address_ie_display_lines(
     transcript: list[DialogueTurn],
     runtime_state: ServiceRuntimeState,
 ) -> dict[str, Any] | None:
-    if not policy.should_insert_address_ie_function_call(
+    should_insert_for_collection = policy.should_insert_address_ie_function_call(
         user_text=turn.text,
         transcript=transcript,
         runtime_state=runtime_state,
-    ):
+    )
+    should_insert_for_confirmation_correction = (
+        not should_insert_for_collection
+        and policy.should_insert_address_ie_after_observation_confirmation(
+            user_text=turn.text,
+            user_round_index=turn.round_index,
+            transcript=transcript,
+            runtime_state=runtime_state,
+        )
+    )
+    if not (should_insert_for_collection or should_insert_for_confirmation_correction):
         return None
     observation = build_address_model_observation(
         transcript,
@@ -1447,6 +1462,7 @@ def _build_auto_address_confirmation_result(
         return None
 
     runtime_state.expected_address_confirmation = True
+    runtime_state.address_confirmation_triggered_by_observation = True
     runtime_state.awaiting_full_address = False
     runtime_state.pending_address_confirmation = confirmed_address
     runtime_state.partial_address_candidate = ""
@@ -2047,6 +2063,67 @@ def recall_chat_message(
         "ok": True,
         "recalled": True,
         "message_id": normalized_message_id,
+        "messages": _copy_chat_messages_for_response(known_messages, recalled_ids),
+        "latest_message_id": latest_message_id,
+        "snapshot_revision": snapshot_revision,
+        "full_sync": True,
+        "storage_path": str(CHAT_STORAGE_PATH),
+    }
+
+
+@app.patch("/api/chat/messages/{message_id}")
+def update_chat_message(
+    message_id: int,
+    req: ChatMessageUpdateRequest,
+    current_user: dict[str, str] = Depends(_require_authenticated_user),
+):
+    normalized_message_id = max(int(message_id or 0), 0)
+    normalized_text = str(req.text or "").strip()
+    if normalized_message_id <= 0:
+        raise HTTPException(status_code=400, detail="编辑消息编号无效。")
+    if not normalized_text:
+        raise HTTPException(status_code=400, detail="聊天消息不能为空。")
+    if len(normalized_text) > 1000:
+        raise HTTPException(status_code=400, detail="聊天消息不能超过 1000 个字符。")
+
+    _load_chat_state()
+
+    with CHAT_STORAGE_LOCK:
+        known_messages = list(chat_state.get("messages", []))
+        target_message: dict[str, Any] | None = None
+        target_index = -1
+        for index, message in enumerate(known_messages):
+            if int(message.get("id", 0) or 0) == normalized_message_id:
+                target_message = message
+                target_index = index
+                break
+
+        if target_message is None or target_index < 0:
+            raise HTTPException(status_code=404, detail="未找到要编辑的消息。")
+        if str(target_message.get("username", "")).strip() != current_user["username"]:
+            raise HTTPException(status_code=403, detail="只能编辑自己发送的消息。")
+
+        recalled_message_ids = set(_normalize_recalled_chat_message_ids(chat_state.get("recalled_message_ids", [])))
+        if normalized_message_id in recalled_message_ids:
+            raise HTTPException(status_code=400, detail="已撤回的消息不能编辑。")
+
+        updated_message = dict(target_message)
+        updated_message["text"] = normalized_text
+        updated_message["edited_at"] = _current_display_timestamp()
+        known_messages[target_index] = updated_message
+        chat_state["messages"] = known_messages
+        chat_state["snapshot_revision"] = int(chat_state.get("snapshot_revision", 0) or 0) + 1
+        _persist_chat_state()
+        _persist_chat_recall_state()
+
+        snapshot_revision = int(chat_state.get("snapshot_revision", 0) or 0)
+        latest_message_id = int(chat_state.get("last_message_id", 0) or 0)
+        recalled_ids = set(_normalize_recalled_chat_message_ids(chat_state.get("recalled_message_ids", [])))
+
+    return {
+        "ok": True,
+        "edited": True,
+        "message": {**dict(updated_message), "recalled": False},
         "messages": _copy_chat_messages_for_response(known_messages, recalled_ids),
         "latest_message_id": latest_message_id,
         "snapshot_revision": snapshot_revision,

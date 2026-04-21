@@ -636,37 +636,54 @@ class ServiceAgent:
         *,
         prompt_kind: str,
         user_text: str,
+        confirmation_address: str = "",
         user_round_index: int = 0,
     ) -> dict[str, Any]:
         system_prompt = """你是家电客服对话里的确认意图识别助手。
 
 任务：
-1. 判断用户这句话对当前确认问题的意图是 yes、no 还是 unknown。
+1. 根据 prompt_kind 判断用户这句话对当前确认问题的意图。
 2. 仅基于当前用户原话判断，不要脑补未说出的事实。
-3. yes 表示确认/肯定/已满足；no 表示否认/未满足；unknown 表示仍无法判断。
+3. 对 phone_number_confirmation、address_confirmation、product_arrival_confirmation：
+   - yes 表示确认/肯定/已满足
+   - no 表示否认/未满足
+   - unknown 表示仍无法判断
 4. 对 address_confirmation 来说，只要用户是在否认当前客服核对的地址，不管后面有没有顺手补充新地址，intent 都应判为 no。
 5. 对 address_confirmation 来说，像“不是”“不对”“换一个”“留个新地址”“改个地址”“重新登记地址”“这不是现在的地址”都判为 no。
 6. 对 address_confirmation 来说，像“不是，江苏省扬州市宝应县御景豪庭”“不对，改成南京农业大学卫岗校区”“这是以前的住址，我现在在...”这类句子，虽然包含新地址或纠正信息，但本轮确认意图仍然是 no。
-7. 只有明确认可当前核对项正确时才判 yes，例如“对”“是的”“没错”“这个可以”“就这个”。
+7. 对 address_confirmation 来说，只有明确认可当前核对项正确时才判 yes，例如“对”“是的”“没错”“这个可以”“就这个”。
+8. 对 address_confirmation_observation_followup：
+   - confirm_only：只是确认当前核对地址正确，没有新增、删除、修改任何地址粒度
+   - add：在确认的同时新增了地址粒度，例如补楼栋、单元、楼层、门牌号、小区、街道等
+   - modify：修改了当前核对地址中的某一粒度
+   - delete：明确删掉了当前核对地址中的某一粒度或说明某粒度不该有
+   - unknown：无法判断
+9. 对 address_confirmation_observation_followup，如果用户只是“对”“是的”“没错”“对对对”“嗯”这类纯确认，应判为 confirm_only。
+10. 对 address_confirmation_observation_followup，如果用户像“对的，10号楼”“是的，2单元504”“对，不过区县要改成...”这类在确认同时补充或修改地址，应判为 add 或 modify，而不是 confirm_only。
 
 当前可能的 prompt_kind：
 - phone_number_confirmation：确认刚才识别出的手机号是否正确
 - address_confirmation：确认客服正在核对的地址是否正确
+- address_confirmation_observation_followup：在 observation 触发的地址确认之后，判断用户这轮是纯确认，还是在新增/修改/删除地址粒度
 - product_arrival_confirmation：确认产品是否已经到货
 
 输出 JSON：
 {
   "prompt_kind": "当前问题类型",
-  "intent": "yes|no|unknown"
+  "intent": "yes|no|unknown|confirm_only|add|modify|delete"
 }
 """
+        user_prompt = f"当前 prompt_kind：{prompt_kind}\n"
+        if confirmation_address:
+            user_prompt += f"当前客服正在核对的地址：{confirmation_address}\n"
+        user_prompt += f"[{user_round_index}]用户: {user_text}\n只返回 JSON。"
         payload = self.client.complete_json(
             model=self.model,
             messages=[
                 {"role": "system", "content": system_prompt},
                 {
                     "role": "user",
-                    "content": f"当前 prompt_kind：{prompt_kind}\n[{user_round_index}]用户: {user_text}\n只返回 JSON。",
+                    "content": user_prompt,
                 },
             ],
             temperature=0.0,

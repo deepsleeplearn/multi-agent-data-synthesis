@@ -1059,6 +1059,15 @@ select:focus {
     box-shadow: 0 0 0 3px rgba(125, 211, 252, 0.16);
 }
 
+@keyframes pet-bob {
+    0%, 100% {
+        margin-top: 0;
+    }
+    50% {
+        margin-top: -0.2rem;
+    }
+}
+
 .data-item {
     display: flex;
     flex-direction: column;
@@ -1502,6 +1511,17 @@ select:focus {
 .chat-message-author {
     color: var(--text);
     font-weight: 700;
+}
+
+.chat-message-meta-tail {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.38rem;
+}
+
+.chat-message-edited-badge {
+    font-size: 0.72rem;
+    color: var(--accent);
 }
 
 .chat-message-reply {

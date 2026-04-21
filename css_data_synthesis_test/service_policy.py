@@ -59,6 +59,7 @@ class ServiceRuntimeState:
     phone_input_attempts: int = 0
     pending_phone_number_confirmation: str = ""
     expected_address_confirmation: bool = False
+    address_confirmation_triggered_by_observation: bool = False
     expected_product_arrival_confirmation: bool = False
     product_arrival_checked: bool = False
     pending_address_confirmation: str = ""
@@ -111,7 +112,7 @@ class ServiceDialoguePolicy:
     ADDRESS_RURAL_DETAIL_FOLLOWUP_PROMPT = "好的，请您提供一下详细的地址，具体到门牌号。"
     ADDRESS_CONFIRMATION_TEMPLATE = "跟您确认一下，地址是{address}，对吗？"
     KNOWN_ADDRESS_CONFIRMATION_TEMPLATE = "您的地址是{address}，对吗？"
-    PRODUCT_ARRIVAL_PROMPT = "请问{product}到货了没？"
+    PRODUCT_ARRIVAL_PROMPT = "请问{product}已经送到了吗？"
     PRODUCT_MODEL_PROMPT = "请问产品型号方便提供一下吗？"
     # 每条话术支持配置为 [(文案, 权重), ...]，每次发送时使用 random.choices 按权重随机选择。
     SURNAME_PROMPT: PromptConfig = [("请问您贵姓？", 1.0)]
@@ -142,7 +143,7 @@ class ServiceDialoguePolicy:
     ADDRESS_RURAL_DETAIL_FOLLOWUP_PROMPT: PromptConfig = [("好的，请您提供一下详细的地址，具体到门牌号。", 1.0)]
     ADDRESS_CONFIRMATION_TEMPLATE: PromptConfig = [("跟您确认一下，地址是{address}，对吗？", 1.0)]
     KNOWN_ADDRESS_CONFIRMATION_TEMPLATE: PromptConfig = [("您的地址是{address}，对吗？", 1.0)]
-    PRODUCT_ARRIVAL_PROMPT: PromptConfig = [("请问{product}到货了没？", 1.0)]
+    PRODUCT_ARRIVAL_PROMPT: PromptConfig = [("请问{product}已经送到了吗？", 1.0)]
     PRODUCT_MODEL_PROMPT: PromptConfig = [("请问产品型号方便提供一下吗？", 1.0)]
     def __init__(
         self,
@@ -254,6 +255,7 @@ class ServiceDialoguePolicy:
                 scenario=scenario,
                 user_text=last_user_turn.text,
                 user_round_index=last_user_turn.round_index,
+                transcript=transcript,
                 collected_slots=merged_slots,
                 runtime_state=runtime_state,
                 slot_updates=slot_updates,
@@ -523,6 +525,7 @@ class ServiceDialoguePolicy:
         scenario: Scenario,
         user_text: str,
         user_round_index: int,
+        transcript: list[DialogueTurn],
         collected_slots: dict[str, str],
         runtime_state: ServiceRuntimeState,
         slot_updates: dict[str, str],
@@ -533,6 +536,7 @@ class ServiceDialoguePolicy:
             user_round_index=user_round_index,
         )
         runtime_state.expected_address_confirmation = False
+        runtime_state.address_confirmation_triggered_by_observation = False
         confirmation_address = (
             runtime_state.pending_address_confirmation
             or self._service_known_address_value(scenario)
@@ -555,43 +559,11 @@ class ServiceDialoguePolicy:
             )
 
         if intent == "no":
-            denial_address = self._extract_address_candidate_from_denial(
+            denial_address, use_confirmation_as_merge_source = self._resolve_confirmation_denial_address_candidate(
+                transcript=transcript,
                 user_text=user_text,
                 confirmation_address=confirmation_address,
             )
-            strong_denial_address = self._extract_strong_address_candidate_from_denial(
-                user_text=user_text,
-                confirmation_address=confirmation_address,
-            )
-            if strong_denial_address:
-                denial_address = strong_denial_address
-            use_confirmation_as_merge_source = bool(strong_denial_address)
-            if (
-                self.address_inference_callback is not None
-                and not self._is_non_address_switch_request_after_denial(user_text)
-                and (
-                    not denial_address
-                    or self._should_request_model_province_backfill_for_cross_city_correction(
-                        confirmation_address=confirmation_address,
-                        candidate=denial_address,
-                    )
-                )
-            ):
-                inferred_denial_address = self._infer_address_candidate_with_callback(
-                    user_text=user_text,
-                    confirmation_address=confirmation_address,
-                    partial_address_candidate="",
-                    last_address_followup_prompt="",
-                )
-                if inferred_denial_address and (
-                    not denial_address
-                    or self._should_prefer_model_admin_backfill_candidate(
-                        rule_candidate=denial_address,
-                        model_candidate=inferred_denial_address,
-                    )
-                ):
-                    denial_address = inferred_denial_address
-                    use_confirmation_as_merge_source = False
             if denial_address:
                 runtime_state.awaiting_full_address = True
                 runtime_state.address_input_attempts = 1
@@ -938,11 +910,13 @@ class ServiceDialoguePolicy:
         if observed_answer_key:
             post_answer_trace: list[str] = []
             if current_step:
-                raw_post_answer_trace = current_step.get("post_answer_trace", [])
-                if isinstance(raw_post_answer_trace, list):
-                    post_answer_trace = [
-                        str(item).strip() for item in raw_post_answer_trace if str(item).strip()
-                    ]
+                expected_answer_key = str(current_step.get("answer_key", "")).strip()
+                if not expected_answer_key or expected_answer_key == observed_answer_key:
+                    raw_post_answer_trace = current_step.get("post_answer_trace", [])
+                    if isinstance(raw_post_answer_trace, list):
+                        post_answer_trace = [
+                            str(item).strip() for item in raw_post_answer_trace if str(item).strip()
+                        ]
             return self._advance_product_routing_with_answer(
                 scenario=scenario,
                 collected_slots=collected_slots,
@@ -1518,6 +1492,61 @@ class ServiceDialoguePolicy:
         heuristic = self._classify_yes_no(text)
         return heuristic if heuristic in {"yes", "no"} else None
 
+    def _classify_observation_address_confirmation_followup_intent(
+        self,
+        text: str,
+        *,
+        confirmation_address: str,
+        user_round_index: int = 0,
+    ) -> str:
+        if self.confirmation_intent_inference_callback is not None:
+            try:
+                payload = self._invoke_inference_callback(
+                    self.confirmation_intent_inference_callback,
+                    prompt_kind="address_confirmation_observation_followup",
+                    user_text=text,
+                    user_round_index=user_round_index,
+                    confirmation_address=confirmation_address,
+                )
+            except Exception:
+                payload = None
+            if isinstance(payload, dict):
+                intent = str(payload.get("intent", "")).strip().lower()
+                if intent in {"confirm_only", "modify", "add", "delete", "unknown"}:
+                    self.last_used_model_intent_inference = True
+                    return intent
+
+        prepared_user_address = self._prepare_address_for_confirmation(text)
+        if prepared_user_address:
+            merged_candidate = self._merge_address_candidate(
+                confirmation_address,
+                prepared_user_address,
+            )
+            if merged_candidate and self._address_input_makes_progress(
+                existing=confirmation_address,
+                incoming=prepared_user_address,
+                merged=merged_candidate,
+            ):
+                return "add"
+        compact_user_text = re.sub(r"[，。！？、,.!\s]", "", str(text or ""))
+        if self._classify_yes_no(text) == "yes" and not self._strip_opening_affirmation_noise(compact_user_text):
+            return "confirm_only"
+        intent = self._classify_confirmation_intent(
+            text,
+            prompt_kind="address_confirmation",
+            user_round_index=user_round_index,
+        )
+        if intent == "yes":
+            return "confirm_only"
+        denial_address, _ = self._resolve_confirmation_denial_address_candidate(
+            transcript=[],
+            user_text=text,
+            confirmation_address=confirmation_address,
+        )
+        if denial_address:
+            return "modify"
+        return "unknown"
+
     def _classify_product_routing_answer_key(
         self,
         *,
@@ -1903,6 +1932,7 @@ class ServiceDialoguePolicy:
             scenario.customer.address,
         )
         runtime_state.expected_address_confirmation = True
+        runtime_state.address_confirmation_triggered_by_observation = False
         runtime_state.awaiting_full_address = False
         runtime_state.pending_address_confirmation = confirmation_address
         runtime_state.partial_address_candidate = ""
@@ -2211,6 +2241,54 @@ class ServiceDialoguePolicy:
             return candidate
         return ""
 
+    def _resolve_confirmation_denial_address_candidate(
+        self,
+        *,
+        transcript: list[DialogueTurn],
+        user_text: str,
+        confirmation_address: str,
+    ) -> tuple[str, bool]:
+        denial_address = self._extract_address_candidate_from_denial(
+            user_text=user_text,
+            confirmation_address=confirmation_address,
+        )
+        strong_denial_address = self._extract_strong_address_candidate_from_denial(
+            user_text=user_text,
+            confirmation_address=confirmation_address,
+        )
+        if strong_denial_address:
+            denial_address = strong_denial_address
+        use_confirmation_as_merge_source = bool(strong_denial_address)
+        if (
+            self.address_inference_callback is not None
+            and not self._is_non_address_switch_request_after_denial(user_text)
+        ):
+            inferred_denial_address = self._infer_address_candidate_with_callback(
+                user_text=user_text,
+                confirmation_address=confirmation_address,
+                partial_address_candidate="",
+                last_address_followup_prompt="",
+                dialogue_history=self._dialogue_history_text(transcript),
+            )
+            if inferred_denial_address and (
+                not denial_address
+                or self._should_prefer_model_admin_backfill_candidate(
+                    rule_candidate=denial_address,
+                    model_candidate=inferred_denial_address,
+                )
+                or self._should_prefer_model_denial_candidate(
+                    rule_candidate=denial_address,
+                    model_candidate=inferred_denial_address,
+                )
+                or self._should_request_model_province_backfill_for_cross_city_correction(
+                    confirmation_address=confirmation_address,
+                    candidate=denial_address,
+                )
+            ):
+                denial_address = inferred_denial_address
+                use_confirmation_as_merge_source = False
+        return denial_address, use_confirmation_as_merge_source
+
     @classmethod
     def _is_non_address_switch_request_after_denial(cls, text: str) -> bool:
         normalized = cls._normalize_address_text(text)
@@ -2454,6 +2532,14 @@ class ServiceDialoguePolicy:
         )
         if rewritten_prefix:
             return cls._canonicalize_merged_address(rewritten_prefix)
+        component_merged = cls._merge_address_components_by_level(
+            existing=prepared_existing,
+            new=prepared_new,
+            existing_components=existing_components,
+            new_components=new_components,
+        )
+        if component_merged:
+            return component_merged
         if new_components.has_precise_detail and components_match(new_components, existing_components):
             return cls._canonicalize_merged_address(prepared_existing)
 
@@ -2531,6 +2617,39 @@ class ServiceDialoguePolicy:
                 merged_with_region = re.sub(r"\s+", "", merged_with_region)
             if cls._normalize_address_text(merged_with_region):
                 return cls._canonicalize_merged_address(merged_with_region)
+
+        if (
+            existing_has_admin_region
+            and existing_components.city
+            and not existing_components.district
+            and new_components.district
+            and not new_components.province
+            and not new_components.city
+            and not new_components.town
+            and not new_components.road
+            and not new_components.community
+            and (
+                existing_components.town
+                or existing_components.road
+                or existing_components.community
+                or existing_components.building
+                or existing_components.unit
+                or existing_components.floor
+                or existing_components.room
+                or existing_has_nonstandard_detail
+            )
+        ):
+            existing_suffix = prepared_existing
+            for token in (
+                existing_components.province,
+                existing_components.city,
+                existing_components.district,
+            ):
+                if token and existing_suffix.startswith(token):
+                    existing_suffix = existing_suffix[len(token) :]
+            merged_with_inserted_district = f"{existing_admin_prefix}{prepared_new}{existing_suffix}"
+            if cls._normalize_address_text(merged_with_inserted_district):
+                return cls._canonicalize_merged_address(merged_with_inserted_district)
 
         if (
             existing_has_admin_region
@@ -2614,14 +2733,6 @@ class ServiceDialoguePolicy:
         if existing_has_admin_region and not new_has_admin_region and new_has_detail and not existing_has_detail:
             return cls._canonicalize_merged_address(f"{prepared_existing}{prepared_new}")
 
-        component_merged = cls._merge_address_components_by_level(
-            existing=prepared_existing,
-            new=prepared_new,
-            existing_components=existing_components,
-            new_components=new_components,
-        )
-        if component_merged:
-            return component_merged
         return cls._canonicalize_merged_address(f"{prepared_existing}{prepared_new}")
 
     @classmethod
@@ -2729,6 +2840,27 @@ class ServiceDialoguePolicy:
         ):
             return False
         return True
+
+    @classmethod
+    def _should_prefer_model_denial_candidate(
+        cls,
+        *,
+        rule_candidate: str,
+        model_candidate: str,
+    ) -> bool:
+        rule_components = extract_address_components(rule_candidate)
+        model_components = extract_address_components(model_candidate)
+        rule_has_admin_region = bool(
+            rule_components.province or rule_components.city or rule_components.district or rule_components.town
+        )
+        model_has_admin_region = bool(
+            model_components.province or model_components.city or model_components.district or model_components.town
+        )
+        if model_has_admin_region and not rule_has_admin_region:
+            return True
+        if model_components.province and model_components.city and not (rule_components.province and rule_components.city):
+            return True
+        return False
 
     @classmethod
     def _address_matches_actual(cls, candidate: str, actual_address: str) -> bool:
@@ -3598,7 +3730,7 @@ class ServiceDialoguePolicy:
     @classmethod
     def is_product_arrival_prompt(cls, text: str) -> bool:
         normalized = cls._normalize_prompt_text(text)
-        return normalized.startswith("请问") and normalized.endswith("到货了没")
+        return normalized.startswith("请问") and normalized.endswith("已经送到了吗")
 
     @classmethod
     def is_product_model_prompt(cls, text: str) -> bool:
@@ -3776,23 +3908,21 @@ class ServiceDialoguePolicy:
         has_road = bool(components.road)
 
         district_is_county = cls._is_county_district(components.district)
-        district_is_noncounty = cls._is_noncounty_district(components.district)
         province_only_remainder = normalized_candidate
         if has_province:
             normalized_province = cls._normalize_address_text(components.province)
             if normalized_province and normalized_candidate.startswith(normalized_province):
                 province_only_remainder = normalized_candidate[len(normalized_province) :]
-        matches_province_plus_noncounty_district_only = bool(
+        matches_province_plus_district_only = bool(
             has_province
             and not has_town
             and not has_road
-            and re.fullmatch(r"[\u4e00-\u9fa5]{1,24}(?:(?<!小)区)", province_only_remainder)
+            and re.fullmatch(r"[\u4e00-\u9fa5]{1,24}(?:(?<!小)区|县|旗)", province_only_remainder)
         )
 
         return bool(
-            matches_province_plus_noncounty_district_only
-            or (has_province and has_district and district_is_noncounty and not has_city and not has_town and not has_road)
-            or (has_province and has_city and has_district and district_is_noncounty and not has_town and not has_road)
+            matches_province_plus_district_only
+            or (has_province and has_district and not has_city and not has_town and not has_road)
             or (has_city and has_town and not has_province and not has_district and not has_road)
             or (has_district and district_is_county and not has_province and not has_city and not has_town and not has_road)
             or (has_district and district_is_county and has_town and not has_province and not has_city and not has_road)
@@ -3857,6 +3987,9 @@ class ServiceDialoguePolicy:
 
         if has_town and not has_province and not has_city and not has_district and not has_road and not has_anchor:
             return self._address_full_region_followup_prompt()
+
+        if has_province and has_district and not has_city and not has_town and not has_road and not has_anchor:
+            return self._address_locality_which_followup_prompt()
 
         if (
             matches_province_town_only
@@ -4236,8 +4369,6 @@ class ServiceDialoguePolicy:
         )
         has_county_short_path = bool(
             cls._is_county_district(components.district)
-            and not components.province
-            and not components.city
             and not components.road
         )
         return has_locality_or_finer and (
@@ -4274,6 +4405,52 @@ class ServiceDialoguePolicy:
             self._address_candidate_meets_ie_trigger_threshold(merged_candidate)
             and not self._address_candidate_meets_ie_trigger_threshold(previous_candidate)
         )
+
+    def should_insert_address_ie_after_observation_confirmation(
+        self,
+        *,
+        user_text: str,
+        user_round_index: int,
+        transcript: list[DialogueTurn],
+        runtime_state: ServiceRuntimeState,
+    ) -> bool:
+        if not (
+            runtime_state.expected_address_confirmation
+            and runtime_state.address_confirmation_triggered_by_observation
+        ):
+            return False
+        confirmation_address = str(runtime_state.pending_address_confirmation or "").strip()
+        if not confirmation_address:
+            return False
+        followup_intent = self._classify_observation_address_confirmation_followup_intent(
+            user_text,
+            confirmation_address=confirmation_address,
+            user_round_index=user_round_index,
+        )
+        if followup_intent in {"modify", "add", "delete"}:
+            return True
+        if followup_intent == "confirm_only":
+            return False
+        prepared_user_address = self._prepare_address_for_confirmation(user_text)
+        if prepared_user_address:
+            merged_candidate = self._merge_address_candidate(
+                confirmation_address,
+                prepared_user_address,
+            )
+            if merged_candidate and self._address_input_makes_progress(
+                existing=confirmation_address,
+                incoming=prepared_user_address,
+                merged=merged_candidate,
+            ):
+                return True
+        denial_address, _ = self._resolve_confirmation_denial_address_candidate(
+            transcript=transcript,
+            user_text=user_text,
+            confirmation_address=confirmation_address,
+        )
+        if not denial_address:
+            return False
+        return self._normalize_address_text(denial_address) != self._normalize_address_text(confirmation_address)
 
     def _product_arrival_prompt(self, scenario: Scenario) -> str:
         prompt_config = self._format_prompt_config(self.PRODUCT_ARRIVAL_PROMPT, product=self._product_name(scenario))
@@ -4576,6 +4753,7 @@ class ServiceDialoguePolicy:
         runtime_state.expected_phone_number_confirmation = False
         runtime_state.pending_phone_number_confirmation = ""
         runtime_state.expected_address_confirmation = False
+        runtime_state.address_confirmation_triggered_by_observation = False
         runtime_state.expected_product_arrival_confirmation = False
         runtime_state.pending_address_confirmation = ""
         runtime_state.awaiting_full_address = False
