@@ -227,6 +227,7 @@ class ReviewSessionRequest(BaseModel):
 
 class ChatMessageRequest(BaseModel):
     text: str
+    reply_to_message_id: int | None = None
 
 
 def _empty_chat_state() -> dict[str, Any]:
@@ -567,6 +568,7 @@ def _copy_chat_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "username": str(item.get("username", "")).strip(),
                 "display_name": str(item.get("display_name", "")).strip(),
                 "text": str(item.get("text", "")),
+                "reply_to_message_id": int(item.get("reply_to_message_id", 0) or 0),
                 "sent_at": str(item.get("sent_at", "")).strip(),
             }
         )
@@ -1962,6 +1964,7 @@ def create_chat_message(
     current_user: dict[str, str] = Depends(_require_authenticated_user),
 ):
     normalized_text = str(req.text or "").strip()
+    normalized_reply_to_message_id = max(int(req.reply_to_message_id or 0), 0)
     if not normalized_text:
         raise HTTPException(status_code=400, detail="聊天消息不能为空。")
     if len(normalized_text) > 1000:
@@ -1970,12 +1973,25 @@ def create_chat_message(
     _load_chat_state()
 
     with CHAT_STORAGE_LOCK:
+        recalled_message_ids = set(_normalize_recalled_chat_message_ids(chat_state.get("recalled_message_ids", [])))
+        if normalized_reply_to_message_id > 0:
+            reply_target = next(
+                (
+                    message
+                    for message in list(chat_state.get("messages", []))
+                    if int(message.get("id", 0) or 0) == normalized_reply_to_message_id
+                ),
+                None,
+            )
+            if reply_target is None or normalized_reply_to_message_id in recalled_message_ids:
+                raise HTTPException(status_code=400, detail="指定回复的消息不存在或已失效。")
         next_message_id = int(chat_state.get("last_message_id", 0) or 0) + 1
         message = {
             "id": next_message_id,
             "username": current_user["username"],
             "display_name": current_user["display_name"],
             "text": normalized_text,
+            "reply_to_message_id": normalized_reply_to_message_id,
             "sent_at": _current_display_timestamp(),
         }
         chat_messages = list(chat_state.get("messages", []))

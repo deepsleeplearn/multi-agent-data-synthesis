@@ -243,7 +243,8 @@
 
     <div id="chat-mention-dropdown" class="chat-mention-dropdown hidden" aria-hidden="true"></div>
     <div id="chat-message-menu" class="chat-message-menu hidden" aria-hidden="true">
-        <button id="chat-recall-btn" class="chat-message-menu-btn" type="button">撤回这条消息</button>
+        <button id="chat-reply-btn" class="chat-message-menu-btn" type="button">回复</button>
+        <button id="chat-recall-btn" class="chat-message-menu-btn chat-message-menu-btn-danger" type="button">撤回</button>
     </div>
     <div id="terminal-turn-menu" class="chat-message-menu hidden" aria-hidden="true">
         <button id="terminal-toggle-address-ie-btn" class="chat-message-menu-btn" type="button">插入 function_call 与 observation</button>
@@ -293,6 +294,13 @@
 
         <footer class="chat-composer">
             <label class="chat-composer-label" for="chat-input">群聊消息</label>
+            <div id="chat-reply-preview" class="chat-reply-preview hidden">
+                <div class="chat-reply-preview-copy">
+                    <span id="chat-reply-preview-author" class="chat-reply-preview-author">回复对象</span>
+                    <span id="chat-reply-preview-text" class="chat-reply-preview-text">回复内容</span>
+                </div>
+                <button id="chat-reply-cancel-btn" class="chat-reply-cancel-btn" type="button" aria-label="取消指定回复">取消</button>
+            </div>
             <div class="chat-compose-row">
                 <textarea id="chat-input" rows="1" placeholder="输入群聊消息"></textarea>
                 <button id="chat-send-btn" class="primary-btn chat-send-btn-inline" type="button">发送</button>

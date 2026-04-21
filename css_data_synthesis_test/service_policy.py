@@ -734,21 +734,6 @@ class ServiceDialoguePolicy:
             if accepted_candidate:
                 normalized_candidate = self._normalize_address_text(accepted_candidate)
                 runtime_state.partial_address_candidate = accepted_candidate
-                missing_precision = self._missing_required_address_precision(
-                    accepted_candidate,
-                    scenario.customer.address,
-                )
-                if self._can_start_address_confirmation(
-                    scenario=scenario,
-                    candidate=accepted_candidate,
-                ):
-                    return self._start_address_confirmation(
-                        scenario=scenario,
-                        runtime_state=runtime_state,
-                        address=accepted_candidate,
-                        slot_updates=slot_updates,
-                        use_known_address_prompt=False,
-                    )
                 return ServicePolicyResult(
                     reply=self._remember_address_followup_prompt(
                         runtime_state,
@@ -775,17 +760,6 @@ class ServiceDialoguePolicy:
                 )
             else:
                 missing_precision = []
-            if frustration_candidate and self._can_start_address_confirmation(
-                scenario=scenario,
-                candidate=frustration_candidate,
-            ):
-                return self._start_address_confirmation(
-                    scenario=scenario,
-                    runtime_state=runtime_state,
-                    address=frustration_candidate,
-                    slot_updates=slot_updates,
-                    use_known_address_prompt=False,
-                )
             if frustration_candidate and missing_precision:
                 runtime_state.partial_address_candidate = frustration_candidate
                 return ServicePolicyResult(
@@ -874,21 +848,7 @@ class ServiceDialoguePolicy:
             prepared_address,
         )
         address_candidate = self._normalize_address_text(combined_address)
-        combined_components = extract_address_components(combined_address)
         runtime_state.partial_address_candidate = combined_address
-
-        if self._can_start_address_confirmation(
-            scenario=scenario,
-            candidate=combined_address,
-            require_strong_confirmable=True,
-        ):
-            return self._start_address_confirmation(
-                scenario=scenario,
-                runtime_state=runtime_state,
-                address=combined_address,
-                slot_updates=slot_updates,
-                use_known_address_prompt=False,
-            )
 
         return ServicePolicyResult(
             reply=self._remember_address_followup_prompt(

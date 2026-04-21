@@ -61,6 +61,7 @@ let chatMessageHoldPointerId = null;
 let chatMessageHoldStartPoint = null;
 let chatMessageHoldMessageId = 0;
 let chatContextMenuMessageId = 0;
+let chatReplyState = null;
 let sessionInputHistory = [];
 let sessionInputHistoryIndex = -1;
 let sessionInputDraft = '';
@@ -124,6 +125,7 @@ const chatLauncherOnline = document.getElementById('chat-launcher-online');
 const chatLauncherUnread = document.getElementById('chat-launcher-unread');
 const chatMentionDropdown = document.getElementById('chat-mention-dropdown');
 const chatMessageMenu = document.getElementById('chat-message-menu');
+const chatReplyButton = document.getElementById('chat-reply-btn');
 const chatRecallButton = document.getElementById('chat-recall-btn');
 const terminalTurnMenu = document.getElementById('terminal-turn-menu');
 const terminalToggleAddressIeButton = document.getElementById('terminal-toggle-address-ie-btn');
@@ -142,6 +144,10 @@ const chatMessageList = document.getElementById('chat-message-list');
 const chatInput = document.getElementById('chat-input');
 const chatSendButton = document.getElementById('chat-send-btn');
 const chatSendStatus = document.getElementById('chat-send-status');
+const chatReplyPreview = document.getElementById('chat-reply-preview');
+const chatReplyPreviewAuthor = document.getElementById('chat-reply-preview-author');
+const chatReplyPreviewText = document.getElementById('chat-reply-preview-text');
+const chatReplyCancelButton = document.getElementById('chat-reply-cancel-btn');
 const PERSONA_HIDDEN_CONTEXT_FIELDS = [
     ['gender', '性别'],
     ['emotion', '当前情绪'],
@@ -1700,14 +1706,22 @@ function closeChatMessageMenu() {
 }
 
 function openChatMessageMenu(messageId, clientX, clientY) {
-    if (!chatMessageMenu || !chatRecallButton || !messageId) return;
+    if (!chatMessageMenu || !chatReplyButton || !chatRecallButton || !messageId) return;
+    const targetMessage = chatMessages.find((message) => Number(message?.id || 0) === Number(messageId || 0));
+    if (!targetMessage || targetMessage.recalled) {
+        closeChatMessageMenu();
+        return;
+    }
+    const isSelf = Boolean(authenticatedUser && targetMessage.username === authenticatedUser.username);
     chatContextMenuMessageId = Number(messageId || 0);
     chatMessageMenu.classList.remove('hidden');
     chatMessageMenu.setAttribute('aria-hidden', 'false');
+    chatReplyButton.disabled = false;
     chatRecallButton.disabled = false;
+    chatRecallButton.classList.toggle('hidden', !isSelf);
 
     const menuWidth = Math.max(chatMessageMenu.offsetWidth || 148, 132);
-    const menuHeight = Math.max(chatMessageMenu.offsetHeight || 54, 48);
+    const menuHeight = Math.max(chatMessageMenu.offsetHeight || (isSelf ? 96 : 54), 48);
     const maxLeft = Math.max(8, window.innerWidth - menuWidth - 8);
     const maxTop = Math.max(8, window.innerHeight - menuHeight - 8);
     const left = clamp(Number(clientX || 0), 8, maxLeft);
@@ -1733,12 +1747,14 @@ function resetChatRuntime() {
     chatAdminEnabled = false;
     chatMentionAlertActive = false;
     chatPollInFlight = false;
+    chatReplyState = null;
     endChatLauncherDrag();
     clearChatMessageHold();
     clearChatMentionDropdown();
     closeChatMessageMenu();
     if (chatSendButton) chatSendButton.disabled = false;
     if (chatInput) chatInput.value = '';
+    renderChatReplyPreview();
     if (chatStorageStatus) {
         chatStorageStatus.textContent = '';
         chatStorageStatus.classList.add('hidden');
@@ -1770,6 +1786,54 @@ function isChatNearBottom() {
 function formatChatUserHandle(username) {
     const normalizedUsername = String(username || '').trim();
     return normalizedUsername ? `@${normalizedUsername}` : '@-';
+}
+
+function buildChatReplySummary(message) {
+    if (!message) return null;
+    const isRecalled = Boolean(message.recalled);
+    return {
+        messageId: Number(message.id || 0),
+        author: formatChatUserHandle(message.username),
+        text: isRecalled ? '--该条信息已撤回--' : String(message.text || '').trim() || '-',
+        recalled: isRecalled,
+    };
+}
+
+function getChatReplySummaryByMessageId(messageId) {
+    const normalizedMessageId = Number(messageId || 0);
+    if (!normalizedMessageId) return null;
+    const targetMessage = chatMessages.find((message) => Number(message?.id || 0) === normalizedMessageId);
+    return buildChatReplySummary(targetMessage);
+}
+
+function renderChatReplyPreview() {
+    if (!chatReplyPreview || !chatReplyPreviewAuthor || !chatReplyPreviewText) return;
+    const summary = getChatReplySummaryByMessageId(chatReplyState?.messageId || 0);
+    if (!summary || summary.recalled) {
+        chatReplyState = null;
+        chatReplyPreview.classList.add('hidden');
+        chatReplyPreviewAuthor.textContent = '回复对象';
+        chatReplyPreviewText.textContent = '回复内容';
+        return;
+    }
+    chatReplyPreview.classList.remove('hidden');
+    chatReplyPreviewAuthor.textContent = `回复 ${summary.author}`;
+    chatReplyPreviewText.textContent = summary.text;
+}
+
+function setChatReplyState(messageId) {
+    const summary = getChatReplySummaryByMessageId(messageId);
+    if (!summary) {
+        chatReplyState = null;
+    } else {
+        chatReplyState = { messageId: summary.messageId };
+    }
+    renderChatReplyPreview();
+}
+
+function clearChatReplyState() {
+    chatReplyState = null;
+    renderChatReplyPreview();
 }
 
 function renderChatOnlineUsers(users = []) {
@@ -1832,6 +1896,7 @@ function latestSelfChatMessageId(messages = []) {
 
 function renderChatMessages({ forceScroll = false } = {}) {
     const shouldScroll = forceScroll || isChatNearBottom();
+    const messagesById = new Map(chatMessages.map((message) => [Number(message?.id || 0), message]));
     clearElement(chatMessageList);
     if (chatMessages.length === 0) {
         chatMessageList.innerHTML = '<p class="terminal-hint">还没有群聊消息，发一条试试。</p>';
@@ -1872,9 +1937,28 @@ function renderChatMessages({ forceScroll = false } = {}) {
             text.classList.add('is-recalled-notice');
         }
 
+        const replyTarget = messagesById.get(Number(message.reply_to_message_id || 0));
+        const replySummary = buildChatReplySummary(replyTarget);
+
         meta.appendChild(sentAt);
         meta.appendChild(author);
         item.appendChild(meta);
+        if (replySummary) {
+            const reply = document.createElement('div');
+            reply.className = 'chat-message-reply';
+
+            const replyAuthor = document.createElement('span');
+            replyAuthor.className = 'chat-message-reply-author';
+            replyAuthor.textContent = replySummary.author;
+
+            const replyText = document.createElement('span');
+            replyText.className = 'chat-message-reply-text';
+            replyText.textContent = replySummary.text;
+
+            reply.appendChild(replyAuthor);
+            reply.appendChild(replyText);
+            item.appendChild(reply);
+        }
         item.appendChild(text);
 
         if (isLatestSelf) {
@@ -1967,6 +2051,12 @@ function mergeChatState(data, { forceScroll = false } = {}) {
     chatMessages = chatMessages
         .filter((message) => message && Number(message.id) > 0)
         .sort((left, right) => Number(left.id) - Number(right.id));
+    if (chatReplyState) {
+        const replySummary = getChatReplySummaryByMessageId(chatReplyState.messageId);
+        if (!replySummary || replySummary.recalled) {
+            chatReplyState = null;
+        }
+    }
     chatLatestSelfMessageId = latestSelfChatMessageId(chatMessages);
     if (chatReadReceiptOpenMessageId && chatReadReceiptOpenMessageId !== chatLatestSelfMessageId) {
         chatReadReceiptOpenMessageId = 0;
@@ -1998,6 +2088,7 @@ function mergeChatState(data, { forceScroll = false } = {}) {
     }
 
     renderChatMessages({ forceScroll: forceScroll || isInitialSnapshot });
+    renderChatReplyPreview();
     chatStateInitialized = true;
     updateChatLauncher();
 }
@@ -2068,9 +2159,13 @@ async function sendChatMessage() {
         const data = await apiFetch('/api/chat/messages', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ text }),
+            body: JSON.stringify({
+                text,
+                reply_to_message_id: Number(chatReplyState?.messageId || 0) || undefined,
+            }),
         });
         chatInput.value = '';
+        clearChatReplyState();
         mergeChatState(
             {
                 messages: [data.message],
@@ -2699,7 +2794,7 @@ chatMessageList.addEventListener('pointerup', endChatMessageHold);
 chatMessageList.addEventListener('pointercancel', endChatMessageHold);
 chatMessageList.addEventListener('pointerleave', endChatMessageHold);
 chatMessageList.addEventListener('contextmenu', (event) => {
-    const messageNode = event.target.closest('.chat-message-item.is-self');
+    const messageNode = event.target.closest('.chat-message-item');
     if (!messageNode || messageNode.dataset.recalled === 'true') {
         closeChatMessageMenu();
         return;
@@ -2725,9 +2820,15 @@ chatMentionDropdown.addEventListener('click', (event) => {
     if (!matched) return;
     applyChatMention(matched);
 });
+chatReplyButton.addEventListener('click', () => {
+    setChatReplyState(chatContextMenuMessageId);
+    closeChatMessageMenu();
+    chatInput.focus();
+});
 chatRecallButton.addEventListener('click', () => {
     recallChatMessage(chatContextMenuMessageId).catch(() => {});
 });
+chatReplyCancelButton.addEventListener('click', clearChatReplyState);
 chatSendButton.addEventListener('click', () => {
     sendChatMessage().catch(() => {});
 });
