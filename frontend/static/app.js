@@ -67,9 +67,34 @@ let sessionInputHistory = [];
 let sessionInputHistoryIndex = -1;
 let sessionInputDraft = '';
 let terminalTurnMenuState = null;
+let activeAppMode = 'manual';
+let rewriteRecords = [];
+let rewriteSelectedIndex = -1;
+let rewriteSourceName = '';
+let rewriteSourceFormat = '';
+let rewriteEditableLineIdCounter = 0;
+let rewriteDragState = null;
+const rewriteRecordEditCache = new Map();
+const rewriteRecordHistoryCache = new Map();
+let rewriteActiveEditSession = null;
+let rewriteAvailableRoles = [];
+let rewriteWorkbenchResizeState = null;
+let rewriteWorkbenchRatio = 0.5;
+let rewriteShellResizeState = null;
+let rewriteShellLeftWidth = 320;
+let rewriteShellRightWidth = 340;
+let rewriteConflictFocusTimer = null;
+let rewriteRecordSearchQuery = '';
 
 const authGate = document.getElementById('auth-gate');
 const appShell = document.getElementById('app-shell');
+const rewriteShell = document.getElementById('rewrite-shell');
+const rewriteLeftPanel = document.getElementById('rewrite-left-panel');
+const rewriteRightPanel = document.getElementById('rewrite-right-panel');
+const rewriteMainPanel = document.getElementById('rewrite-main-panel');
+const rewriteShellLeftSplitter = document.getElementById('rewrite-shell-left-splitter');
+const rewriteShellRightSplitter = document.getElementById('rewrite-shell-right-splitter');
+const rewriteWorkbench = document.getElementById('rewrite-workbench');
 const authError = document.getElementById('auth-error');
 const loginForm = document.getElementById('login-form');
 const loginUsername = document.getElementById('login-username');
@@ -87,6 +112,7 @@ const callStartTimeInput = document.getElementById('call-start-time');
 const generateCallStartTimeButton = document.getElementById('generate-call-start-time-btn');
 const callStartTimeError = document.getElementById('call-start-time-error');
 const useSessionStartTimeCheckbox = document.getElementById('use-session-start-time');
+const modeSwitchButton = document.getElementById('mode-switch-btn');
 const reviewModal = document.getElementById('review-modal');
 const reviewCloseButton = document.getElementById('review-close-btn');
 const reviewToggleButton = document.getElementById('review-toggle-btn');
@@ -154,6 +180,30 @@ const chatReplyPreview = document.getElementById('chat-reply-preview');
 const chatReplyPreviewAuthor = document.getElementById('chat-reply-preview-author');
 const chatReplyPreviewText = document.getElementById('chat-reply-preview-text');
 const chatReplyCancelButton = document.getElementById('chat-reply-cancel-btn');
+const rewriteFileInput = document.getElementById('rewrite-file-input');
+const rewriteUploadStatus = document.getElementById('rewrite-upload-status');
+const rewriteRecordList = document.getElementById('rewrite-record-list');
+const rewriteTitle = document.getElementById('rewrite-title');
+const rewriteRecordIndicator = document.getElementById('rewrite-record-indicator');
+const rewriteResetButton = document.getElementById('rewrite-reset-btn');
+const rewriteUndoButton = document.getElementById('rewrite-undo-btn');
+const rewriteRedoButton = document.getElementById('rewrite-redo-btn');
+const rewriteBackButton = document.getElementById('rewrite-back-btn');
+const rewriteOriginalOutput = document.getElementById('rewrite-original-output');
+const rewriteSplitter = document.getElementById('rewrite-splitter');
+const rewriteScrollRegion = document.getElementById('rewrite-scroll-region');
+const rewriteDialogueOutput = document.getElementById('rewrite-dialogue-output');
+const rewritePrevButton = document.getElementById('rewrite-prev-btn');
+const rewriteNextButton = document.getElementById('rewrite-next-btn');
+const rewriteCurrentRecordLabel = document.getElementById('rewrite-current-record-label');
+const rewriteFileInfo = document.getElementById('rewrite-file-info');
+const rewriteRecordInfo = document.getElementById('rewrite-record-info');
+const rewriteRecordSearchInput = document.getElementById('rewrite-record-search-input');
+const rewriteRecordSearchStatus = document.getElementById('rewrite-record-search-status');
+const rewriteAlternationStatus = document.getElementById('rewrite-alternation-status');
+const rewriteAlternationBadge = document.getElementById('rewrite-alternation-badge');
+const rewriteAlternationText = document.getElementById('rewrite-alternation-text');
+const rewriteAlternationList = document.getElementById('rewrite-alternation-list');
 const PERSONA_HIDDEN_CONTEXT_FIELDS = [
     ['gender', '性别'],
     ['emotion', '当前情绪'],
@@ -199,6 +249,40 @@ const CHAT_MENTION_OPTION_LIMIT = 12;
 const SESSION_INPUT_HISTORY_LIMIT = 50;
 const DEFAULT_DOCUMENT_TITLE = document.title;
 const CHAT_FAVICON_SIZE = 64;
+const REWRITE_RECORD_COLLECTION_KEYS = [
+    'records',
+    'items',
+    'data',
+    'dialogues',
+    'conversations',
+    'samples',
+    'examples',
+    'results',
+];
+const REWRITE_DIALOGUE_KEYS = [
+    'dialogue_process',
+    'transcript',
+    'dialogue',
+    'conversation',
+    'messages',
+    'turns',
+    'records',
+    '通话记录',
+    '对话记录',
+    '通话',
+    '对话',
+];
+const REWRITE_DRAG_SCROLL_EDGE_PX = 96;
+const REWRITE_DRAG_SCROLL_STEP_PX = 24;
+const REWRITE_HISTORY_LIMIT = 120;
+const REWRITE_MIN_PANE_RATIO = 0.28;
+const REWRITE_MAX_PANE_RATIO = 0.72;
+const REWRITE_STACK_BREAKPOINT_PX = 1100;
+const REWRITE_SHELL_LEFT_MIN_PX = 260;
+const REWRITE_SHELL_LEFT_MAX_PX = 520;
+const REWRITE_SHELL_RIGHT_MIN_PX = 280;
+const REWRITE_SHELL_RIGHT_MAX_PX = 560;
+const REWRITE_SHELL_CENTER_MIN_PX = 420;
 
 function formatDisplayTimestamp(date) {
     const year = date.getFullYear();
@@ -682,6 +766,1424 @@ function appendSummaryChip(container, label, value) {
     chip.className = 'context-summary-chip';
     chip.innerHTML = `<strong>${label}</strong><span>${value}</span>`;
     container.appendChild(chip);
+}
+
+function appendDataItem(container, key, value, { filled = true } = {}) {
+    if (!container) return;
+    const item = document.createElement('div');
+    item.className = 'data-item';
+
+    const keyNode = document.createElement('span');
+    keyNode.className = 'data-key';
+    keyNode.textContent = key;
+
+    const valueNode = document.createElement('span');
+    valueNode.className = `data-value ${filled ? 'filled' : ''}`.trim();
+    valueNode.textContent = value || '-';
+
+    item.appendChild(keyNode);
+    item.appendChild(valueNode);
+    container.appendChild(item);
+}
+
+function setRewriteUploadStatus(message, { isError = false } = {}) {
+    if (!rewriteUploadStatus) return;
+    rewriteUploadStatus.textContent = message;
+    rewriteUploadStatus.classList.toggle('error', Boolean(isError));
+}
+
+function resetRewriteWorkspace() {
+    rewriteRecords = [];
+    rewriteSelectedIndex = -1;
+    rewriteSourceName = '';
+    rewriteSourceFormat = '';
+    rewriteEditableLineIdCounter = 0;
+    rewriteDragState = null;
+    rewriteActiveEditSession = null;
+    rewriteAvailableRoles = [];
+    rewriteRecordSearchQuery = '';
+    rewriteRecordEditCache.clear();
+    rewriteRecordHistoryCache.clear();
+    if (rewriteFileInput) rewriteFileInput.value = '';
+    if (rewriteRecordSearchInput) rewriteRecordSearchInput.value = '';
+    if (rewriteTitle) rewriteTitle.textContent = '请先上传对话文件';
+    if (rewriteRecordIndicator) rewriteRecordIndicator.textContent = '记录: -';
+    if (rewriteCurrentRecordLabel) rewriteCurrentRecordLabel.textContent = '未选择记录';
+    if (rewritePrevButton) rewritePrevButton.disabled = true;
+    if (rewriteNextButton) rewriteNextButton.disabled = true;
+    if (rewriteDialogueOutput) {
+        rewriteDialogueOutput.innerHTML = '<p class="terminal-hint">导入文件后显示对话内容</p>';
+        rewriteDialogueOutput.classList.remove('rewrite-dialogue-canvas');
+        rewriteDialogueOutput.ondragover = null;
+        rewriteDialogueOutput.ondrop = null;
+    }
+    if (rewriteOriginalOutput) {
+        rewriteOriginalOutput.innerHTML = '<p class="terminal-hint">导入文件后显示原始对话内容</p>';
+    }
+    if (rewriteScrollRegion) {
+        rewriteScrollRegion.ondragover = null;
+    }
+    if (rewriteSplitter) {
+        rewriteSplitter.classList.remove('is-dragging');
+    }
+    if (rewriteShellLeftSplitter) {
+        rewriteShellLeftSplitter.classList.remove('is-dragging');
+    }
+    if (rewriteShellRightSplitter) {
+        rewriteShellRightSplitter.classList.remove('is-dragging');
+    }
+    if (rewriteRecordList) rewriteRecordList.innerHTML = '<div class="terminal-hint">导入文件后显示记录列表</div>';
+    if (rewriteFileInfo) rewriteFileInfo.innerHTML = '<p class="terminal-hint">导入文件后显示</p>';
+    if (rewriteRecordInfo) rewriteRecordInfo.innerHTML = '<p class="terminal-hint">选择记录后显示</p>';
+    if (rewriteAlternationBadge) {
+        rewriteAlternationBadge.textContent = '待检测';
+        rewriteAlternationBadge.classList.remove('is-good', 'is-warning', 'is-error');
+    }
+    if (rewriteAlternationText) {
+        rewriteAlternationText.textContent = '导入文件后根据右侧可编辑内容实时判断角色是否交替。';
+    }
+    if (rewriteAlternationList) {
+        clearElement(rewriteAlternationList);
+    }
+    if (rewriteRecordSearchStatus) {
+        rewriteRecordSearchStatus.textContent = '输入后实时筛选，回车跳到首条匹配记录。';
+    }
+    setRewriteUploadStatus('尚未导入文件。');
+    updateRewriteHistoryButtons();
+}
+
+function updateModeSwitchButtons() {
+    const canSwitch = Boolean(authenticatedUser) && !isReviewModalVisible();
+    if (modeSwitchButton) modeSwitchButton.disabled = !canSwitch;
+    if (rewriteBackButton) rewriteBackButton.disabled = !canSwitch;
+}
+
+function syncAppModeView() {
+    const showManual = Boolean(authenticatedUser) && activeAppMode === 'manual';
+    const showRewrite = Boolean(authenticatedUser) && activeAppMode === 'rewrite';
+    appShell.classList.toggle('hidden', !showManual);
+    rewriteShell.classList.toggle('hidden', !showRewrite);
+
+    const showChatWindow = Boolean(authenticatedUser) && chatWindowState?.visible !== false;
+    chatWindow.classList.toggle('hidden', !showChatWindow);
+    chatWindow.setAttribute('aria-hidden', showChatWindow ? 'false' : 'true');
+    if (showChatWindow) {
+        applyChatWindowRect();
+    }
+    updateChatLauncher();
+    updateModeSwitchButtons();
+    updateRewriteHistoryButtons();
+    if (showRewrite) {
+        window.requestAnimationFrame(() => {
+            applyRewriteShellLayout();
+            applyRewriteWorkbenchRatio();
+        });
+    }
+}
+
+function setAppMode(mode) {
+    endRewriteEditSession({ force: false });
+    const nextMode = mode === 'rewrite' ? 'rewrite' : 'manual';
+    activeAppMode = nextMode;
+    hideIssueReferencePopover();
+    closeTerminalTurnMenu();
+    hideTextMagnifier();
+    syncAppModeView();
+}
+
+function isPotentialRewriteTurn(value) {
+    if (!value) return false;
+    if (typeof value === 'string') return value.trim() !== '';
+    if (typeof value !== 'object') return false;
+    return [
+        'speaker',
+        'role',
+        'text',
+        'content',
+        'utterance',
+        'message',
+        'display_kind',
+    ].some((key) => key in value);
+}
+
+function normalizeRewriteRecordsPayload(payload) {
+    if (Array.isArray(payload)) {
+        if (payload.every((item) => isPotentialRewriteTurn(item))) {
+            return [payload];
+        }
+        return payload;
+    }
+    if (!payload || typeof payload !== 'object') return [payload];
+
+    const looksLikeSingleRecord = REWRITE_DIALOGUE_KEYS.some((key) => (
+        Array.isArray(payload[key]) && payload[key].some((item) => isPotentialRewriteTurn(item))
+    )) || (typeof payload.dialogue_text === 'string' && payload.dialogue_text.trim());
+    if (looksLikeSingleRecord) {
+        return [payload];
+    }
+
+    for (const key of REWRITE_RECORD_COLLECTION_KEYS) {
+        if (Array.isArray(payload[key])) {
+            return payload[key];
+        }
+    }
+
+    const discoveredArray = Object.values(payload).find(
+        (value) => Array.isArray(value) && value.length > 0,
+    );
+    if (Array.isArray(discoveredArray)) {
+        return discoveredArray;
+    }
+    return [payload];
+}
+
+function parseJsonlRecords(text) {
+    const records = [];
+    String(text || '')
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter(Boolean)
+        .forEach((line, index) => {
+            try {
+                const parsedLine = JSON.parse(line);
+                if (Array.isArray(parsedLine)) {
+                    if (parsedLine.every((item) => isPotentialRewriteTurn(item))) {
+                        records.push(parsedLine);
+                    } else {
+                        records.push(...parsedLine);
+                    }
+                } else {
+                    records.push(parsedLine);
+                }
+            } catch (error) {
+                throw new Error(`第 ${index + 1} 行不是合法 JSON`);
+            }
+        });
+    return records;
+}
+
+function parseRewriteRecords(text, fileName = '') {
+    const normalizedText = String(text || '').trim();
+    if (!normalizedText) {
+        throw new Error('文件内容为空');
+    }
+
+    const normalizedName = String(fileName || '').toLowerCase();
+    const preferJsonl = normalizedName.endsWith('.jsonl');
+    let parsed = null;
+    let format = '';
+
+    if (preferJsonl) {
+        try {
+            parsed = parseJsonlRecords(normalizedText);
+            format = 'jsonl';
+        } catch (jsonlError) {
+            parsed = JSON.parse(normalizedText);
+            format = 'json';
+        }
+    } else {
+        try {
+            parsed = JSON.parse(normalizedText);
+            format = 'json';
+        } catch (jsonError) {
+            parsed = parseJsonlRecords(normalizedText);
+            format = 'jsonl';
+        }
+    }
+
+    const records = normalizeRewriteRecordsPayload(parsed)
+        .filter((item) => item !== null && item !== undefined);
+    if (records.length === 0) {
+        throw new Error('文件中没有可渲染的记录');
+    }
+    return { records, format };
+}
+
+function extractRewriteTurns(record) {
+    if (Array.isArray(record) && record.some((item) => isPotentialRewriteTurn(item))) {
+        return record;
+    }
+    if (isPotentialRewriteTurn(record)) {
+        return [record];
+    }
+    if (!record || typeof record !== 'object') return [];
+
+    for (const key of REWRITE_DIALOGUE_KEYS) {
+        if (Array.isArray(record[key]) && record[key].some((item) => isPotentialRewriteTurn(item))) {
+            return record[key];
+        }
+    }
+
+    if (typeof record.dialogue_text === 'string' && record.dialogue_text.trim()) {
+        return record.dialogue_text
+            .split(/\r?\n/)
+            .map((line) => line.trim())
+            .filter(Boolean);
+    }
+    return [];
+}
+
+function extractRewriteOriginalLines(record) {
+    return extractRewriteTurns(record)
+        .map((item, index) => normalizeRewriteLine(item, index + 1))
+        .filter(Boolean);
+}
+
+function normalizeRewriteSpeaker(rawSpeaker = '') {
+    const speaker = String(rawSpeaker || '').trim();
+    const lowered = speaker.toLowerCase();
+    if (!speaker) return '';
+    if (['user', 'human', 'customer', 'caller'].includes(lowered) || speaker === '用户') {
+        return '用户';
+    }
+    if (['service', 'assistant', 'agent', '客服'].includes(lowered) || speaker === '客服') {
+        return '客服';
+    }
+    if (['system', 'tool', 'function_call', 'observation'].includes(lowered)) {
+        return '';
+    }
+    return speaker;
+}
+
+function inferRewriteToneFromRole(role = '', fallbackTone = 'system') {
+    const normalizedRole = normalizeRewriteSpeaker(role);
+    if (normalizedRole === '用户') return 'user';
+    if (normalizedRole === '客服') return 'service';
+    if (!role || normalizedRole === '系统') return 'system';
+    return fallbackTone || 'system';
+}
+
+function defaultRewriteRoleForTone(tone = 'system') {
+    if (tone === 'user') return '用户';
+    if (tone === 'service') return '客服';
+    return '系统';
+}
+
+function stripRewriteLinePrefix(text = '') {
+    return String(text || '').replace(/^\[[^\]]+\]\s*/, '').trim();
+}
+
+function normalizeRewriteLine(item, fallbackIndex = 0) {
+    if (typeof item === 'string') {
+        const text = item.trim();
+        if (!text) return null;
+        if (text.startsWith('function_call:') || text.startsWith('observation:')) {
+            return { tone: 'system', role: '系统', text };
+        }
+        const turnMatch = text.match(/^\[([^\]]+)\]\s*([^:：]+)[:：]\s*(.+)$/);
+        if (turnMatch) {
+            const [, roundLabel, rawSpeaker, rawText] = turnMatch;
+            const speaker = normalizeRewriteSpeaker(rawSpeaker);
+            let tone = 'system';
+            if (speaker === '用户') tone = 'user';
+            if (speaker === '客服') tone = 'service';
+            return {
+                tone,
+                role: speaker || rawSpeaker,
+                text: stripRewriteLinePrefix(rawText),
+            };
+        }
+        return {
+            tone: 'system',
+            role: '系统',
+            text,
+        };
+    }
+    if (!item || typeof item !== 'object') return null;
+
+    const rawText = String(
+        item.text
+        ?? item.content
+        ?? item.utterance
+        ?? item.message
+        ?? '',
+    ).trim();
+    if (!rawText) return null;
+
+    const displayKind = String(item.display_kind || item.kind || '').trim().toLowerCase();
+    const speaker = normalizeRewriteSpeaker(item.speaker || item.role || item.actor || item.from || '');
+
+    if (displayKind === 'function_call' || rawText.startsWith('function_call:') || rawText.startsWith('observation:')) {
+        return { tone: 'system', role: '系统', text: rawText };
+    }
+
+    let tone = 'system';
+    if (speaker === '用户') tone = 'user';
+    if (speaker === '客服') tone = 'service';
+    return {
+        tone,
+        role: speaker || '系统',
+        text: stripRewriteLinePrefix(rawText),
+    };
+}
+
+function nextRewriteEditableLineId() {
+    rewriteEditableLineIdCounter += 1;
+    return `rewrite-line-${rewriteEditableLineIdCounter}`;
+}
+
+function createRewriteEditableLine(entry = {}) {
+    const tone = String(entry.tone || 'system').trim() || 'system';
+    const hasExplicitRole = Object.prototype.hasOwnProperty.call(entry, 'role');
+    const fallbackRole = rewriteAvailableRoles[0] || defaultRewriteRoleForTone(tone);
+    const rawRole = hasExplicitRole ? String(entry.role ?? '').trim() : fallbackRole;
+    return {
+        id: nextRewriteEditableLineId(),
+        tone,
+        role: hasExplicitRole ? rawRole : fallbackRole,
+        text: String(entry.text || ''),
+    };
+}
+
+function cloneRewriteLines(lines = []) {
+    return lines.map((line) => ({
+        id: String(line.id || nextRewriteEditableLineId()),
+        tone: String(line.tone || 'system'),
+        role: String(line.role ?? ''),
+        text: String(line.text ?? ''),
+    }));
+}
+
+function rewriteLinesSignature(lines = []) {
+    return JSON.stringify(lines.map((line) => [line.id, line.tone, line.role, line.text]));
+}
+
+function updateRewriteRoleEditorWidth(control) {
+    if (!(control instanceof HTMLInputElement) && !(control instanceof HTMLSelectElement)) return '';
+    const measureSource = String(control.value || control.getAttribute('placeholder') || '角色').trim();
+    const computedStyle = window.getComputedStyle(control);
+    const canvas = updateRewriteRoleEditorWidth._canvas || document.createElement('canvas');
+    updateRewriteRoleEditorWidth._canvas = canvas;
+    const context = canvas.getContext('2d');
+    if (!context) {
+        const widthCh = Math.min(Math.max(measureSource.length + 2.8, 6), 14);
+        control.style.width = '100%';
+        return `${widthCh}ch`;
+    }
+    context.font = computedStyle.font || `${computedStyle.fontSize} ${computedStyle.fontFamily}`;
+    const measuredTextWidth = context.measureText(measureSource || '角色').width;
+    const horizontalPadding = (
+        parseFloat(computedStyle.paddingLeft || '0')
+        + parseFloat(computedStyle.paddingRight || '0')
+        + parseFloat(computedStyle.borderLeftWidth || '0')
+        + parseFloat(computedStyle.borderRightWidth || '0')
+    );
+    const widthPx = Math.min(Math.max(measuredTextWidth + horizontalPadding + 18, 88), 240);
+    control.style.width = '100%';
+    return `${Math.ceil(widthPx)}px`;
+}
+
+function updateRewriteLineBodyLayout(body, control) {
+    if (!(body instanceof HTMLElement)) return;
+    const widthValue = updateRewriteRoleEditorWidth(control);
+    body.style.setProperty('--rewrite-role-width', widthValue);
+}
+
+function getRewriteShellGapWidth() {
+    if (!rewriteShell) return 0;
+    const computedStyle = window.getComputedStyle(rewriteShell);
+    const gapValue = computedStyle.columnGap || computedStyle.gap || '0';
+    const gapSize = parseFloat(gapValue) || 0;
+    return gapSize * 4;
+}
+
+function applyRewriteShellLayout() {
+    if (!rewriteShell) return;
+    if (window.innerWidth <= REWRITE_STACK_BREAKPOINT_PX) {
+        rewriteShell.style.removeProperty('--rewrite-shell-left-width');
+        rewriteShell.style.removeProperty('--rewrite-shell-right-width');
+        if (rewriteShellLeftSplitter) {
+            rewriteShellLeftSplitter.setAttribute('aria-valuenow', String(Math.round(rewriteShellLeftWidth)));
+        }
+        if (rewriteShellRightSplitter) {
+            rewriteShellRightSplitter.setAttribute('aria-valuenow', String(Math.round(rewriteShellRightWidth)));
+        }
+        return;
+    }
+
+    const totalWidth = rewriteShell.clientWidth;
+    const splitterWidth = (rewriteShellLeftSplitter?.offsetWidth || 0) + (rewriteShellRightSplitter?.offsetWidth || 0);
+    const shellGapWidth = getRewriteShellGapWidth();
+    const maxLeftByCenter = Math.min(
+        REWRITE_SHELL_LEFT_MAX_PX,
+        totalWidth - splitterWidth - shellGapWidth - rewriteShellRightWidth - REWRITE_SHELL_CENTER_MIN_PX,
+    );
+    rewriteShellLeftWidth = Math.min(
+        Math.max(rewriteShellLeftWidth, REWRITE_SHELL_LEFT_MIN_PX),
+        Math.max(REWRITE_SHELL_LEFT_MIN_PX, maxLeftByCenter),
+    );
+    const maxRightByCenter = Math.min(
+        REWRITE_SHELL_RIGHT_MAX_PX,
+        totalWidth - splitterWidth - shellGapWidth - rewriteShellLeftWidth - REWRITE_SHELL_CENTER_MIN_PX,
+    );
+    rewriteShellRightWidth = Math.min(
+        Math.max(rewriteShellRightWidth, REWRITE_SHELL_RIGHT_MIN_PX),
+        Math.max(REWRITE_SHELL_RIGHT_MIN_PX, maxRightByCenter),
+    );
+
+    rewriteShell.style.setProperty('--rewrite-shell-left-width', `${Math.round(rewriteShellLeftWidth)}px`);
+    rewriteShell.style.setProperty('--rewrite-shell-right-width', `${Math.round(rewriteShellRightWidth)}px`);
+    if (rewriteShellLeftSplitter) {
+        rewriteShellLeftSplitter.setAttribute('aria-valuenow', String(Math.round(rewriteShellLeftWidth)));
+    }
+    if (rewriteShellRightSplitter) {
+        rewriteShellRightSplitter.setAttribute('aria-valuenow', String(Math.round(rewriteShellRightWidth)));
+    }
+}
+
+function updateRewriteShellWidthFromPointer(side, clientX) {
+    if (!rewriteShell || !side) return;
+    const shellRect = rewriteShell.getBoundingClientRect();
+    const singleSplitterWidth = rewriteShellLeftSplitter?.getBoundingClientRect().width
+        || rewriteShellRightSplitter?.getBoundingClientRect().width
+        || 0;
+    const reservedWidth = (singleSplitterWidth * 2) + getRewriteShellGapWidth();
+    if (side === 'left') {
+        const maxLeft = Math.min(
+            REWRITE_SHELL_LEFT_MAX_PX,
+            shellRect.width - reservedWidth - rewriteShellRightWidth - REWRITE_SHELL_CENTER_MIN_PX,
+        );
+        rewriteShellLeftWidth = Math.min(
+            Math.max(clientX - shellRect.left - (singleSplitterWidth / 2), REWRITE_SHELL_LEFT_MIN_PX),
+            Math.max(REWRITE_SHELL_LEFT_MIN_PX, maxLeft),
+        );
+    } else if (side === 'right') {
+        const maxRight = Math.min(
+            REWRITE_SHELL_RIGHT_MAX_PX,
+            shellRect.width - reservedWidth - rewriteShellLeftWidth - REWRITE_SHELL_CENTER_MIN_PX,
+        );
+        rewriteShellRightWidth = Math.min(
+            Math.max(shellRect.right - clientX - (singleSplitterWidth / 2), REWRITE_SHELL_RIGHT_MIN_PX),
+            Math.max(REWRITE_SHELL_RIGHT_MIN_PX, maxRight),
+        );
+    }
+    applyRewriteShellLayout();
+}
+
+function beginRewriteShellResize(side, event) {
+    if (!rewriteShell || activeAppMode !== 'rewrite') return;
+    if (window.innerWidth <= REWRITE_STACK_BREAKPOINT_PX) return;
+    const splitter = side === 'left' ? rewriteShellLeftSplitter : rewriteShellRightSplitter;
+    if (!splitter) return;
+    event.preventDefault();
+    rewriteShellResizeState = { side, pointerId: event.pointerId };
+    splitter.classList.add('is-dragging');
+    if (typeof splitter.setPointerCapture === 'function') {
+        splitter.setPointerCapture(event.pointerId);
+    }
+    updateRewriteShellWidthFromPointer(side, event.clientX);
+}
+
+function trackRewriteShellResize(event) {
+    if (!rewriteShellResizeState) return;
+    updateRewriteShellWidthFromPointer(rewriteShellResizeState.side, event.clientX);
+}
+
+function endRewriteShellResize(event) {
+    if (!rewriteShellResizeState) return;
+    const splitter = rewriteShellResizeState.side === 'left' ? rewriteShellLeftSplitter : rewriteShellRightSplitter;
+    if (
+        splitter
+        && typeof splitter.releasePointerCapture === 'function'
+        && event?.pointerId !== undefined
+        && splitter.hasPointerCapture?.(event.pointerId)
+    ) {
+        splitter.releasePointerCapture(event.pointerId);
+    }
+    rewriteShellResizeState = null;
+    if (rewriteShellLeftSplitter) rewriteShellLeftSplitter.classList.remove('is-dragging');
+    if (rewriteShellRightSplitter) rewriteShellRightSplitter.classList.remove('is-dragging');
+}
+
+function applyRewriteWorkbenchRatio() {
+    if (!rewriteWorkbench) return;
+    if (window.innerWidth <= REWRITE_STACK_BREAKPOINT_PX) {
+        rewriteWorkbench.style.removeProperty('--rewrite-left-pane-width');
+        rewriteWorkbench.style.removeProperty('--rewrite-right-pane-width');
+        if (rewriteSplitter) {
+            rewriteSplitter.setAttribute('aria-valuenow', '50');
+        }
+        return;
+    }
+
+    const splitterWidth = rewriteSplitter?.offsetWidth || 0;
+    const availableWidth = Math.max(rewriteWorkbench.clientWidth - splitterWidth, 0);
+    const normalizedRatio = Math.min(Math.max(rewriteWorkbenchRatio, REWRITE_MIN_PANE_RATIO), REWRITE_MAX_PANE_RATIO);
+    const leftWidth = Math.max(Math.round(availableWidth * normalizedRatio), 0);
+    const rightWidth = Math.max(availableWidth - leftWidth, 0);
+    rewriteWorkbench.style.setProperty('--rewrite-left-pane-width', `${leftWidth}px`);
+    rewriteWorkbench.style.setProperty('--rewrite-right-pane-width', `${rightWidth}px`);
+    if (rewriteSplitter) {
+        rewriteSplitter.setAttribute('aria-valuenow', String(Math.round(normalizedRatio * 100)));
+    }
+}
+
+function updateRewriteWorkbenchRatioFromPointer(clientX) {
+    if (!rewriteWorkbench) return;
+    const rect = rewriteWorkbench.getBoundingClientRect();
+    const splitterWidth = rewriteSplitter?.getBoundingClientRect().width || 0;
+    const availableWidth = Math.max(rect.width - splitterWidth, 1);
+    const offset = clientX - rect.left - (splitterWidth / 2);
+    const nextRatio = Math.min(
+        Math.max(offset / availableWidth, REWRITE_MIN_PANE_RATIO),
+        REWRITE_MAX_PANE_RATIO,
+    );
+    rewriteWorkbenchRatio = nextRatio;
+    applyRewriteWorkbenchRatio();
+}
+
+function beginRewriteWorkbenchResize(event) {
+    if (!rewriteWorkbench || !rewriteSplitter || activeAppMode !== 'rewrite') return;
+    if (window.innerWidth <= REWRITE_STACK_BREAKPOINT_PX) return;
+    event.preventDefault();
+    rewriteWorkbenchResizeState = { pointerId: event.pointerId };
+    rewriteSplitter.classList.add('is-dragging');
+    if (typeof rewriteSplitter.setPointerCapture === 'function') {
+        rewriteSplitter.setPointerCapture(event.pointerId);
+    }
+    updateRewriteWorkbenchRatioFromPointer(event.clientX);
+}
+
+function trackRewriteWorkbenchResize(event) {
+    if (!rewriteWorkbenchResizeState) return;
+    updateRewriteWorkbenchRatioFromPointer(event.clientX);
+}
+
+function endRewriteWorkbenchResize(event) {
+    if (!rewriteWorkbenchResizeState) return;
+    if (
+        rewriteSplitter
+        && typeof rewriteSplitter.releasePointerCapture === 'function'
+        && event?.pointerId !== undefined
+        && rewriteSplitter.hasPointerCapture?.(event.pointerId)
+    ) {
+        rewriteSplitter.releasePointerCapture(event.pointerId);
+    }
+    rewriteWorkbenchResizeState = null;
+    if (rewriteSplitter) {
+        rewriteSplitter.classList.remove('is-dragging');
+    }
+}
+
+function collectRewriteAvailableRoles(records = []) {
+    const seen = new Set();
+    const orderedRoles = [];
+    records.forEach((record) => {
+        extractRewriteTurns(record)
+            .map((item, index) => normalizeRewriteLine(item, index + 1))
+            .filter(Boolean)
+            .forEach((line) => {
+                const role = String(line.role || '').trim();
+                if (!role || seen.has(role)) return;
+                seen.add(role);
+                orderedRoles.push(role);
+            });
+    });
+    if (!orderedRoles.length) {
+        return ['用户', '客服', '系统'];
+    }
+    return orderedRoles;
+}
+
+function evaluateRewriteRoleAlternation(lines = []) {
+    const normalizedLines = lines
+        .map((line, index) => ({
+            index,
+            role: normalizeRewriteSpeaker(line?.role || ''),
+            text: String(line?.text || '').trim(),
+        }))
+        .filter((line) => line.text && line.role && line.role !== '系统');
+
+    if (normalizedLines.length < 2) {
+        return {
+            state: 'warning',
+            badge: '待形成交替',
+            text: '当前有效对话行不足 2 行，暂时无法判断是否交替。',
+            conflictIndexes: [],
+            conflictMessages: [],
+            conflictItems: [],
+        };
+    }
+
+    const repeatedPairs = [];
+    for (let index = 1; index < normalizedLines.length; index += 1) {
+        if (normalizedLines[index].role === normalizedLines[index - 1].role) {
+            repeatedPairs.push([normalizedLines[index - 1], normalizedLines[index]]);
+        }
+    }
+
+    if (!repeatedPairs.length) {
+        return {
+            state: 'good',
+            badge: '角色交替正常',
+            text: `当前共检查 ${normalizedLines.length} 行有效对话，未发现连续同角色。`,
+            conflictIndexes: [],
+            conflictMessages: [],
+            conflictItems: [],
+        };
+    }
+
+    const [previousLine, currentLine] = repeatedPairs[0];
+    const conflictIndexes = [...new Set(repeatedPairs.flatMap(([left, right]) => [left.index, right.index]))];
+    const conflictMessages = repeatedPairs.map(([left, right]) => (
+        `第 ${left.index + 1} 行和第 ${right.index + 1} 行连续为“${right.role}”`
+    ));
+    const conflictItems = repeatedPairs.map(([left, right]) => ({
+        message: `第 ${left.index + 1} 行和第 ${right.index + 1} 行连续为“${right.role}”`,
+        indexes: [left.index, right.index],
+    }));
+    return {
+        state: 'error',
+        badge: '存在连续同角色',
+        text: `第 ${previousLine.index + 1} 行和第 ${currentLine.index + 1} 行均为“${currentLine.role}”，当前不满足交替。`,
+        conflictIndexes,
+        conflictMessages,
+        conflictItems,
+    };
+}
+
+function focusRewriteConflictLines(indexes = []) {
+    if (!rewriteDialogueOutput || !indexes.length) return;
+    rewriteDialogueOutput
+        .querySelectorAll('.rewrite-line-card.is-conflict-focus')
+        .forEach((node) => node.classList.remove('is-conflict-focus'));
+    const targetCards = indexes
+        .map((index) => rewriteDialogueOutput.querySelector(`.rewrite-line-card[data-line-index="${index}"]`))
+        .filter(Boolean);
+    if (!targetCards.length) return;
+    targetCards[0].scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'nearest' });
+    targetCards.forEach((card) => card.classList.add('is-conflict-focus'));
+    if (rewriteConflictFocusTimer) {
+        window.clearTimeout(rewriteConflictFocusTimer);
+    }
+    rewriteConflictFocusTimer = window.setTimeout(() => {
+        targetCards.forEach((card) => card.classList.remove('is-conflict-focus'));
+        rewriteConflictFocusTimer = null;
+    }, 1800);
+}
+
+function updateRewriteAlternationStatus(lines = []) {
+    if (!rewriteAlternationBadge || !rewriteAlternationText) return;
+    const summary = evaluateRewriteRoleAlternation(lines);
+    rewriteAlternationBadge.textContent = summary.badge;
+    rewriteAlternationText.textContent = summary.text;
+    rewriteAlternationBadge.classList.remove('is-good', 'is-warning', 'is-error');
+    rewriteAlternationBadge.classList.add(
+        summary.state === 'good' ? 'is-good' : summary.state === 'error' ? 'is-error' : 'is-warning',
+    );
+    if (rewriteAlternationList) {
+        clearElement(rewriteAlternationList);
+        (summary.conflictItems || []).forEach((conflict) => {
+            const item = document.createElement('button');
+            item.type = 'button';
+            item.className = 'rewrite-status-item';
+            item.textContent = conflict.message;
+            item.addEventListener('click', () => {
+                focusRewriteConflictLines(conflict.indexes);
+            });
+            rewriteAlternationList.appendChild(item);
+        });
+    }
+    return summary;
+}
+
+function buildRewriteInitialEditableLines(record) {
+    const normalizedLines = extractRewriteTurns(record)
+        .map((item, index) => normalizeRewriteLine(item, index + 1))
+        .filter(Boolean)
+        .map((entry) => createRewriteEditableLine(entry));
+    return normalizedLines.length
+        ? normalizedLines
+        : [createRewriteEditableLine({ tone: 'system', text: '' })];
+}
+
+function getRewriteEditableLines(record, recordIndex = rewriteSelectedIndex) {
+    const cacheKey = Number(recordIndex);
+    if (!Number.isInteger(cacheKey) || cacheKey < 0) return [];
+    if (rewriteRecordEditCache.has(cacheKey)) {
+        return rewriteRecordEditCache.get(cacheKey) || [];
+    }
+
+    const editableLines = buildRewriteInitialEditableLines(record);
+    rewriteRecordEditCache.set(cacheKey, cloneRewriteLines(editableLines));
+    return editableLines;
+}
+
+function updateRewriteRecordLines(recordIndex, nextLines) {
+    rewriteRecordEditCache.set(Number(recordIndex), cloneRewriteLines(nextLines));
+}
+
+function getRewriteRecordHistory(recordIndex) {
+    const normalizedIndex = Number(recordIndex);
+    if (!rewriteRecordHistoryCache.has(normalizedIndex)) {
+        rewriteRecordHistoryCache.set(normalizedIndex, { undoStack: [], redoStack: [] });
+    }
+    return rewriteRecordHistoryCache.get(normalizedIndex);
+}
+
+function updateRewriteHistoryButtons() {
+    const hasSelection = Number.isInteger(rewriteSelectedIndex) && rewriteSelectedIndex >= 0;
+    const history = hasSelection ? getRewriteRecordHistory(rewriteSelectedIndex) : null;
+    if (rewriteResetButton) rewriteResetButton.disabled = !hasSelection;
+    if (rewriteUndoButton) rewriteUndoButton.disabled = !hasSelection || !history || history.undoStack.length < 1;
+    if (rewriteRedoButton) rewriteRedoButton.disabled = !hasSelection || !history || history.redoStack.length < 1;
+}
+
+function pushRewriteUndoSnapshot(recordIndex, linesSnapshot) {
+    const history = getRewriteRecordHistory(recordIndex);
+    const normalizedSnapshot = cloneRewriteLines(linesSnapshot);
+    const signature = rewriteLinesSignature(normalizedSnapshot);
+    const previousSnapshot = history.undoStack[history.undoStack.length - 1];
+    if (previousSnapshot && rewriteLinesSignature(previousSnapshot) === signature) {
+        return;
+    }
+    history.undoStack.push(normalizedSnapshot);
+    if (history.undoStack.length > REWRITE_HISTORY_LIMIT) {
+        history.undoStack = history.undoStack.slice(-REWRITE_HISTORY_LIMIT);
+    }
+    history.redoStack = [];
+    updateRewriteHistoryButtons();
+}
+
+function applyRewriteLineMutation(recordIndex, nextLines, { pushHistory = true, previousLines = null } = {}) {
+    const normalizedIndex = Number(recordIndex);
+    const currentLines = previousLines ? cloneRewriteLines(previousLines) : cloneRewriteLines(
+        getRewriteEditableLines(rewriteRecords[normalizedIndex], normalizedIndex),
+    );
+    const normalizedNextLines = cloneRewriteLines(nextLines);
+    if (rewriteLinesSignature(currentLines) === rewriteLinesSignature(normalizedNextLines)) {
+        return false;
+    }
+    if (pushHistory) {
+        pushRewriteUndoSnapshot(normalizedIndex, currentLines);
+    }
+    updateRewriteRecordLines(normalizedIndex, normalizedNextLines);
+    updateRewriteHistoryButtons();
+    return true;
+}
+
+function beginRewriteEditSession(recordIndex, lineId, field) {
+    const normalizedIndex = Number(recordIndex);
+    if (normalizedIndex < 0 || !lineId || !field) return;
+    if (
+        rewriteActiveEditSession
+        && rewriteActiveEditSession.recordIndex === normalizedIndex
+        && rewriteActiveEditSession.lineId === lineId
+        && rewriteActiveEditSession.field === field
+    ) {
+        return;
+    }
+    const currentLines = cloneRewriteLines(getRewriteEditableLines(rewriteRecords[normalizedIndex], normalizedIndex));
+    rewriteActiveEditSession = {
+        recordIndex: normalizedIndex,
+        lineId,
+        field,
+        snapshot: currentLines,
+        signature: rewriteLinesSignature(currentLines),
+    };
+}
+
+function endRewriteEditSession({ force = false } = {}) {
+    if (!rewriteActiveEditSession) return;
+    const session = rewriteActiveEditSession;
+    rewriteActiveEditSession = null;
+    if (!force) {
+        const currentLines = cloneRewriteLines(getRewriteEditableLines(rewriteRecords[session.recordIndex], session.recordIndex));
+        if (rewriteLinesSignature(currentLines) !== session.signature) {
+            pushRewriteUndoSnapshot(session.recordIndex, session.snapshot);
+        }
+    }
+    updateRewriteHistoryButtons();
+}
+
+function undoRewriteChange() {
+    if (!Number.isInteger(rewriteSelectedIndex) || rewriteSelectedIndex < 0) return;
+    endRewriteEditSession({ force: false });
+    const history = getRewriteRecordHistory(rewriteSelectedIndex);
+    if (!history.undoStack.length) return;
+    const currentLines = cloneRewriteLines(getRewriteEditableLines(rewriteRecords[rewriteSelectedIndex], rewriteSelectedIndex));
+    history.redoStack.push(currentLines);
+    const previousLines = history.undoStack.pop();
+    updateRewriteRecordLines(rewriteSelectedIndex, previousLines);
+    renderRewriteRecordState(rewriteSelectedIndex);
+    updateRewriteHistoryButtons();
+}
+
+function redoRewriteChange() {
+    if (!Number.isInteger(rewriteSelectedIndex) || rewriteSelectedIndex < 0) return;
+    endRewriteEditSession({ force: false });
+    const history = getRewriteRecordHistory(rewriteSelectedIndex);
+    if (!history.redoStack.length) return;
+    const currentLines = cloneRewriteLines(getRewriteEditableLines(rewriteRecords[rewriteSelectedIndex], rewriteSelectedIndex));
+    history.undoStack.push(currentLines);
+    const nextLines = history.redoStack.pop();
+    updateRewriteRecordLines(rewriteSelectedIndex, nextLines);
+    renderRewriteRecordState(rewriteSelectedIndex);
+    updateRewriteHistoryButtons();
+}
+
+function resetRewriteRecordToInitial(recordIndex = rewriteSelectedIndex) {
+    const normalizedIndex = Number(recordIndex);
+    if (!Number.isInteger(normalizedIndex) || normalizedIndex < 0 || normalizedIndex >= rewriteRecords.length) return;
+    endRewriteEditSession({ force: false });
+    const record = rewriteRecords[normalizedIndex];
+    if (!record) return;
+    const currentLines = getRewriteEditableLines(record, normalizedIndex);
+    const initialLines = buildRewriteInitialEditableLines(record);
+    const didMutate = applyRewriteLineMutation(normalizedIndex, initialLines, {
+        pushHistory: true,
+        previousLines: currentLines,
+    });
+    if (!didMutate) return;
+    renderRewriteRecordState(normalizedIndex);
+}
+
+function insertRewriteEmptyLine(recordIndex, anchorIndex, position = 'after') {
+    const record = rewriteRecords[recordIndex];
+    if (!record) return;
+    const currentLines = [...getRewriteEditableLines(record, recordIndex)];
+    const insertIndex = position === 'before' ? anchorIndex : anchorIndex + 1;
+    currentLines.splice(insertIndex, 0, createRewriteEditableLine({
+        tone: 'system',
+        role: '',
+        text: '',
+    }));
+    applyRewriteLineMutation(recordIndex, currentLines, {
+        pushHistory: true,
+        previousLines: getRewriteEditableLines(record, recordIndex),
+    });
+    renderRewriteRecordState(recordIndex);
+    const insertedLine = currentLines[insertIndex];
+    window.requestAnimationFrame(() => {
+        const editor = rewriteDialogueOutput.querySelector(`[data-line-id="${insertedLine.id}"] .rewrite-line-editor`);
+        if (editor instanceof HTMLTextAreaElement) {
+            editor.focus();
+        }
+    });
+}
+
+function deleteRewriteLine(recordIndex, lineId) {
+    const record = rewriteRecords[recordIndex];
+    if (!record || !lineId) return;
+    const currentLines = [...getRewriteEditableLines(record, recordIndex)];
+    if (currentLines.length <= 1) {
+        currentLines[0] = createRewriteEditableLine({
+            tone: currentLines[0]?.tone || 'system',
+            role: currentLines[0]?.role || '',
+            text: '',
+        });
+    } else {
+        const targetIndex = currentLines.findIndex((line) => line.id === lineId);
+        if (targetIndex < 0) return;
+        currentLines.splice(targetIndex, 1);
+    }
+    applyRewriteLineMutation(recordIndex, currentLines, {
+        pushHistory: true,
+        previousLines: getRewriteEditableLines(record, recordIndex),
+    });
+    renderRewriteRecordState(recordIndex);
+}
+
+function updateRewriteLineText(recordIndex, lineId, text) {
+    const record = rewriteRecords[recordIndex];
+    if (!record) return;
+    const currentLines = [...getRewriteEditableLines(record, recordIndex)];
+    const target = currentLines.find((line) => line.id === lineId);
+    if (!target) return;
+    target.text = String(text || '');
+    applyRewriteLineMutation(recordIndex, currentLines, {
+        pushHistory: false,
+        previousLines: getRewriteEditableLines(record, recordIndex),
+    });
+    updateRewriteAlternationStatus(currentLines);
+}
+
+function updateRewriteLineRole(recordIndex, lineId, role) {
+    const record = rewriteRecords[recordIndex];
+    if (!record) return;
+    const currentLines = [...getRewriteEditableLines(record, recordIndex)];
+    const target = currentLines.find((line) => line.id === lineId);
+    if (!target) return;
+    const normalizedRole = String(role || '').trim();
+    if (!normalizedRole || !rewriteAvailableRoles.includes(normalizedRole)) return;
+    target.role = normalizedRole;
+    target.tone = inferRewriteToneFromRole(target.role, target.tone);
+    applyRewriteLineMutation(recordIndex, currentLines, {
+        pushHistory: true,
+        previousLines: getRewriteEditableLines(record, recordIndex),
+    });
+    updateRewriteAlternationStatus(currentLines);
+}
+
+function renderRewriteRecordState(recordIndex) {
+    const record = rewriteRecords[recordIndex];
+    if (!record) return;
+    const lines = getRewriteEditableLines(record, recordIndex);
+    renderRewriteRecordList();
+    renderRewriteRecordInfo(record);
+    renderRewriteOriginalData(record);
+    renderRewriteDialogue(record);
+    updateRewriteAlternationStatus(lines);
+    updateRewriteHistoryButtons();
+}
+
+function maybeAutoScrollRewriteRegion(clientY) {
+    if (!rewriteScrollRegion || !rewriteDragState) return;
+    const rect = rewriteScrollRegion.getBoundingClientRect();
+    if (clientY < rect.top || clientY > rect.bottom) return;
+    const distanceToTop = clientY - rect.top;
+    const distanceToBottom = rect.bottom - clientY;
+    if (distanceToTop < REWRITE_DRAG_SCROLL_EDGE_PX) {
+        const ratio = (REWRITE_DRAG_SCROLL_EDGE_PX - distanceToTop) / REWRITE_DRAG_SCROLL_EDGE_PX;
+        rewriteScrollRegion.scrollTop -= Math.ceil(REWRITE_DRAG_SCROLL_STEP_PX * Math.max(ratio, 0.35));
+    } else if (distanceToBottom < REWRITE_DRAG_SCROLL_EDGE_PX) {
+        const ratio = (REWRITE_DRAG_SCROLL_EDGE_PX - distanceToBottom) / REWRITE_DRAG_SCROLL_EDGE_PX;
+        rewriteScrollRegion.scrollTop += Math.ceil(REWRITE_DRAG_SCROLL_STEP_PX * Math.max(ratio, 0.35));
+    }
+}
+
+function moveRewriteLine(recordIndex, sourceLineId, targetLineId, position = 'after') {
+    if (!sourceLineId || !targetLineId || sourceLineId === targetLineId) return;
+    const record = rewriteRecords[recordIndex];
+    if (!record) return;
+    const currentLines = [...getRewriteEditableLines(record, recordIndex)];
+    const sourceIndex = currentLines.findIndex((line) => line.id === sourceLineId);
+    const targetIndex = currentLines.findIndex((line) => line.id === targetLineId);
+    if (sourceIndex < 0 || targetIndex < 0) return;
+
+    const [movedLine] = currentLines.splice(sourceIndex, 1);
+    let insertionIndex = targetIndex;
+    if (sourceIndex < targetIndex) {
+        insertionIndex -= 1;
+    }
+    if (position === 'after') {
+        insertionIndex += 1;
+    }
+    insertionIndex = Math.max(0, Math.min(insertionIndex, currentLines.length));
+    currentLines.splice(insertionIndex, 0, movedLine);
+    applyRewriteLineMutation(recordIndex, currentLines, {
+        pushHistory: true,
+        previousLines: getRewriteEditableLines(record, recordIndex),
+    });
+    renderRewriteRecordState(recordIndex);
+}
+
+function moveRewriteLineToEnd(recordIndex, sourceLineId) {
+    if (!sourceLineId) return;
+    const record = rewriteRecords[recordIndex];
+    if (!record) return;
+    const currentLines = [...getRewriteEditableLines(record, recordIndex)];
+    const sourceIndex = currentLines.findIndex((line) => line.id === sourceLineId);
+    if (sourceIndex < 0 || sourceIndex === currentLines.length - 1) return;
+    const [movedLine] = currentLines.splice(sourceIndex, 1);
+    currentLines.push(movedLine);
+    applyRewriteLineMutation(recordIndex, currentLines, {
+        pushHistory: true,
+        previousLines: getRewriteEditableLines(record, recordIndex),
+    });
+    renderRewriteRecordState(recordIndex);
+}
+
+function buildRewriteRecordTitle(record, index) {
+    if (record && typeof record === 'object') {
+        const preferred = [
+            record.scenario_id,
+            record.id,
+            record.sample_id,
+            record.session_id,
+            record.uuid,
+            record.record_id,
+        ].find((value) => String(value || '').trim());
+        if (preferred) return String(preferred).trim();
+    }
+    return `记录 ${index + 1}`;
+}
+
+function buildRewriteSourceTitle() {
+    const fileName = String(rewriteSourceName || '').trim();
+    if (!fileName) return '请先上传对话文件';
+    return fileName.replace(/\.[^.]+$/, '') || fileName;
+}
+
+function buildRewriteRecordMeta(record) {
+    const recordIndex = rewriteRecords.indexOf(record);
+    const turns = recordIndex >= 0
+        ? getRewriteEditableLines(record, recordIndex)
+        : extractRewriteTurns(record);
+    const status = record && typeof record === 'object' ? String(record.status || '').trim() : '';
+    return {
+        turns: turns.length,
+        status: status || '未标注',
+    };
+}
+
+function buildRewriteRecordSearchText(record, index) {
+    const searchParts = [
+        buildRewriteRecordTitle(record, index),
+        String(index + 1),
+    ];
+    if (record && typeof record === 'object') {
+        [
+            record.scenario_id,
+            record.id,
+            record.sample_id,
+            record.session_id,
+            record.uuid,
+            record.record_id,
+            record.rounds_used,
+        ].forEach((value) => {
+            const normalized = String(value ?? '').trim();
+            if (normalized) {
+                searchParts.push(normalized);
+            }
+        });
+    }
+    return searchParts.join(' ').toLowerCase();
+}
+
+function getFilteredRewriteRecordIndexes() {
+    const query = String(rewriteRecordSearchQuery || '').trim().toLowerCase();
+    if (!query) {
+        return rewriteRecords.map((_, index) => index);
+    }
+    return rewriteRecords
+        .map((record, index) => ({ record, index }))
+        .filter(({ record, index }) => buildRewriteRecordSearchText(record, index).includes(query))
+        .map(({ index }) => index);
+}
+
+function renderRewriteRecordList() {
+    clearElement(rewriteRecordList);
+    if (!rewriteRecords.length) {
+        rewriteRecordList.innerHTML = '<div class="terminal-hint">导入文件后显示记录列表</div>';
+        if (rewriteRecordSearchStatus) {
+            rewriteRecordSearchStatus.textContent = '输入后实时筛选，回车跳到首条匹配记录。';
+        }
+        return;
+    }
+
+    const matchedIndexes = getFilteredRewriteRecordIndexes();
+    if (rewriteRecordSearchStatus) {
+        const query = String(rewriteRecordSearchQuery || '').trim();
+        rewriteRecordSearchStatus.textContent = query
+            ? `当前匹配 ${matchedIndexes.length} 条记录，回车跳到首条匹配。`
+            : `当前共 ${rewriteRecords.length} 条记录，输入后实时筛选。`;
+    }
+    if (!matchedIndexes.length) {
+        rewriteRecordList.innerHTML = '<div class="terminal-hint">没有匹配到对应记录。</div>';
+        return;
+    }
+
+    matchedIndexes.forEach((index) => {
+        const record = rewriteRecords[index];
+        const meta = buildRewriteRecordMeta(record);
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'scenario-item';
+        if (index === rewriteSelectedIndex) {
+            button.classList.add('active');
+        }
+        button.innerHTML = `
+            <span class="scenario-title">${escapeHtml(buildRewriteRecordTitle(record, index))}</span>
+            <span class="scenario-meta">第 ${index + 1} 条</span>
+            <span class="scenario-meta">轮次/行数：${meta.turns}</span>
+            <span class="scenario-issue">状态：${escapeHtml(meta.status)}</span>
+        `;
+        button.addEventListener('click', () => {
+            selectRewriteRecord(index);
+        });
+        rewriteRecordList.appendChild(button);
+    });
+}
+
+function renderRewriteFileInfo() {
+    clearElement(rewriteFileInfo);
+    if (!rewriteRecords.length) {
+        rewriteFileInfo.innerHTML = '<p class="terminal-hint">导入文件后显示</p>';
+        return;
+    }
+    appendDataItem(rewriteFileInfo, '文件名', rewriteSourceName || '-');
+    appendDataItem(rewriteFileInfo, '格式', rewriteSourceFormat || '-');
+    appendDataItem(rewriteFileInfo, '记录数', String(rewriteRecords.length));
+}
+
+function renderRewriteRecordInfo(record) {
+    clearElement(rewriteRecordInfo);
+    if (!record) {
+        rewriteRecordInfo.innerHTML = '<p class="terminal-hint">选择记录后显示</p>';
+        return;
+    }
+
+    appendDataItem(rewriteRecordInfo, '标题', buildRewriteRecordTitle(record, rewriteSelectedIndex));
+    const meta = buildRewriteRecordMeta(record);
+    appendDataItem(rewriteRecordInfo, '轮次/行数', String(meta.turns));
+    appendDataItem(rewriteRecordInfo, '状态', meta.status);
+
+    if (record && typeof record === 'object') {
+        [
+            ['scenario_id', record.scenario_id],
+            ['id', record.id],
+            ['sample_id', record.sample_id],
+            ['session_id', record.session_id],
+            ['rounds_used', record.rounds_used],
+        ].forEach(([key, value]) => {
+            const normalized = String(value ?? '').trim();
+            if (normalized) {
+                appendDataItem(rewriteRecordInfo, key, normalized);
+            }
+        });
+    }
+}
+
+function renderRewriteOriginalData(record) {
+    if (!rewriteOriginalOutput) return;
+    clearElement(rewriteOriginalOutput);
+    if (!record) {
+        rewriteOriginalOutput.innerHTML = '<p class="terminal-hint">选择记录后显示原始对话内容</p>';
+        return;
+    }
+
+    const lines = extractRewriteOriginalLines(record);
+    if (!lines.length) {
+        rewriteOriginalOutput.innerHTML = '<p class="terminal-hint">当前记录里没有找到可渲染的原始对话内容。</p>';
+        return;
+    }
+
+    lines.forEach((entry, index) => {
+        const row = document.createElement('article');
+        row.className = `rewrite-original-line ${entry.tone || 'system'}`;
+        const displayText = stripRewriteLinePrefix(entry.text || '');
+
+        const lineIndex = document.createElement('span');
+        lineIndex.className = 'rewrite-original-index';
+        lineIndex.textContent = `${index + 1}.`;
+
+        const role = document.createElement('span');
+        role.className = 'rewrite-original-role';
+        role.textContent = `${entry.role || defaultRewriteRoleForTone(entry.tone)}:`;
+
+        const text = document.createElement('span');
+        text.className = 'rewrite-original-text';
+        text.textContent = displayText;
+
+        row.setAttribute('aria-label', `第 ${index + 1} 行`);
+        row.appendChild(lineIndex);
+        row.appendChild(role);
+        row.appendChild(text);
+        rewriteOriginalOutput.appendChild(row);
+    });
+}
+
+function renderRewriteDialogue(record) {
+    clearElement(rewriteDialogueOutput);
+    const recordIndex = rewriteSelectedIndex;
+    const lines = getRewriteEditableLines(record, recordIndex);
+    const alternationSummary = evaluateRewriteRoleAlternation(lines);
+    const conflictIndexSet = new Set(alternationSummary.conflictIndexes || []);
+    if (!lines.length) {
+        rewriteDialogueOutput.classList.remove('rewrite-dialogue-canvas');
+        rewriteDialogueOutput.ondragover = null;
+        rewriteDialogueOutput.ondrop = null;
+        if (rewriteScrollRegion) rewriteScrollRegion.ondragover = null;
+        rewriteDialogueOutput.innerHTML = '<p class="terminal-hint">当前记录里没有找到可渲染的对话数组。</p>';
+        return;
+    }
+
+    rewriteDialogueOutput.classList.add('rewrite-dialogue-canvas');
+    lines.forEach((entry, index) => {
+        const card = document.createElement('article');
+        card.className = `rewrite-line-card ${entry.tone || 'system'}`;
+        if (conflictIndexSet.has(index)) {
+            card.classList.add('is-role-conflict');
+        }
+        card.dataset.lineId = entry.id;
+        card.dataset.lineIndex = String(index);
+
+        const toolbar = document.createElement('div');
+        toolbar.className = 'rewrite-line-toolbar';
+
+        const meta = document.createElement('div');
+        meta.className = 'rewrite-line-meta';
+        meta.textContent = `第 ${index + 1} 行`;
+
+        const actions = document.createElement('div');
+        actions.className = 'rewrite-line-actions';
+
+        const addBeforeButton = document.createElement('button');
+        addBeforeButton.type = 'button';
+        addBeforeButton.className = 'rewrite-line-action-btn';
+        addBeforeButton.textContent = '↑插';
+        addBeforeButton.addEventListener('click', () => {
+            insertRewriteEmptyLine(recordIndex, index, 'before');
+        });
+
+        const addAfterButton = document.createElement('button');
+        addAfterButton.type = 'button';
+        addAfterButton.className = 'rewrite-line-action-btn';
+        addAfterButton.textContent = '↓插';
+        addAfterButton.addEventListener('click', () => {
+            insertRewriteEmptyLine(recordIndex, index, 'after');
+        });
+
+        const deleteButton = document.createElement('button');
+        deleteButton.type = 'button';
+        deleteButton.className = 'rewrite-line-action-btn';
+        deleteButton.textContent = '删除';
+        deleteButton.addEventListener('click', () => {
+            deleteRewriteLine(recordIndex, entry.id);
+        });
+
+        const dragHandle = document.createElement('div');
+        dragHandle.className = 'rewrite-line-drag-handle';
+        dragHandle.textContent = '拖拽';
+        dragHandle.draggable = true;
+        dragHandle.addEventListener('dragstart', (event) => {
+            rewriteDragState = { lineId: entry.id, sourceIndex: index };
+            card.classList.add('is-dragging');
+            if (event.dataTransfer) {
+                event.dataTransfer.effectAllowed = 'move';
+                event.dataTransfer.setData('text/plain', entry.id);
+            }
+        });
+        dragHandle.addEventListener('dragend', () => {
+            rewriteDragState = null;
+            rewriteDialogueOutput
+                .querySelectorAll('.rewrite-line-card')
+                .forEach((node) => node.classList.remove('is-dragging', 'is-drop-target-before', 'is-drop-target-after'));
+        });
+
+        actions.appendChild(addBeforeButton);
+        actions.appendChild(addAfterButton);
+        actions.appendChild(deleteButton);
+        actions.appendChild(dragHandle);
+        toolbar.appendChild(meta);
+        toolbar.appendChild(actions);
+
+        const body = document.createElement('div');
+        body.className = 'rewrite-line-body';
+
+        const roleEditor = document.createElement('select');
+        roleEditor.className = 'rewrite-role-editor';
+        const placeholderOption = document.createElement('option');
+        placeholderOption.value = '';
+        placeholderOption.textContent = '请选择';
+        placeholderOption.selected = !String(entry.role ?? '').trim();
+        roleEditor.appendChild(placeholderOption);
+        rewriteAvailableRoles.forEach((roleOption) => {
+            const option = document.createElement('option');
+            option.value = roleOption;
+            option.textContent = roleOption;
+            option.selected = roleOption === (entry.role ?? defaultRewriteRoleForTone(entry.tone));
+            roleEditor.appendChild(option);
+        });
+        updateRewriteLineBodyLayout(body, roleEditor);
+        roleEditor.addEventListener('change', (event) => {
+            updateRewriteLineBodyLayout(body, event.target);
+            updateRewriteLineRole(recordIndex, entry.id, event.target.value);
+            renderRewriteRecordState(recordIndex);
+        });
+
+        const editor = document.createElement('textarea');
+        editor.className = 'rewrite-line-editor';
+        editor.rows = 1;
+        editor.value = stripRewriteLinePrefix(entry.text || '');
+        editor.placeholder = '空框，可填写改写后的对话内容';
+        editor.addEventListener('focus', () => {
+            beginRewriteEditSession(recordIndex, entry.id, 'text');
+        });
+        editor.addEventListener('input', (event) => {
+            updateRewriteLineText(recordIndex, entry.id, event.target.value);
+        });
+        editor.addEventListener('blur', () => {
+            endRewriteEditSession({ force: false });
+            updateRewriteHistoryButtons();
+        });
+
+        card.addEventListener('dragover', (event) => {
+            if (!rewriteDragState || rewriteDragState.lineId === entry.id) return;
+            event.preventDefault();
+            maybeAutoScrollRewriteRegion(event.clientY);
+            const rect = card.getBoundingClientRect();
+            const position = event.clientY < (rect.top + rect.height / 2) ? 'before' : 'after';
+            card.classList.toggle('is-drop-target-before', position === 'before');
+            card.classList.toggle('is-drop-target-after', position === 'after');
+        });
+        card.addEventListener('dragleave', () => {
+            card.classList.remove('is-drop-target-before', 'is-drop-target-after');
+        });
+        card.addEventListener('drop', (event) => {
+            if (!rewriteDragState || rewriteDragState.lineId === entry.id) return;
+            event.preventDefault();
+            const rect = card.getBoundingClientRect();
+            const position = event.clientY < (rect.top + rect.height / 2) ? 'before' : 'after';
+            moveRewriteLine(recordIndex, rewriteDragState.lineId, entry.id, position);
+            rewriteDragState = null;
+        });
+
+        body.appendChild(roleEditor);
+        body.appendChild(editor);
+        card.appendChild(toolbar);
+        card.appendChild(body);
+        rewriteDialogueOutput.appendChild(card);
+    });
+
+    rewriteDialogueOutput.ondragover = (event) => {
+        if (!rewriteDragState) return;
+        event.preventDefault();
+        maybeAutoScrollRewriteRegion(event.clientY);
+    };
+    rewriteDialogueOutput.ondrop = (event) => {
+        const targetCard = event.target.closest('.rewrite-line-card');
+        if (!rewriteDragState || targetCard) return;
+        event.preventDefault();
+        moveRewriteLineToEnd(recordIndex, rewriteDragState.lineId);
+        rewriteDragState = null;
+    };
+    if (rewriteScrollRegion) {
+        rewriteScrollRegion.ondragover = (event) => {
+            if (!rewriteDragState) return;
+            event.preventDefault();
+            maybeAutoScrollRewriteRegion(event.clientY);
+        };
+    }
+}
+
+function selectRewriteRecord(index) {
+    if (index < 0 || index >= rewriteRecords.length) return;
+    endRewriteEditSession({ force: false });
+    rewriteSelectedIndex = index;
+    const record = rewriteRecords[index];
+    rewriteTitle.textContent = buildRewriteSourceTitle();
+    rewriteRecordIndicator.textContent = `记录: ${index + 1} / ${rewriteRecords.length}`;
+    rewriteCurrentRecordLabel.textContent = `${index + 1} / ${rewriteRecords.length} · ${buildRewriteRecordTitle(record, index)}`;
+    rewritePrevButton.disabled = index <= 0;
+    rewriteNextButton.disabled = index >= rewriteRecords.length - 1;
+    renderRewriteRecordState(index);
+    applyRewriteWorkbenchRatio();
+}
+
+function selectFirstFilteredRewriteRecord() {
+    const matchedIndexes = getFilteredRewriteRecordIndexes();
+    if (!matchedIndexes.length) return;
+    selectRewriteRecord(matchedIndexes[0]);
+}
+
+async function importRewriteFile(file) {
+    if (!file) return;
+    rewriteRecordEditCache.clear();
+    rewriteRecordHistoryCache.clear();
+    rewriteActiveEditSession = null;
+    const text = await file.text();
+    const { records, format } = parseRewriteRecords(text, file.name);
+    rewriteRecords = records;
+    rewriteAvailableRoles = collectRewriteAvailableRoles(records);
+    rewriteSelectedIndex = -1;
+    rewriteSourceName = file.name;
+    rewriteSourceFormat = format;
+    renderRewriteFileInfo();
+    renderRewriteRecordList();
+    setRewriteUploadStatus(`已导入 ${file.name}，共 ${records.length} 条记录。`);
+    selectRewriteRecord(0);
 }
 
 function shouldOfferIssueReference(entry) {
@@ -1234,6 +2736,7 @@ function updateInputAvailability(enabled) {
     sendButton.disabled = !canInteract;
     endButton.disabled = !currentSessionId || sessionClosed || !authenticatedUser || sessionBusy || sessionReviewLocked;
     if (canInteract) userInput.focus();
+    updateModeSwitchButtons();
 }
 
 function isReviewModalVisible() {
@@ -1243,11 +2746,13 @@ function isReviewModalVisible() {
 function hideReviewModal() {
     reviewModal.classList.add('hidden');
     reviewModal.setAttribute('aria-hidden', 'true');
+    updateModeSwitchButtons();
 }
 
 function showReviewModal() {
     reviewModal.classList.remove('hidden');
     reviewModal.setAttribute('aria-hidden', 'false');
+    updateModeSwitchButtons();
 }
 
 function updateReviewToggleButton() {
@@ -2439,6 +3944,7 @@ function resetWorkspace() {
     document.getElementById('scenario-list').innerHTML = '<div class="terminal-hint">登录后显示场景列表</div>';
     document.getElementById('terminal-output').innerHTML = '';
     document.querySelectorAll('.scenario-item').forEach((item) => item.classList.remove('active'));
+    resetRewriteWorkspace();
 }
 
 function applyAuthenticatedState(user) {
@@ -2446,12 +3952,12 @@ function applyAuthenticatedState(user) {
     authUserName.textContent = user.display_name || user.username;
     authUserMeta.textContent = `备案账号：${user.username}`;
     authGate.classList.add('hidden');
-    appShell.classList.remove('hidden');
     setAuthError('');
     updateCallStartTimeValidationState();
     updateStartSessionButtonState();
     initializeChatWindow();
     startChatPolling();
+    syncAppModeView();
 }
 
 function applyLoggedOutState(message = '') {
@@ -2459,6 +3965,7 @@ function applyLoggedOutState(message = '') {
     authUserName.textContent = '未登录';
     authUserMeta.textContent = '只有备案账号可访问测试台。';
     appShell.classList.add('hidden');
+    rewriteShell.classList.add('hidden');
     authGate.classList.remove('hidden');
     stopChatPolling();
     resetChatRuntime();
@@ -2468,7 +3975,9 @@ function applyLoggedOutState(message = '') {
     setPasswordVisibility(false);
     loginPassword.value = '';
     setAuthError(message);
+    activeAppMode = 'manual';
     resetWorkspace();
+    updateModeSwitchButtons();
 }
 
 function setPasswordVisibility(visible) {
@@ -2855,6 +4364,47 @@ loginPasswordToggle.addEventListener('click', togglePasswordVisibility);
 document.getElementById('logout-btn').onclick = logout;
 startSessionButton.onclick = startSession;
 document.getElementById('end-session-btn').onclick = forceEndSession;
+modeSwitchButton.addEventListener('click', () => {
+    if (modeSwitchButton.disabled) return;
+    setAppMode('rewrite');
+});
+rewriteBackButton.addEventListener('click', () => {
+    if (rewriteBackButton.disabled) return;
+    setAppMode('manual');
+});
+rewriteUndoButton.addEventListener('click', () => {
+    undoRewriteChange();
+});
+rewriteRedoButton.addEventListener('click', () => {
+    redoRewriteChange();
+});
+rewriteFileInput.addEventListener('change', async (event) => {
+    const [file] = Array.from(event.target.files || []);
+    if (!file) return;
+    try {
+        await importRewriteFile(file);
+    } catch (error) {
+        resetRewriteWorkspace();
+        setRewriteUploadStatus(error.message, { isError: true });
+    }
+});
+if (rewriteRecordSearchInput) {
+    rewriteRecordSearchInput.addEventListener('input', (event) => {
+        rewriteRecordSearchQuery = String(event.target.value || '');
+        renderRewriteRecordList();
+    });
+    rewriteRecordSearchInput.addEventListener('keydown', (event) => {
+        if (event.key !== 'Enter') return;
+        event.preventDefault();
+        selectFirstFilteredRewriteRecord();
+    });
+}
+rewritePrevButton.addEventListener('click', () => {
+    selectRewriteRecord(rewriteSelectedIndex - 1);
+});
+rewriteNextButton.addEventListener('click', () => {
+    selectRewriteRecord(rewriteSelectedIndex + 1);
+});
 document.getElementById('send-btn').onclick = sendMessage;
 chatLauncher.addEventListener('click', () => {
     if (Date.now() < chatLauncherSuppressClickUntil) return;
@@ -3098,6 +4648,25 @@ document.addEventListener('click', (event) => {
     if (event.target.closest('#chat-message-menu')) return;
     closeChatMessageMenu();
 });
+document.addEventListener('keydown', (event) => {
+    if (activeAppMode !== 'rewrite') return;
+    const isUndo = (event.metaKey || event.ctrlKey) && !event.shiftKey && event.key.toLowerCase() === 'z';
+    const isRedo = (event.metaKey || event.ctrlKey) && (
+        event.key.toLowerCase() === 'y' || (event.shiftKey && event.key.toLowerCase() === 'z')
+    );
+    if (!isUndo && !isRedo) return;
+    const activeElement = document.activeElement;
+    const isRewriteEditor = activeElement && activeElement.closest && activeElement.closest('#rewrite-dialogue-output');
+    if (!isRewriteEditor && !rewriteShell.classList.contains('hidden')) {
+        event.preventDefault();
+        if (isUndo) undoRewriteChange();
+        if (isRedo) redoRewriteChange();
+        return;
+    }
+    event.preventDefault();
+    if (isUndo) undoRewriteChange();
+    if (isRedo) redoRewriteChange();
+});
 window.addEventListener('resize', () => {
     hideIssueReferencePopover();
     resizeCursorTrailCanvas();
@@ -3121,25 +4690,35 @@ window.addEventListener('resize', () => {
     if (!terminalTurnMenu.classList.contains('hidden')) {
         closeTerminalTurnMenu();
     }
+    applyRewriteShellLayout();
+    applyRewriteWorkbenchRatio();
 });
 window.addEventListener('pointermove', updateCursorGlow, { passive: true });
 window.addEventListener('pointermove', handleChatLauncherDrag);
 window.addEventListener('pointermove', handleChatDrag);
+window.addEventListener('pointermove', trackRewriteShellResize);
+window.addEventListener('pointermove', trackRewriteWorkbenchResize);
 window.addEventListener('pointermove', trackChatMessageHold);
 window.addEventListener('pointermove', trackTextMagnifierPointer);
 window.addEventListener('pointerup', endChatLauncherDrag);
 window.addEventListener('pointerup', endChatDrag);
+window.addEventListener('pointerup', endRewriteShellResize);
+window.addEventListener('pointerup', endRewriteWorkbenchResize);
 window.addEventListener('pointerup', endChatMessageHold);
 window.addEventListener('pointerup', endTextMagnifierPress);
 window.addEventListener('pointercancel', endTextMagnifierPress);
 window.addEventListener('pointercancel', endChatLauncherDrag);
 window.addEventListener('pointercancel', endChatDrag);
+window.addEventListener('pointercancel', endRewriteShellResize);
+window.addEventListener('pointercancel', endRewriteWorkbenchResize);
 window.addEventListener('pointercancel', endChatMessageHold);
 window.addEventListener('pointerleave', (event) => {
     if (event.target === document.body || event.target === document.documentElement) {
         endChatLauncherDrag(event);
         endChatMessageHold(event);
         endChatDrag(event);
+        endRewriteShellResize(event);
+        endRewriteWorkbenchResize(event);
         endTextMagnifierPress(event);
     }
 });
@@ -3147,10 +4726,79 @@ window.addEventListener('blur', () => {
     endChatLauncherDrag();
     endChatMessageHold();
     endChatDrag();
+    endRewriteShellResize();
+    endRewriteWorkbenchResize();
     closeChatMessageMenu();
     closeTerminalTurnMenu();
     hideTextMagnifier();
 });
+if (rewriteSplitter) {
+    rewriteSplitter.addEventListener('pointerdown', beginRewriteWorkbenchResize);
+    rewriteSplitter.addEventListener('keydown', (event) => {
+        if (window.innerWidth <= REWRITE_STACK_BREAKPOINT_PX) return;
+        if (event.key === 'ArrowLeft') {
+            event.preventDefault();
+            rewriteWorkbenchRatio = Math.max(rewriteWorkbenchRatio - 0.03, REWRITE_MIN_PANE_RATIO);
+            applyRewriteWorkbenchRatio();
+        }
+        if (event.key === 'ArrowRight') {
+            event.preventDefault();
+            rewriteWorkbenchRatio = Math.min(rewriteWorkbenchRatio + 0.03, REWRITE_MAX_PANE_RATIO);
+            applyRewriteWorkbenchRatio();
+        }
+        if (event.key === 'Home') {
+            event.preventDefault();
+            rewriteWorkbenchRatio = REWRITE_MIN_PANE_RATIO;
+            applyRewriteWorkbenchRatio();
+        }
+        if (event.key === 'End') {
+            event.preventDefault();
+            rewriteWorkbenchRatio = REWRITE_MAX_PANE_RATIO;
+            applyRewriteWorkbenchRatio();
+        }
+    });
+}
+if (rewriteShellLeftSplitter) {
+    rewriteShellLeftSplitter.addEventListener('pointerdown', (event) => {
+        beginRewriteShellResize('left', event);
+    });
+    rewriteShellLeftSplitter.addEventListener('keydown', (event) => {
+        if (window.innerWidth <= REWRITE_STACK_BREAKPOINT_PX) return;
+        if (event.key === 'ArrowLeft') {
+            event.preventDefault();
+            rewriteShellLeftWidth = Math.max(rewriteShellLeftWidth - 20, REWRITE_SHELL_LEFT_MIN_PX);
+            applyRewriteShellLayout();
+        }
+        if (event.key === 'ArrowRight') {
+            event.preventDefault();
+            rewriteShellLeftWidth = Math.min(rewriteShellLeftWidth + 20, REWRITE_SHELL_LEFT_MAX_PX);
+            applyRewriteShellLayout();
+        }
+    });
+}
+if (rewriteShellRightSplitter) {
+    rewriteShellRightSplitter.addEventListener('pointerdown', (event) => {
+        beginRewriteShellResize('right', event);
+    });
+    rewriteShellRightSplitter.addEventListener('keydown', (event) => {
+        if (window.innerWidth <= REWRITE_STACK_BREAKPOINT_PX) return;
+        if (event.key === 'ArrowLeft') {
+            event.preventDefault();
+            rewriteShellRightWidth = Math.min(rewriteShellRightWidth + 20, REWRITE_SHELL_RIGHT_MAX_PX);
+            applyRewriteShellLayout();
+        }
+        if (event.key === 'ArrowRight') {
+            event.preventDefault();
+            rewriteShellRightWidth = Math.max(rewriteShellRightWidth - 20, REWRITE_SHELL_RIGHT_MIN_PX);
+            applyRewriteShellLayout();
+        }
+    });
+}
+if (rewriteResetButton) {
+    rewriteResetButton.addEventListener('click', () => {
+        resetRewriteRecordToInitial(rewriteSelectedIndex);
+    });
+}
 document.addEventListener('pointerleave', hideCursorGlow, true);
 document.addEventListener('pointerout', (event) => {
     if (!event.relatedTarget) {
@@ -3217,5 +4865,10 @@ updateStartSessionButtonState();
 resizeCursorTrailCanvas();
 chatWindowState = loadChatWindowState();
 resetChatRuntime();
+resetRewriteWorkspace();
+applyRewriteShellLayout();
+applyRewriteWorkbenchRatio();
 setChatWindowVisibility(chatWindowState.visible !== false, { persist: false });
+updateModeSwitchButtons();
+syncAppModeView();
 checkAuth();

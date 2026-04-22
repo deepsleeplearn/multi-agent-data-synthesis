@@ -1,7 +1,7 @@
 {
-  "pid": 62834,
-  "parent_pid": 62782,
-  "started_at": "2026-04-22T01:57:43.374Z",
+  "pid": 10525,
+  "parent_pid": 10485,
+  "started_at": "2026-04-22T04:36:59.960Z",
   "cwd": "/Users/gj/Documents/vsfile/Css-Data-Synthesis-Test",
   "notify_script": "/opt/homebrew/lib/node_modules/oh-my-codex/dist/scripts/notify-hook.js",
   "authority_only": false,
@@ -10,14 +10,14 @@
   "idle_max_poll_ms": 1000,
   "pid_file": "/Users/gj/Documents/vsfile/Css-Data-Synthesis-Test/.omx/state/notify-fallback.pid",
   "max_lifetime_ms": 21600000,
-  "tracked_files": 0,
+  "tracked_files": 1,
   "seen_turns": 0,
   "dispatch_drain": {
     "enabled": true,
     "max_per_tick": 5,
-    "run_count": 3978,
+    "run_count": 18130,
     "leader_only": true,
-    "last_tick_at": "2026-04-22T02:15:00.037Z",
+    "last_tick_at": "2026-04-22T05:55:41.677Z",
     "last_result": {
       "processed": 0,
       "skipped": 0,
@@ -30,16 +30,16 @@
     "leader_only": true,
     "stale_threshold_ms": 180000,
     "precomputed_leader_stale": true,
-    "last_tick_at": "2026-04-22T02:15:00.037Z",
+    "last_tick_at": "2026-04-22T05:55:41.677Z",
     "last_error": null,
-    "run_count": 3978
+    "run_count": 18130
   },
   "ralph_continue_steer": {
     "enabled": true,
     "cadence_ms": 60000,
     "message": "Ralph loop active continue",
     "active": false,
-    "last_state_check_at": "2026-04-22T02:15:00.037Z",
+    "last_state_check_at": "2026-04-22T05:55:41.680Z",
     "last_sent_at": "",
     "cooldown_anchor_at": "",
     "last_reason": "blocked_by_current_session",
@@ -57,8 +57,8 @@
   "fallback_auto_nudge": {
     "enabled": true,
     "stall_ms": 5000,
-    "last_tick_at": "2026-04-22T02:15:00.037Z",
-    "last_turn_at": "2026-04-22T01:57:43.307Z",
+    "last_tick_at": "2026-04-22T05:55:41.679Z",
+    "last_turn_at": "2026-04-22T04:36:59.881Z",
     "last_turn_count": 0,
     "last_message": "",
     "last_reason": "hud_state_incomplete",
@@ -80,11 +80,9 @@
     "max_ms": 1000,
     "current_ms": 250,
     "idle_streak": 0,
-    "last_tick_at": "2026-04-22T02:15:00.037Z",
-    "last_activity_at": "2026-04-22T02:15:00.037Z",
+    "last_tick_at": "2026-04-22T05:55:41.680Z",
+    "last_activity_at": "2026-04-22T05:55:41.680Z",
     "last_activity_reason": "leader_nudge"
   },
-  "stop_reason": "signal",
-  "stop_signal": "SIGTERM",
-  "stopping": true
+  "last_cycle_activity": "leader_nudge"
 }

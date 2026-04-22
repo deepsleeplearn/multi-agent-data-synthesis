@@ -42,7 +42,7 @@
     </section>
 
     <div id="app-shell" class="app-shell hidden">
-        <aside class="left-panel">
+        <aside id="rewrite-left-panel" class="left-panel">
             <section class="panel-section left-panel-hero">
                 <div class="section-heading">
                     <p class="eyebrow">Manual Mode</p>
@@ -128,6 +128,7 @@
                     <span id="round-indicator" class="round-indicator">下一轮: -</span>
                     <button id="review-toggle-btn" class="secondary-btn hidden" type="button">打开评审</button>
                     <button id="end-session-btn" class="secondary-btn" disabled>强制结束会话</button>
+                    <button id="mode-switch-btn" class="secondary-btn" type="button">改写模式</button>
                 </div>
             </header>
 
@@ -230,6 +231,161 @@
                 </div>
                 <div id="address-slots-container" class="data-list">
                     <p class="terminal-hint">地址环节开始后显示</p>
+                </div>
+            </section>
+        </aside>
+    </div>
+
+    <div id="rewrite-shell" class="app-shell rewrite-shell hidden">
+        <aside id="rewrite-left-panel" class="left-panel">
+            <section class="panel-section left-panel-hero">
+                <div class="section-heading">
+                    <p class="eyebrow">Rewrite Mode</p>
+                    <h1>数据多样化改写模式</h1>
+                </div>
+                <p class="section-copy">上传JSON/JSONL包含对话数据的文件，按文件顺序浏览并在中间区域查看并编辑每条对话记录。</p>
+            </section>
+
+            <section class="panel-section">
+                <div class="section-heading compact">
+                    <h2>文件导入</h2>
+                </div>
+                <label for="rewrite-file-input" class="rewrite-upload-dropzone">
+                    <span class="rewrite-upload-title">选择JSON/JSONL文件</span>
+                    <span class="rewrite-upload-copy">支持单个JSON数组、单条JSON对象、多行JSONL。</span>
+                    <input id="rewrite-file-input" type="file" accept=".json,.jsonl,application/json,application/x-ndjson">
+                </label>
+                <p id="rewrite-upload-status" class="terminal-hint">尚未导入文件。</p>
+            </section>
+
+            <section class="panel-section">
+                <div class="section-heading compact">
+                    <h2>文件信息</h2>
+                </div>
+                <div id="rewrite-file-info" class="data-list">
+                    <p class="terminal-hint">导入文件后显示</p>
+                </div>
+            </section>
+
+            <section class="panel-section grow">
+                <div class="section-heading compact">
+                    <h2>当前记录</h2>
+                </div>
+                <div id="rewrite-record-info" class="data-list">
+                    <p class="terminal-hint">选择记录后显示</p>
+                </div>
+            </section>
+        </aside>
+
+        <div
+            id="rewrite-shell-left-splitter"
+            class="rewrite-shell-splitter"
+            role="separator"
+            aria-label="调整左侧信息栏宽度"
+            aria-orientation="vertical"
+            aria-valuemin="260"
+            aria-valuemax="520"
+            aria-valuenow="320"
+            tabindex="0"
+        >
+            <span class="rewrite-shell-splitter-handle"></span>
+        </div>
+
+        <main id="rewrite-main-panel" class="terminal-panel">
+            <header class="terminal-header">
+                <div>
+                    <p class="eyebrow">Rewrite Preview</p>
+                    <h2 id="rewrite-title">请先上传对话文件</h2>
+                </div>
+                <div class="status-group">
+                    <span id="rewrite-record-indicator" class="round-indicator">记录: -</span>
+                    <button id="rewrite-reset-btn" class="secondary-btn" type="button" disabled>恢复初始</button>
+                    <button id="rewrite-undo-btn" class="secondary-btn" type="button" disabled>回退</button>
+                    <button id="rewrite-redo-btn" class="secondary-btn" type="button" disabled>回进</button>
+                    <button id="rewrite-back-btn" class="secondary-btn" type="button">返回测试</button>
+                </div>
+            </header>
+
+            <section class="terminal-scroll-region">
+                <section class="terminal-guide">
+                    <div class="terminal-guide-copy">
+                        <p>中间区域左侧展示原始对话内容，右侧展示可编辑标注结果。</p>
+                        <p>左边上传文件，右边切记录；右侧编辑区支持拖拽、插行和回退回进。</p>
+                    </div>
+                    <div id="rewrite-alternation-status" class="rewrite-status-card" aria-live="polite">
+                        <span id="rewrite-alternation-badge" class="rewrite-status-badge">待检测</span>
+                        <p id="rewrite-alternation-text" class="rewrite-status-text">导入文件后根据右侧可编辑内容实时判断角色是否交替。</p>
+                        <div id="rewrite-alternation-list" class="rewrite-status-list"></div>
+                    </div>
+                </section>
+
+                <section id="rewrite-workbench" class="rewrite-workbench">
+                    <section class="rewrite-pane">
+                        <div class="rewrite-pane-header">原始对话内容</div>
+                        <section id="rewrite-original-output" class="rewrite-original-output">
+                            <p class="terminal-hint">导入文件后显示原始对话内容</p>
+                        </section>
+                    </section>
+
+                    <div
+                        id="rewrite-splitter"
+                        class="rewrite-splitter"
+                        role="separator"
+                        aria-label="调整原始内容和编辑内容宽度"
+                        aria-orientation="vertical"
+                        aria-valuemin="28"
+                        aria-valuemax="72"
+                        aria-valuenow="50"
+                        tabindex="0"
+                    >
+                        <span class="rewrite-splitter-handle"></span>
+                    </div>
+
+                    <section class="rewrite-pane">
+                        <div class="rewrite-pane-header">可编辑标注</div>
+                        <section id="rewrite-scroll-region" class="rewrite-editable-region">
+                            <section id="rewrite-dialogue-output" class="terminal-output">
+                                <p class="terminal-hint">导入文件后显示对话内容</p>
+                            </section>
+                        </section>
+                    </section>
+                </section>
+            </section>
+
+            <footer class="command-bar">
+                <div class="rewrite-nav-bar">
+                    <button id="rewrite-prev-btn" class="secondary-btn" type="button" disabled>上一条</button>
+                    <span id="rewrite-current-record-label" class="rewrite-current-record-label">未选择记录</span>
+                    <button id="rewrite-next-btn" class="secondary-btn" type="button" disabled>下一条</button>
+                </div>
+            </footer>
+        </main>
+
+        <div
+            id="rewrite-shell-right-splitter"
+            class="rewrite-shell-splitter"
+            role="separator"
+            aria-label="调整右侧记录栏宽度"
+            aria-orientation="vertical"
+            aria-valuemin="280"
+            aria-valuemax="560"
+            aria-valuenow="340"
+            tabindex="0"
+        >
+            <span class="rewrite-shell-splitter-handle"></span>
+        </div>
+
+        <aside id="rewrite-right-panel" class="right-panel">
+            <section class="panel-section grow">
+                <div class="section-heading compact">
+                    <h2>对话记录</h2>
+                </div>
+                <div class="rewrite-record-search">
+                    <input id="rewrite-record-search-input" type="text" placeholder="输入记录 id / scenario_id / session_id">
+                    <p id="rewrite-record-search-status" class="terminal-hint">输入后实时筛选，回车跳到首条匹配记录。</p>
+                </div>
+                <div id="rewrite-record-list" class="scenario-list">
+                    <div class="terminal-hint">导入文件后显示记录列表</div>
                 </div>
             </section>
         </aside>
