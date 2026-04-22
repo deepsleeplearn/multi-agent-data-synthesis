@@ -212,6 +212,10 @@ class AddressIeDisplayRequest(BaseModel):
     enabled: bool = True
 
 
+class RewriteAddressObservationRequest(BaseModel):
+    dialogue_lines: list[str] = []
+
+
 class LoginRequest(BaseModel):
     username: str
     password: str
@@ -2597,6 +2601,27 @@ def update_address_ie_display(
         "enabled": bool(req.enabled),
         **_build_session_view(req.session_id, session),
     }
+
+
+@app.post("/api/rewrite/address-observation")
+def build_rewrite_address_observation(
+    req: RewriteAddressObservationRequest,
+    current_user: dict[str, str] = Depends(_require_authenticated_user),
+):
+    dialogue_lines = [
+        str(line).strip()
+        for line in req.dialogue_lines
+        if str(line).strip()
+    ]
+    if not dialogue_lines:
+        raise HTTPException(status_code=400, detail="请先在 function_call 上方保留用户/客服对话内容。")
+
+    observation = build_address_model_observation(
+        dialogue_lines,
+        client=llm_client,
+        model=config.service_agent_model,
+    )
+    return {"observation": observation}
 
 
 @app.post("/api/session/review")

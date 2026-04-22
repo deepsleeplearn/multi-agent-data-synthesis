@@ -69,9 +69,12 @@ let sessionInputDraft = '';
 let terminalTurnMenuState = null;
 let activeAppMode = 'manual';
 let rewriteRecords = [];
+let rewriteImportedRecords = [];
 let rewriteSelectedIndex = -1;
 let rewriteSourceName = '';
 let rewriteSourceFormat = '';
+let rewriteIdKeyPreference = '';
+let rewriteDialogueKeyPreference = '';
 let rewriteEditableLineIdCounter = 0;
 let rewriteDragState = null;
 const rewriteRecordEditCache = new Map();
@@ -79,12 +82,15 @@ const rewriteRecordHistoryCache = new Map();
 let rewriteActiveEditSession = null;
 let rewriteAvailableRoles = [];
 let rewriteWorkbenchResizeState = null;
-let rewriteWorkbenchRatio = 0.5;
+let rewriteWorkbenchRatio = 0.4;
 let rewriteShellResizeState = null;
 let rewriteShellLeftWidth = 320;
 let rewriteShellRightWidth = 340;
 let rewriteConflictFocusTimer = null;
 let rewriteRecordSearchQuery = '';
+const rewriteObservationLoadingLineIds = new Set();
+let rewritePendingExportAction = null;
+let rewriteKeyPromptState = null;
 
 const authGate = document.getElementById('auth-gate');
 const appShell = document.getElementById('app-shell');
@@ -114,6 +120,8 @@ const callStartTimeError = document.getElementById('call-start-time-error');
 const useSessionStartTimeCheckbox = document.getElementById('use-session-start-time');
 const modeSwitchButton = document.getElementById('mode-switch-btn');
 const reviewModal = document.getElementById('review-modal');
+const rewriteExportModal = document.getElementById('rewrite-export-modal');
+const rewriteKeyModal = document.getElementById('rewrite-key-modal');
 const reviewCloseButton = document.getElementById('review-close-btn');
 const reviewToggleButton = document.getElementById('review-toggle-btn');
 const reviewSummary = document.getElementById('review-summary');
@@ -181,10 +189,12 @@ const chatReplyPreviewAuthor = document.getElementById('chat-reply-preview-autho
 const chatReplyPreviewText = document.getElementById('chat-reply-preview-text');
 const chatReplyCancelButton = document.getElementById('chat-reply-cancel-btn');
 const rewriteFileInput = document.getElementById('rewrite-file-input');
+const rewriteExportButton = document.getElementById('rewrite-export-btn');
 const rewriteUploadStatus = document.getElementById('rewrite-upload-status');
 const rewriteRecordList = document.getElementById('rewrite-record-list');
 const rewriteTitle = document.getElementById('rewrite-title');
 const rewriteRecordIndicator = document.getElementById('rewrite-record-indicator');
+const rewriteSubmitButton = document.getElementById('rewrite-submit-btn');
 const rewriteResetButton = document.getElementById('rewrite-reset-btn');
 const rewriteUndoButton = document.getElementById('rewrite-undo-btn');
 const rewriteRedoButton = document.getElementById('rewrite-redo-btn');
@@ -204,6 +214,20 @@ const rewriteAlternationStatus = document.getElementById('rewrite-alternation-st
 const rewriteAlternationBadge = document.getElementById('rewrite-alternation-badge');
 const rewriteAlternationText = document.getElementById('rewrite-alternation-text');
 const rewriteAlternationList = document.getElementById('rewrite-alternation-list');
+const rewriteExportSummary = document.getElementById('rewrite-export-summary');
+const rewriteExportStats = document.getElementById('rewrite-export-stats');
+const rewriteExportCloseButton = document.getElementById('rewrite-export-close-btn');
+const rewriteExportCancelButton = document.getElementById('rewrite-export-cancel-btn');
+const rewriteExportConfirmButton = document.getElementById('rewrite-export-confirm-btn');
+const rewriteKeyTitle = document.getElementById('rewrite-key-title');
+const rewriteKeySummary = document.getElementById('rewrite-key-summary');
+const rewriteKeyStats = document.getElementById('rewrite-key-stats');
+const rewriteKeyInputLabel = document.getElementById('rewrite-key-input-label');
+const rewriteKeyInput = document.getElementById('rewrite-key-input');
+const rewriteKeyError = document.getElementById('rewrite-key-error');
+const rewriteKeyCloseButton = document.getElementById('rewrite-key-close-btn');
+const rewriteKeyCancelButton = document.getElementById('rewrite-key-cancel-btn');
+const rewriteKeyConfirmButton = document.getElementById('rewrite-key-confirm-btn');
 const PERSONA_HIDDEN_CONTEXT_FIELDS = [
     ['gender', '性别'],
     ['emotion', '当前情绪'],
@@ -259,6 +283,17 @@ const REWRITE_RECORD_COLLECTION_KEYS = [
     'examples',
     'results',
 ];
+const REWRITE_RECORD_ID_KEYS = [
+    'scenario_id',
+    'id',
+    'sample_id',
+    'session_id',
+    'uuid',
+    'record_id',
+    'unique_id',
+    '接入单号',
+    '编号',
+];
 const REWRITE_DIALOGUE_KEYS = [
     'dialogue_process',
     'transcript',
@@ -283,6 +318,9 @@ const REWRITE_SHELL_LEFT_MAX_PX = 520;
 const REWRITE_SHELL_RIGHT_MIN_PX = 280;
 const REWRITE_SHELL_RIGHT_MAX_PX = 560;
 const REWRITE_SHELL_CENTER_MIN_PX = 420;
+const REWRITE_FUNCTION_CALL_ADDRESS_TARGET = 'addressInfo';
+const REWRITE_FUNCTION_CALL_ADDRESS_LABEL = '地址';
+const REWRITE_FUNCTION_CALL_ADDRESS_PAYLOAD = '[{"name": "ie", "arguments": {"entity_type": "addressInfo"}}]';
 
 function formatDisplayTimestamp(date) {
     const year = date.getFullYear();
@@ -792,11 +830,88 @@ function setRewriteUploadStatus(message, { isError = false } = {}) {
     rewriteUploadStatus.classList.toggle('error', Boolean(isError));
 }
 
+function closeRewriteKeyModal() {
+    if (!rewriteKeyModal) return;
+    rewriteKeyModal.classList.add('hidden');
+    rewriteKeyModal.setAttribute('aria-hidden', 'true');
+    if (rewriteKeyError) {
+        rewriteKeyError.textContent = '请输入有效键名。';
+        rewriteKeyError.classList.add('hidden');
+    }
+}
+
+function openRewriteKeyPrompt({
+    title = '补充导入键名',
+    summary = '',
+    label = '请输入键名',
+    placeholder = '',
+    candidateKeys = [],
+    validate = null,
+}) {
+    if (!rewriteKeyModal || !rewriteKeyInput) {
+        return Promise.reject(new Error('当前页面缺少导入键名补录弹框。'));
+    }
+    closeRewriteKeyModal();
+    rewriteKeyPromptState = null;
+    if (rewriteKeyTitle) rewriteKeyTitle.textContent = title;
+    if (rewriteKeySummary) rewriteKeySummary.textContent = summary;
+    if (rewriteKeyInputLabel) rewriteKeyInputLabel.textContent = label;
+    rewriteKeyInput.value = '';
+    rewriteKeyInput.placeholder = placeholder;
+    if (rewriteKeyStats) {
+        clearElement(rewriteKeyStats);
+        if (candidateKeys.length) {
+            appendDataItem(rewriteKeyStats, '可选键', candidateKeys.join('、'));
+        }
+    }
+    rewriteKeyModal.classList.remove('hidden');
+    rewriteKeyModal.setAttribute('aria-hidden', 'false');
+    window.requestAnimationFrame(() => rewriteKeyInput.focus());
+    return new Promise((resolve, reject) => {
+        rewriteKeyPromptState = {
+            resolve,
+            reject,
+            validate,
+        };
+    });
+}
+
+function confirmRewriteKeyPrompt() {
+    if (!rewriteKeyPromptState || !rewriteKeyInput) return;
+    const value = String(rewriteKeyInput.value || '').trim();
+    const validationError = typeof rewriteKeyPromptState.validate === 'function'
+        ? rewriteKeyPromptState.validate(value)
+        : (!value ? '请输入有效键名。' : '');
+    if (validationError) {
+        if (rewriteKeyError) {
+            rewriteKeyError.textContent = validationError;
+            rewriteKeyError.classList.remove('hidden');
+        }
+        rewriteKeyInput.focus();
+        return;
+    }
+    const { resolve } = rewriteKeyPromptState;
+    rewriteKeyPromptState = null;
+    closeRewriteKeyModal();
+    resolve(value);
+}
+
+function cancelRewriteKeyPrompt() {
+    if (!rewriteKeyPromptState) return;
+    const { reject } = rewriteKeyPromptState;
+    rewriteKeyPromptState = null;
+    closeRewriteKeyModal();
+    reject(new Error('已取消导入'));
+}
+
 function resetRewriteWorkspace() {
     rewriteRecords = [];
+    rewriteImportedRecords = [];
     rewriteSelectedIndex = -1;
     rewriteSourceName = '';
     rewriteSourceFormat = '';
+    rewriteIdKeyPreference = '';
+    rewriteDialogueKeyPreference = '';
     rewriteEditableLineIdCounter = 0;
     rewriteDragState = null;
     rewriteActiveEditSession = null;
@@ -937,6 +1052,40 @@ function normalizeRewriteRecordsPayload(payload) {
     return [payload];
 }
 
+function normalizeRewriteRecordsPayloadWithPreference(payload, dialogueKeyOverride = '') {
+    if (Array.isArray(payload)) {
+        if (payload.every((item) => isPotentialRewriteTurn(item))) {
+            return [payload];
+        }
+        return payload;
+    }
+    if (!payload || typeof payload !== 'object') return [payload];
+
+    const candidateDialogueKeys = dialogueKeyOverride
+        ? [dialogueKeyOverride, ...REWRITE_DIALOGUE_KEYS.filter((key) => key !== dialogueKeyOverride)]
+        : REWRITE_DIALOGUE_KEYS;
+    const looksLikeSingleRecord = candidateDialogueKeys.some((key) => (
+        Array.isArray(payload[key]) && payload[key].some((item) => isPotentialRewriteTurn(item))
+    )) || (typeof payload.dialogue_text === 'string' && payload.dialogue_text.trim());
+    if (looksLikeSingleRecord) {
+        return [payload];
+    }
+
+    for (const key of REWRITE_RECORD_COLLECTION_KEYS) {
+        if (Array.isArray(payload[key])) {
+            return payload[key];
+        }
+    }
+
+    const discoveredArray = Object.values(payload).find(
+        (value) => Array.isArray(value) && value.length > 0,
+    );
+    if (Array.isArray(discoveredArray)) {
+        return discoveredArray;
+    }
+    return [payload];
+}
+
 function parseJsonlRecords(text) {
     const records = [];
     String(text || '')
@@ -962,7 +1111,7 @@ function parseJsonlRecords(text) {
     return records;
 }
 
-function parseRewriteRecords(text, fileName = '') {
+function parseRewriteSourcePayload(text, fileName = '') {
     const normalizedText = String(text || '').trim();
     if (!normalizedText) {
         throw new Error('文件内容为空');
@@ -991,12 +1140,16 @@ function parseRewriteRecords(text, fileName = '') {
         }
     }
 
-    const records = normalizeRewriteRecordsPayload(parsed)
+    return { parsed, format };
+}
+
+function parseRewriteRecords(payload, { dialogueKeyOverride = '' } = {}) {
+    const records = normalizeRewriteRecordsPayloadWithPreference(payload, dialogueKeyOverride)
         .filter((item) => item !== null && item !== undefined);
     if (records.length === 0) {
         throw new Error('文件中没有可渲染的记录');
     }
-    return { records, format };
+    return records;
 }
 
 function extractRewriteTurns(record) {
@@ -1008,7 +1161,10 @@ function extractRewriteTurns(record) {
     }
     if (!record || typeof record !== 'object') return [];
 
-    for (const key of REWRITE_DIALOGUE_KEYS) {
+    const candidateKeys = rewriteDialogueKeyPreference
+        ? [rewriteDialogueKeyPreference, ...REWRITE_DIALOGUE_KEYS.filter((key) => key !== rewriteDialogueKeyPreference)]
+        : REWRITE_DIALOGUE_KEYS;
+    for (const key of candidateKeys) {
         if (Array.isArray(record[key]) && record[key].some((item) => isPotentialRewriteTurn(item))) {
             return record[key];
         }
@@ -1046,6 +1202,7 @@ function normalizeRewriteSpeaker(rawSpeaker = '') {
 }
 
 function inferRewriteToneFromRole(role = '', fallbackTone = 'system') {
+    if (isRewriteFunctionCallRole(role) || isRewriteObservationRole(role)) return 'system';
     const normalizedRole = normalizeRewriteSpeaker(role);
     if (normalizedRole === '用户') return 'user';
     if (normalizedRole === '客服') return 'service';
@@ -1059,16 +1216,105 @@ function defaultRewriteRoleForTone(tone = 'system') {
     return '系统';
 }
 
+function isRewriteFunctionCallRole(role = '') {
+    return String(role || '').trim().toLowerCase() === 'function_call';
+}
+
+function isRewriteObservationRole(role = '') {
+    return String(role || '').trim().toLowerCase() === 'observation';
+}
+
+function extractRewriteStructuredLine(text = '', explicitKind = '') {
+    const normalizedText = String(text || '').trim();
+    const normalizedKind = String(explicitKind || '').trim().toLowerCase();
+    if (normalizedKind === 'function_call' || normalizedText.startsWith('function_call:')) {
+        return {
+            tone: 'system',
+            role: 'function_call',
+            text: normalizedText.replace(/^function_call:\s*/i, '').trim(),
+        };
+    }
+    if (normalizedKind === 'observation' || normalizedText.startsWith('observation:')) {
+        return {
+            tone: 'system',
+            role: 'observation',
+            text: normalizedText.replace(/^observation:\s*/i, '').trim(),
+        };
+    }
+    return null;
+}
+
+function inferRewriteFunctionCallTarget(text = '') {
+    const normalizedText = String(text || '').trim();
+    return normalizedText === REWRITE_FUNCTION_CALL_ADDRESS_PAYLOAD
+        ? REWRITE_FUNCTION_CALL_ADDRESS_TARGET
+        : '';
+}
+
+function createDefaultRewriteObservationPayload() {
+    return {
+        address: '',
+        error_code: '',
+        error_msg: '',
+    };
+}
+
+function parseRewriteObservationPayload(text = '') {
+    const fallback = createDefaultRewriteObservationPayload();
+    const normalizedText = String(text || '').trim();
+    if (!normalizedText) {
+        return fallback;
+    }
+    try {
+        const parsed = JSON.parse(normalizedText);
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+            return {
+                address: String(parsed.address ?? ''),
+                error_code: String(parsed.error_code ?? ''),
+                error_msg: String(parsed.error_msg ?? ''),
+            };
+        }
+    } catch (error) {
+        // Fallback to the inline observation display format.
+    }
+
+    const inlineMatch = normalizedText.match(
+        /^observation\s+address:\s*(.*?);\s*error_code:\s*(.*?);\s*error_msg:\s*(.*)$/i,
+    );
+    if (inlineMatch) {
+        return {
+            address: String(inlineMatch[1] ?? '').trim(),
+            error_code: String(inlineMatch[2] ?? '').trim(),
+            error_msg: String(inlineMatch[3] ?? '').trim(),
+        };
+    }
+    return {
+        ...fallback,
+        address: normalizedText,
+    };
+}
+
+function serializeRewriteObservationPayload(payload = {}) {
+    const rawErrorCode = String(payload.error_code ?? '').trim();
+    const normalizedErrorCode = /^-?\d+$/.test(rawErrorCode) ? Number(rawErrorCode) : rawErrorCode;
+    return JSON.stringify({
+        address: String(payload.address ?? '').trim(),
+        error_code: normalizedErrorCode,
+        error_msg: String(payload.error_msg ?? '').trim(),
+    });
+}
+
 function stripRewriteLinePrefix(text = '') {
-    return String(text || '').replace(/^\[[^\]]+\]\s*/, '').trim();
+    return String(text || '').replace(/^\[(?![\{\[])[^\]]+\]\s*/, '').trim();
 }
 
 function normalizeRewriteLine(item, fallbackIndex = 0) {
     if (typeof item === 'string') {
         const text = item.trim();
         if (!text) return null;
-        if (text.startsWith('function_call:') || text.startsWith('observation:')) {
-            return { tone: 'system', role: '系统', text };
+        const structuredLine = extractRewriteStructuredLine(text);
+        if (structuredLine) {
+            return structuredLine;
         }
         const turnMatch = text.match(/^\[([^\]]+)\]\s*([^:：]+)[:：]\s*(.+)$/);
         if (turnMatch) {
@@ -1102,9 +1348,9 @@ function normalizeRewriteLine(item, fallbackIndex = 0) {
 
     const displayKind = String(item.display_kind || item.kind || '').trim().toLowerCase();
     const speaker = normalizeRewriteSpeaker(item.speaker || item.role || item.actor || item.from || '');
-
-    if (displayKind === 'function_call' || rawText.startsWith('function_call:') || rawText.startsWith('observation:')) {
-        return { tone: 'system', role: '系统', text: rawText };
+    const structuredLine = extractRewriteStructuredLine(rawText, displayKind);
+    if (structuredLine) {
+        return structuredLine;
     }
 
     let tone = 'system';
@@ -1132,6 +1378,7 @@ function createRewriteEditableLine(entry = {}) {
         tone,
         role: hasExplicitRole ? rawRole : fallbackRole,
         text: String(entry.text || ''),
+        metaType: String(entry.metaType || '').trim(),
     };
 }
 
@@ -1141,11 +1388,12 @@ function cloneRewriteLines(lines = []) {
         tone: String(line.tone || 'system'),
         role: String(line.role ?? ''),
         text: String(line.text ?? ''),
+        metaType: String(line.metaType ?? ''),
     }));
 }
 
 function rewriteLinesSignature(lines = []) {
-    return JSON.stringify(lines.map((line) => [line.id, line.tone, line.role, line.text]));
+    return JSON.stringify(lines.map((line) => [line.id, line.tone, line.role, line.text, line.metaType]));
 }
 
 function updateRewriteRoleEditorWidth(control) {
@@ -1177,6 +1425,65 @@ function updateRewriteLineBodyLayout(body, control) {
     if (!(body instanceof HTMLElement)) return;
     const widthValue = updateRewriteRoleEditorWidth(control);
     body.style.setProperty('--rewrite-role-width', widthValue);
+}
+
+function updateRewriteObservationFieldLayout(field, input, labelText = '') {
+    if (!(field instanceof HTMLElement) || !(input instanceof HTMLInputElement)) return;
+    const computedStyle = window.getComputedStyle(input);
+    const fieldStyle = window.getComputedStyle(field);
+    const canvas = updateRewriteObservationFieldLayout._canvas || document.createElement('canvas');
+    updateRewriteObservationFieldLayout._canvas = canvas;
+    const context = canvas.getContext('2d');
+    if (!context) return;
+    context.font = computedStyle.font || `${computedStyle.fontSize} ${computedStyle.fontFamily}`;
+    const measureSource = String(input.value || '').trim();
+    const measuredTextWidth = context.measureText(measureSource || '').width;
+    const inputPadding = (
+        parseFloat(computedStyle.paddingLeft || '0')
+        + parseFloat(computedStyle.paddingRight || '0')
+        + parseFloat(computedStyle.borderLeftWidth || '0')
+        + parseFloat(computedStyle.borderRightWidth || '0')
+    );
+    const horizontalPadding = (
+        parseFloat(fieldStyle.paddingLeft || '0')
+        + parseFloat(fieldStyle.paddingRight || '0')
+        + parseFloat(fieldStyle.borderLeftWidth || '0')
+        + parseFloat(fieldStyle.borderRightWidth || '0')
+    );
+    const inputWidthPx = Math.min(Math.max(measuredTextWidth + inputPadding + 12, 28), 420);
+    const labelWidthPx = context.measureText(String(labelText || '').trim()).width;
+    const basisPx = Math.min(Math.max(labelWidthPx + inputWidthPx + horizontalPadding + 10, 72), 560);
+    const grow = Math.max(Math.round(basisPx), 1);
+    input.style.minWidth = `${Math.ceil(inputWidthPx)}px`;
+    input.style.width = '100%';
+    field.style.flexBasis = `${Math.ceil(basisPx)}px`;
+    field.style.flexGrow = String(grow);
+    field.style.flexShrink = '1';
+}
+
+function updateRewriteFunctionCallTargetWidth(control) {
+    if (!(control instanceof HTMLSelectElement)) return;
+    const selectedText = String(
+        control.options[control.selectedIndex]?.textContent
+        || control.value
+        || control.getAttribute('placeholder')
+        || '请选择调用项',
+    ).trim();
+    const computedStyle = window.getComputedStyle(control);
+    const canvas = updateRewriteFunctionCallTargetWidth._canvas || document.createElement('canvas');
+    updateRewriteFunctionCallTargetWidth._canvas = canvas;
+    const context = canvas.getContext('2d');
+    if (!context) return;
+    context.font = computedStyle.font || `${computedStyle.fontSize} ${computedStyle.fontFamily}`;
+    const measuredTextWidth = context.measureText(selectedText || '请选择调用项').width;
+    const horizontalPadding = (
+        parseFloat(computedStyle.paddingLeft || '0')
+        + parseFloat(computedStyle.paddingRight || '0')
+        + parseFloat(computedStyle.borderLeftWidth || '0')
+        + parseFloat(computedStyle.borderRightWidth || '0')
+    );
+    const widthPx = Math.min(Math.max(measuredTextWidth + horizontalPadding + 22, 104), 196);
+    control.style.width = `${Math.ceil(widthPx)}px`;
 }
 
 function getRewriteShellGapWidth() {
@@ -1380,12 +1687,34 @@ function collectRewriteAvailableRoles(records = []) {
             });
     });
     if (!orderedRoles.length) {
-        return ['用户', '客服', '系统'];
+        return ['用户', '客服', '系统', 'function_call', 'observation'];
     }
+    ['function_call', 'observation'].forEach((role) => {
+        if (seen.has(role)) return;
+        seen.add(role);
+        orderedRoles.push(role);
+    });
     return orderedRoles;
 }
 
 function evaluateRewriteRoleAlternation(lines = []) {
+    const functionCallConflicts = lines
+        .map((line, index) => ({ line, index }))
+        .filter(({ line }) => isRewriteFunctionCallRole(line?.role || ''))
+        .map(({ line, index }) => {
+            const previousLine = index > 0 ? lines[index - 1] : null;
+            const previousRole = normalizeRewriteSpeaker(previousLine?.role || '');
+            const previousText = String(previousLine?.text || '').trim();
+            if (previousRole === '用户' && previousText) {
+                return null;
+            }
+            return {
+                index,
+                previousIndex: index - 1,
+            };
+        })
+        .filter(Boolean);
+
     const normalizedLines = lines
         .map((line, index) => ({
             index,
@@ -1395,6 +1724,28 @@ function evaluateRewriteRoleAlternation(lines = []) {
         .filter((line) => line.text && line.role && line.role !== '系统');
 
     if (normalizedLines.length < 2) {
+        if (functionCallConflicts.length) {
+            const [firstConflict] = functionCallConflicts;
+            const conflictIndexes = functionCallConflicts.flatMap((item) => (
+                item.previousIndex >= 0 ? [item.previousIndex, item.index] : [item.index]
+            ));
+            const conflictItems = functionCallConflicts.map((item) => ({
+                message: item.previousIndex >= 0
+                    ? `第 ${item.index + 1} 行 function_call 上一行必须是“用户”`
+                    : `第 ${item.index + 1} 行 function_call 前缺少用户行`,
+                indexes: item.previousIndex >= 0 ? [item.previousIndex, item.index] : [item.index],
+            }));
+            return {
+                state: 'error',
+                badge: '存在结构错误',
+                text: firstConflict.previousIndex >= 0
+                    ? `第 ${firstConflict.index + 1} 行 function_call 上一行必须是“用户”。`
+                    : `第 ${firstConflict.index + 1} 行 function_call 前缺少用户行。`,
+                conflictIndexes: [...new Set(conflictIndexes)],
+                conflictMessages: conflictItems.map((item) => item.message),
+                conflictItems,
+            };
+        }
         return {
             state: 'warning',
             badge: '待形成交替',
@@ -1412,7 +1763,7 @@ function evaluateRewriteRoleAlternation(lines = []) {
         }
     }
 
-    if (!repeatedPairs.length) {
+    if (!repeatedPairs.length && !functionCallConflicts.length) {
         return {
             state: 'good',
             badge: '角色交替正常',
@@ -1423,21 +1774,29 @@ function evaluateRewriteRoleAlternation(lines = []) {
         };
     }
 
-    const [previousLine, currentLine] = repeatedPairs[0];
-    const conflictIndexes = [...new Set(repeatedPairs.flatMap(([left, right]) => [left.index, right.index]))];
-    const conflictMessages = repeatedPairs.map(([left, right]) => (
-        `第 ${left.index + 1} 行和第 ${right.index + 1} 行连续为“${right.role}”`
-    ));
-    const conflictItems = repeatedPairs.map(([left, right]) => ({
+    const repeatedPairItems = repeatedPairs.map(([left, right]) => ({
         message: `第 ${left.index + 1} 行和第 ${right.index + 1} 行连续为“${right.role}”`,
         indexes: [left.index, right.index],
+        type: 'role-repeat',
     }));
+    const functionCallItems = functionCallConflicts.map((item) => ({
+        message: item.previousIndex >= 0
+            ? `第 ${item.index + 1} 行 function_call 上一行必须是“用户”`
+            : `第 ${item.index + 1} 行 function_call 前缺少用户行`,
+        indexes: item.previousIndex >= 0 ? [item.previousIndex, item.index] : [item.index],
+        type: 'function-call-placement',
+    }));
+    const conflictItems = [...repeatedPairItems, ...functionCallItems];
+    const conflictIndexes = [...new Set(conflictItems.flatMap((item) => item.indexes))];
+    const [firstConflict] = conflictItems;
     return {
         state: 'error',
-        badge: '存在连续同角色',
-        text: `第 ${previousLine.index + 1} 行和第 ${currentLine.index + 1} 行均为“${currentLine.role}”，当前不满足交替。`,
+        badge: '存在结构/交替异常',
+        text: firstConflict.type === 'function-call-placement'
+            ? firstConflict.message
+            : `${firstConflict.message}，当前不满足交替。`,
         conflictIndexes,
-        conflictMessages,
+        conflictMessages: conflictItems.map((item) => item.message),
         conflictItems,
     };
 }
@@ -1494,7 +1853,47 @@ function buildRewriteInitialEditableLines(record) {
         .map((entry) => createRewriteEditableLine(entry));
     return normalizedLines.length
         ? normalizedLines
-        : [createRewriteEditableLine({ tone: 'system', text: '' })];
+        : [createRewriteEditableLine({ tone: 'system', role: '', text: '' })];
+}
+
+function buildRewriteSubmittedEditableLines(record) {
+    const rewrited = Array.isArray(record?.rewrited) ? record.rewrited : [];
+    const normalizedLines = rewrited
+        .map((item) => {
+            if (!item || typeof item !== 'object') return null;
+            const role = String(item.from ?? '').trim();
+            let text = '';
+            if (isRewriteObservationRole(role)) {
+                text = serializeRewriteObservationPayload(item.value || {});
+            } else if (isRewriteFunctionCallRole(role)) {
+                text = typeof item.value === 'string'
+                    ? item.value
+                    : JSON.stringify(item.value ?? '');
+            } else {
+                text = String(item.value ?? '');
+            }
+            return createRewriteEditableLine({
+                tone: inferRewriteToneFromRole(role, 'system'),
+                role,
+                text,
+            });
+        })
+        .filter(Boolean);
+    return normalizedLines.length ? normalizedLines : null;
+}
+
+function buildRewriteEditableLinesForDisplay(record) {
+    const submittedLines = buildRewriteSubmittedEditableLines(record);
+    if (submittedLines?.length) {
+        return submittedLines;
+    }
+    const normalizedLines = extractRewriteTurns(record)
+        .map((item, index) => normalizeRewriteLine(item, index + 1))
+        .filter(Boolean)
+        .map((entry) => createRewriteEditableLine(entry));
+    return normalizedLines.length
+        ? normalizedLines
+        : [createRewriteEditableLine({ tone: 'system', role: '', text: '' })];
 }
 
 function getRewriteEditableLines(record, recordIndex = rewriteSelectedIndex) {
@@ -1504,7 +1903,7 @@ function getRewriteEditableLines(record, recordIndex = rewriteSelectedIndex) {
         return rewriteRecordEditCache.get(cacheKey) || [];
     }
 
-    const editableLines = buildRewriteInitialEditableLines(record);
+    const editableLines = buildRewriteEditableLinesForDisplay(record);
     rewriteRecordEditCache.set(cacheKey, cloneRewriteLines(editableLines));
     return editableLines;
 }
@@ -1524,9 +1923,202 @@ function getRewriteRecordHistory(recordIndex) {
 function updateRewriteHistoryButtons() {
     const hasSelection = Number.isInteger(rewriteSelectedIndex) && rewriteSelectedIndex >= 0;
     const history = hasSelection ? getRewriteRecordHistory(rewriteSelectedIndex) : null;
+    if (rewriteSubmitButton) rewriteSubmitButton.disabled = !hasSelection;
+    if (rewriteExportButton) rewriteExportButton.disabled = rewriteRecords.length < 1;
     if (rewriteResetButton) rewriteResetButton.disabled = !hasSelection;
     if (rewriteUndoButton) rewriteUndoButton.disabled = !hasSelection || !history || history.undoStack.length < 1;
     if (rewriteRedoButton) rewriteRedoButton.disabled = !hasSelection || !history || history.redoStack.length < 1;
+}
+
+function parseRewriteFunctionCallValue(text = '') {
+    const normalizedText = String(text || '').trim();
+    if (!normalizedText) return '';
+    try {
+        return JSON.parse(normalizedText);
+    } catch (error) {
+        return normalizedText;
+    }
+}
+
+function serializeRewriteSubmissionLine(line) {
+    const role = String(line?.role ?? '').trim();
+    const text = String(line?.text ?? '').trim();
+    if (!role && !text) return null;
+    let value = text;
+    if (isRewriteObservationRole(role)) {
+        value = JSON.parse(serializeRewriteObservationPayload(parseRewriteObservationPayload(text)));
+    } else if (isRewriteFunctionCallRole(role)) {
+        value = parseRewriteFunctionCallValue(text);
+    }
+    return {
+        from: role,
+        value,
+    };
+}
+
+function buildRewriteSubmissionPayloadFromLines(lines = []) {
+    return lines
+        .map((line) => serializeRewriteSubmissionLine(line))
+        .filter(Boolean);
+}
+
+function rewriteSubmissionSignature(items = []) {
+    return JSON.stringify(items ?? []);
+}
+
+function cloneRewriteRecordData(value) {
+    return value === undefined ? undefined : JSON.parse(JSON.stringify(value));
+}
+
+function getRewriteRecordStatus(record) {
+    const recordIndex = rewriteRecords.indexOf(record);
+    const currentLines = recordIndex >= 0
+        ? getRewriteEditableLines(record, recordIndex)
+        : buildRewriteInitialEditableLines(record);
+    const initialLines = buildRewriteInitialEditableLines(record);
+    const currentSignature = rewriteSubmissionSignature(buildRewriteSubmissionPayloadFromLines(currentLines));
+    const initialSignature = rewriteSubmissionSignature(buildRewriteSubmissionPayloadFromLines(initialLines));
+    const submittedSignature = Array.isArray(record?.rewrited)
+        ? rewriteSubmissionSignature(record.rewrited)
+        : '';
+
+    if (!submittedSignature && currentSignature === initialSignature) {
+        return '未标注';
+    }
+    if (submittedSignature && currentSignature === submittedSignature) {
+        return '已提交';
+    }
+    return '未提交';
+}
+
+function summarizeRewriteRecordStatuses() {
+    return rewriteRecords.reduce((summary, record) => {
+        const status = getRewriteRecordStatus(record);
+        if (status === '已提交') {
+            summary.submitted += 1;
+        } else if (status === '未提交') {
+            summary.unsubmitted += 1;
+        } else {
+            summary.unannotated += 1;
+        }
+        return summary;
+    }, {
+        submitted: 0,
+        unsubmitted: 0,
+        unannotated: 0,
+    });
+}
+
+function closeRewriteExportModal() {
+    if (!rewriteExportModal) return;
+    rewriteExportModal.classList.add('hidden');
+    rewriteExportModal.setAttribute('aria-hidden', 'true');
+    rewritePendingExportAction = null;
+}
+
+function openRewriteExportModal(statusSummary) {
+    if (!rewriteExportModal || !rewriteExportSummary || !rewriteExportStats) return;
+    clearElement(rewriteExportStats);
+    rewriteExportSummary.textContent = '当前文件中存在未提交或未标注数据。强制导出时，只有“已提交”的数据会保留 rewrited，其余记录将按原始导入内容导出。';
+    appendDataItem(rewriteExportStats, '已提交', String(statusSummary.submitted));
+    appendDataItem(rewriteExportStats, '未提交', String(statusSummary.unsubmitted));
+    appendDataItem(rewriteExportStats, '未标注', String(statusSummary.unannotated));
+    rewriteExportModal.classList.remove('hidden');
+    rewriteExportModal.setAttribute('aria-hidden', 'false');
+}
+
+function buildRewriteExportRecords() {
+    return rewriteRecords.map((record, index) => {
+        const status = getRewriteRecordStatus(record);
+        const currentRecord = cloneRewriteRecordData(record);
+        const importedRecord = cloneRewriteRecordData(rewriteImportedRecords[index]);
+        if (status === '已提交') {
+            return currentRecord;
+        }
+        return importedRecord ?? currentRecord;
+    });
+}
+
+function submitCurrentRewriteRecord() {
+    if (!Number.isInteger(rewriteSelectedIndex) || rewriteSelectedIndex < 0) return;
+    const record = rewriteRecords[rewriteSelectedIndex];
+    if (!record || typeof record !== 'object') return;
+    const lines = getRewriteEditableLines(record, rewriteSelectedIndex);
+    const validation = evaluateRewriteRoleAlternation(lines);
+    if (validation.state !== 'good') {
+        const details = Array.isArray(validation.conflictMessages) && validation.conflictMessages.length
+            ? `\n\n${validation.conflictMessages.join('\n')}`
+            : '';
+        window.alert(`当前数据未通过提交校验：${validation.text}${details}`);
+        return;
+    }
+    const rewrited = buildRewriteSubmissionPayloadFromLines(lines);
+    record.rewrited = rewrited;
+    renderRewriteRecordState(rewriteSelectedIndex);
+    if (rewriteUploadStatus) {
+        rewriteUploadStatus.textContent = `当前记录已提交改写，rewrited 共写入 ${rewrited.length} 条。`;
+    }
+}
+
+function buildRewriteExportContent() {
+    const exportRecords = buildRewriteExportRecords();
+    const format = String(rewriteSourceFormat || '').trim().toLowerCase() === 'jsonl' ? 'jsonl' : 'json';
+    if (format === 'jsonl') {
+        return exportRecords.map((record) => JSON.stringify(record)).join('\n');
+    }
+    return JSON.stringify(exportRecords, null, 2);
+}
+
+function buildRewriteExportFileName() {
+    const sourceName = String(rewriteSourceName || 'rewrite_export').trim();
+    const baseName = (sourceName.replace(/\.[^.]+$/, '') || 'rewrite_export').replace(/[\\/:*?"<>|]+/g, '_');
+    const extension = String(rewriteSourceFormat || '').trim().toLowerCase() === 'jsonl' ? 'jsonl' : 'json';
+    return `${baseName}_rewrited.${extension}`;
+}
+
+function exportRewriteFile() {
+    if (!rewriteRecords.length) return;
+    const statusSummary = summarizeRewriteRecordStatuses();
+    if (statusSummary.unsubmitted > 0 || statusSummary.unannotated > 0) {
+        rewritePendingExportAction = () => {
+            closeRewriteExportModal();
+            exportRewriteFileWithCurrentState();
+        };
+        openRewriteExportModal(statusSummary);
+        return;
+    }
+    exportRewriteFileWithCurrentState();
+}
+
+function exportRewriteFileWithCurrentState() {
+    if (!rewriteRecords.length) return;
+    const statusSummary = summarizeRewriteRecordStatuses();
+    if (statusSummary.unsubmitted > 0 || statusSummary.unannotated > 0) {
+        // Export is intentionally selective; non-submitted records fall back to imported content.
+        if (rewriteUploadStatus) {
+            rewriteUploadStatus.textContent = '存在未提交或未标注数据，导出文件中仅保留已提交记录的 rewrited。';
+        }
+    }
+    const content = buildRewriteExportContent();
+    const fileName = buildRewriteExportFileName();
+    const blob = new Blob([content], {
+        type: String(rewriteSourceFormat || '').trim().toLowerCase() === 'jsonl'
+            ? 'application/x-ndjson;charset=utf-8'
+            : 'application/json;charset=utf-8',
+    });
+    const objectUrl = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = objectUrl;
+    anchor.download = fileName;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    window.setTimeout(() => {
+        URL.revokeObjectURL(objectUrl);
+    }, 0);
+    if (rewriteUploadStatus) {
+        rewriteUploadStatus.textContent = `已导出编辑后文件：${fileName}`;
+    }
 }
 
 function pushRewriteUndoSnapshot(recordIndex, linesSnapshot) {
@@ -1655,9 +2247,9 @@ function insertRewriteEmptyLine(recordIndex, anchorIndex, position = 'after') {
     renderRewriteRecordState(recordIndex);
     const insertedLine = currentLines[insertIndex];
     window.requestAnimationFrame(() => {
-        const editor = rewriteDialogueOutput.querySelector(`[data-line-id="${insertedLine.id}"] .rewrite-line-editor`);
-        if (editor instanceof HTMLTextAreaElement) {
-            editor.focus();
+        const roleEditor = rewriteDialogueOutput.querySelector(`[data-line-id="${insertedLine.id}"] .rewrite-role-editor`);
+        if (roleEditor instanceof HTMLSelectElement) {
+            roleEditor.focus();
         }
     });
 }
@@ -1707,12 +2299,127 @@ function updateRewriteLineRole(recordIndex, lineId, role) {
     const normalizedRole = String(role || '').trim();
     if (!normalizedRole || !rewriteAvailableRoles.includes(normalizedRole)) return;
     target.role = normalizedRole;
+    if (isRewriteFunctionCallRole(normalizedRole)) {
+        const targetType = inferRewriteFunctionCallTarget(target.text);
+        target.text = targetType === REWRITE_FUNCTION_CALL_ADDRESS_TARGET ? target.text : '';
+    } else if (isRewriteObservationRole(normalizedRole)) {
+        target.text = serializeRewriteObservationPayload(parseRewriteObservationPayload(target.text));
+    }
     target.tone = inferRewriteToneFromRole(target.role, target.tone);
     applyRewriteLineMutation(recordIndex, currentLines, {
         pushHistory: true,
         previousLines: getRewriteEditableLines(record, recordIndex),
     });
     updateRewriteAlternationStatus(currentLines);
+}
+
+function updateRewriteFunctionCallTarget(recordIndex, lineId, targetType) {
+    const record = rewriteRecords[recordIndex];
+    if (!record) return;
+    const currentLines = [...getRewriteEditableLines(record, recordIndex)];
+    const targetLine = currentLines.find((line) => line.id === lineId);
+    if (!targetLine || !isRewriteFunctionCallRole(targetLine.role)) return;
+    const normalizedTarget = String(targetType || '').trim();
+    targetLine.text = normalizedTarget === REWRITE_FUNCTION_CALL_ADDRESS_TARGET
+        ? REWRITE_FUNCTION_CALL_ADDRESS_PAYLOAD
+        : '';
+    applyRewriteLineMutation(recordIndex, currentLines, {
+        pushHistory: true,
+        previousLines: getRewriteEditableLines(record, recordIndex),
+    });
+    renderRewriteRecordState(recordIndex);
+}
+
+function updateRewriteObservationField(recordIndex, lineId, field, value) {
+    const record = rewriteRecords[recordIndex];
+    if (!record) return;
+    const currentLines = [...getRewriteEditableLines(record, recordIndex)];
+    const targetLine = currentLines.find((line) => line.id === lineId);
+    if (!targetLine || !isRewriteObservationRole(targetLine.role)) return;
+    const nextPayload = {
+        ...parseRewriteObservationPayload(targetLine.text),
+        [field]: String(value ?? ''),
+    };
+    targetLine.text = serializeRewriteObservationPayload(nextPayload);
+    applyRewriteLineMutation(recordIndex, currentLines, {
+        pushHistory: false,
+        previousLines: getRewriteEditableLines(record, recordIndex),
+    });
+}
+
+function buildRewriteAddressObservationContextLines(recordIndex, functionCallLineId) {
+    const record = rewriteRecords[recordIndex];
+    if (!record) return [];
+    const currentLines = getRewriteEditableLines(record, recordIndex);
+    const stopIndex = currentLines.findIndex((line) => line.id === functionCallLineId);
+    if (stopIndex < 0) return [];
+    return currentLines
+        .slice(0, stopIndex)
+        .map((line) => ({
+            role: normalizeRewriteSpeaker(line?.role || ''),
+            text: String(line?.text || '').trim(),
+        }))
+        .filter((line) => line.text && (line.role === '用户' || line.role === '客服'))
+        .map((line) => `${line.role}：${line.text}`);
+}
+
+async function generateRewriteObservationLine(recordIndex, functionCallLineId) {
+    const record = rewriteRecords[recordIndex];
+    if (!record) return;
+    if (rewriteObservationLoadingLineIds.has(functionCallLineId)) return;
+    const currentLines = [...getRewriteEditableLines(record, recordIndex)];
+    const functionCallIndex = currentLines.findIndex((line) => line.id === functionCallLineId);
+    if (functionCallIndex < 0) return;
+    const functionCallLine = currentLines[functionCallIndex];
+    if (!isRewriteFunctionCallRole(functionCallLine.role)) return;
+    if (inferRewriteFunctionCallTarget(functionCallLine.text) !== REWRITE_FUNCTION_CALL_ADDRESS_TARGET) {
+        window.alert('请先为 function_call 选择“地址”调用项。');
+        return;
+    }
+
+    const dialogueLines = buildRewriteAddressObservationContextLines(recordIndex, functionCallLineId);
+    if (!dialogueLines.length) {
+        window.alert('请先在 function_call 上方保留用户/客服对话内容。');
+        return;
+    }
+
+    rewriteObservationLoadingLineIds.add(functionCallLineId);
+    renderRewriteRecordState(recordIndex);
+    try {
+        const data = await apiFetch('/api/rewrite/address-observation', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ dialogue_lines: dialogueLines }),
+        });
+        const observation = data?.observation ?? {};
+        const observationText = serializeRewriteObservationPayload(observation);
+        const nextLines = [...currentLines];
+        let observationIndex = functionCallIndex + 1;
+        const nextLine = nextLines[observationIndex];
+        if (nextLine && isRewriteObservationRole(nextLine.role)) {
+            nextLine.text = observationText;
+        } else {
+            nextLines.splice(observationIndex, 0, createRewriteEditableLine({
+                tone: 'system',
+                role: 'observation',
+                text: observationText,
+            }));
+        }
+        observationIndex = functionCallIndex + 1;
+        while (nextLines[observationIndex + 1] && String(nextLines[observationIndex + 1].metaType || '') === 'observation-summary') {
+            nextLines.splice(observationIndex + 1, 1);
+        }
+        applyRewriteLineMutation(recordIndex, nextLines, {
+            pushHistory: true,
+            previousLines: getRewriteEditableLines(record, recordIndex),
+        });
+        renderRewriteRecordState(recordIndex);
+    } catch (error) {
+        window.alert(error?.message || '生成 observation 失败，请稍后重试。');
+    } finally {
+        rewriteObservationLoadingLineIds.delete(functionCallLineId);
+        renderRewriteRecordState(recordIndex);
+    }
 }
 
 function renderRewriteRecordState(recordIndex) {
@@ -1784,15 +2491,85 @@ function moveRewriteLineToEnd(recordIndex, sourceLineId) {
     renderRewriteRecordState(recordIndex);
 }
 
+function findRewritePreferenceSampleRecord(payload) {
+    const coarseRecords = normalizeRewriteRecordsPayloadWithPreference(payload, '');
+    return coarseRecords.find((item) => item && typeof item === 'object' && !Array.isArray(item)) || null;
+}
+
+function detectRewriteCandidateKeys(record, candidates, matcher) {
+    if (!record || typeof record !== 'object' || Array.isArray(record)) return [];
+    return candidates.filter((key) => {
+        if (!Object.prototype.hasOwnProperty.call(record, key)) return false;
+        const value = record[key];
+        return typeof matcher === 'function' ? matcher(value) : true;
+    });
+}
+
+async function resolveRewriteImportPreferences(payload) {
+    const sampleRecord = findRewritePreferenceSampleRecord(payload);
+    rewriteIdKeyPreference = '';
+    rewriteDialogueKeyPreference = '';
+    if (!sampleRecord) return;
+
+    const availableKeys = Object.keys(sampleRecord);
+    const matchedIdKeys = detectRewriteCandidateKeys(sampleRecord, REWRITE_RECORD_ID_KEYS, (value) => String(value ?? '').trim());
+    if (matchedIdKeys.length === 1) {
+        rewriteIdKeyPreference = matchedIdKeys[0];
+    } else {
+        rewriteIdKeyPreference = await openRewriteKeyPrompt({
+            title: '指定记录 ID 键名',
+            summary: matchedIdKeys.length > 1
+                ? '当前记录里命中了多个编号候选键，请手动指定哪一个键表示记录 id。'
+                : '当前记录里没有命中默认编号候选键，请手动输入表示记录 id 的键名。',
+            label: '记录 id 键名',
+            placeholder: '例如：id / unique_id / 接入单号',
+            candidateKeys: availableKeys,
+            validate: (value) => {
+                if (!value) return '请输入表示记录 id 的键名。';
+                if (!availableKeys.includes(value)) return '输入的键名不在当前记录中，请重新输入。';
+                return '';
+            },
+        });
+    }
+
+    const matchedDialogueKeys = detectRewriteCandidateKeys(
+        sampleRecord,
+        REWRITE_DIALOGUE_KEYS,
+        (value) => (
+            (Array.isArray(value) && value.some((item) => isPotentialRewriteTurn(item)))
+            || (typeof value === 'string' && value.trim())
+        ),
+    );
+    if (matchedDialogueKeys.length === 1) {
+        rewriteDialogueKeyPreference = matchedDialogueKeys[0];
+    } else {
+        rewriteDialogueKeyPreference = await openRewriteKeyPrompt({
+            title: '指定对话内容键名',
+            summary: matchedDialogueKeys.length > 1
+                ? '当前记录里命中了多个对话候选键，请手动指定哪一个键保存了对话内容。'
+                : '当前记录里没有命中默认对话候选键，请手动输入保存对话内容的键名。',
+            label: '对话内容键名',
+            placeholder: '例如：dialogue_process / 对话记录',
+            candidateKeys: availableKeys,
+            validate: (value) => {
+                if (!value) return '请输入保存对话内容的键名。';
+                if (!availableKeys.includes(value)) return '输入的键名不在当前记录中，请重新输入。';
+                const candidateValue = sampleRecord[value];
+                const isValid = (
+                    (Array.isArray(candidateValue) && candidateValue.some((item) => isPotentialRewriteTurn(item)))
+                    || (typeof candidateValue === 'string' && candidateValue.trim())
+                );
+                return isValid ? '' : '该键对应的值不是可识别的对话内容。';
+            },
+        });
+    }
+}
+
 function buildRewriteRecordTitle(record, index) {
     if (record && typeof record === 'object') {
         const preferred = [
-            record.scenario_id,
-            record.id,
-            record.sample_id,
-            record.session_id,
-            record.uuid,
-            record.record_id,
+            rewriteIdKeyPreference ? record[rewriteIdKeyPreference] : '',
+            ...REWRITE_RECORD_ID_KEYS.map((key) => record[key]),
         ].find((value) => String(value || '').trim());
         if (preferred) return String(preferred).trim();
     }
@@ -1810,26 +2587,22 @@ function buildRewriteRecordMeta(record) {
     const turns = recordIndex >= 0
         ? getRewriteEditableLines(record, recordIndex)
         : extractRewriteTurns(record);
-    const status = record && typeof record === 'object' ? String(record.status || '').trim() : '';
     return {
         turns: turns.length,
-        status: status || '未标注',
+        status: getRewriteRecordStatus(record),
     };
 }
 
 function buildRewriteRecordSearchText(record, index) {
+    const meta = buildRewriteRecordMeta(record);
     const searchParts = [
         buildRewriteRecordTitle(record, index),
         String(index + 1),
+        meta.status,
     ];
     if (record && typeof record === 'object') {
         [
-            record.scenario_id,
-            record.id,
-            record.sample_id,
-            record.session_id,
-            record.uuid,
-            record.record_id,
+            ...REWRITE_RECORD_ID_KEYS.map((key) => record[key]),
             record.rounds_used,
         ].forEach((value) => {
             const normalized = String(value ?? '').trim();
@@ -1839,6 +2612,13 @@ function buildRewriteRecordSearchText(record, index) {
         });
     }
     return searchParts.join(' ').toLowerCase();
+}
+
+function buildRewriteStatusClass(status = '') {
+    const normalizedStatus = String(status || '').trim();
+    if (normalizedStatus === '已提交') return 'is-submitted';
+    if (normalizedStatus === '未提交') return 'is-pending';
+    return 'is-unannotated';
 }
 
 function getFilteredRewriteRecordIndexes() {
@@ -1877,6 +2657,7 @@ function renderRewriteRecordList() {
     matchedIndexes.forEach((index) => {
         const record = rewriteRecords[index];
         const meta = buildRewriteRecordMeta(record);
+        const statusClass = buildRewriteStatusClass(meta.status);
         const button = document.createElement('button');
         button.type = 'button';
         button.className = 'scenario-item';
@@ -1887,7 +2668,7 @@ function renderRewriteRecordList() {
             <span class="scenario-title">${escapeHtml(buildRewriteRecordTitle(record, index))}</span>
             <span class="scenario-meta">第 ${index + 1} 条</span>
             <span class="scenario-meta">轮次/行数：${meta.turns}</span>
-            <span class="scenario-issue">状态：${escapeHtml(meta.status)}</span>
+            <span class="scenario-issue ${statusClass}">状态：${escapeHtml(meta.status)}</span>
         `;
         button.addEventListener('click', () => {
             selectRewriteRecord(index);
@@ -1921,10 +2702,10 @@ function renderRewriteRecordInfo(record) {
 
     if (record && typeof record === 'object') {
         [
-            ['scenario_id', record.scenario_id],
-            ['id', record.id],
-            ['sample_id', record.sample_id],
-            ['session_id', record.session_id],
+            ...(rewriteIdKeyPreference && Object.prototype.hasOwnProperty.call(record, rewriteIdKeyPreference)
+                ? [[rewriteIdKeyPreference, record[rewriteIdKeyPreference]]]
+                : []),
+            ...REWRITE_RECORD_ID_KEYS.map((key) => [key, record[key]]),
             ['rounds_used', record.rounds_used],
         ].forEach(([key, value]) => {
             const normalized = String(value ?? '').trim();
@@ -2061,6 +2842,11 @@ function renderRewriteDialogue(record) {
 
         const body = document.createElement('div');
         body.className = 'rewrite-line-body';
+        if (isRewriteFunctionCallRole(entry.role)) {
+            body.classList.add('is-function-call');
+        } else if (isRewriteObservationRole(entry.role)) {
+            body.classList.add('is-observation');
+        }
 
         const roleEditor = document.createElement('select');
         roleEditor.className = 'rewrite-role-editor';
@@ -2083,21 +2869,110 @@ function renderRewriteDialogue(record) {
             renderRewriteRecordState(recordIndex);
         });
 
-        const editor = document.createElement('textarea');
-        editor.className = 'rewrite-line-editor';
-        editor.rows = 1;
-        editor.value = stripRewriteLinePrefix(entry.text || '');
-        editor.placeholder = '空框，可填写改写后的对话内容';
-        editor.addEventListener('focus', () => {
-            beginRewriteEditSession(recordIndex, entry.id, 'text');
-        });
-        editor.addEventListener('input', (event) => {
-            updateRewriteLineText(recordIndex, entry.id, event.target.value);
-        });
-        editor.addEventListener('blur', () => {
-            endRewriteEditSession({ force: false });
-            updateRewriteHistoryButtons();
-        });
+        let contentNode = null;
+        if (isRewriteFunctionCallRole(entry.role)) {
+            const functionCallBody = document.createElement('div');
+            functionCallBody.className = 'rewrite-function-call-body';
+
+            const functionCallTarget = document.createElement('select');
+            functionCallTarget.className = 'rewrite-role-editor rewrite-function-call-target';
+            const emptyOption = document.createElement('option');
+            emptyOption.value = '';
+            emptyOption.textContent = '请选择调用项';
+            functionCallTarget.appendChild(emptyOption);
+            const addressOption = document.createElement('option');
+            addressOption.value = REWRITE_FUNCTION_CALL_ADDRESS_TARGET;
+            addressOption.textContent = REWRITE_FUNCTION_CALL_ADDRESS_LABEL;
+            functionCallTarget.appendChild(addressOption);
+            functionCallTarget.value = inferRewriteFunctionCallTarget(entry.text);
+            updateRewriteFunctionCallTargetWidth(functionCallTarget);
+            functionCallTarget.addEventListener('change', (event) => {
+                updateRewriteFunctionCallTargetWidth(event.target);
+                updateRewriteFunctionCallTarget(recordIndex, entry.id, event.target.value);
+            });
+
+            const readonlyEditor = document.createElement('textarea');
+            readonlyEditor.className = 'rewrite-line-editor is-readonly is-function-call-payload';
+            readonlyEditor.rows = 1;
+            readonlyEditor.readOnly = true;
+            readonlyEditor.value = entry.text || '';
+            readonlyEditor.placeholder = '选择调用项后自动填充 function_call 参数';
+
+            const generateButton = document.createElement('button');
+            generateButton.type = 'button';
+            generateButton.className = 'rewrite-line-action-btn rewrite-line-action-btn--accent';
+            const isObservationLoading = rewriteObservationLoadingLineIds.has(entry.id);
+            generateButton.textContent = isObservationLoading ? '*' : '调用';
+            if (isObservationLoading) {
+                generateButton.classList.add('is-loading');
+            }
+            generateButton.disabled = isObservationLoading || functionCallTarget.value !== REWRITE_FUNCTION_CALL_ADDRESS_TARGET;
+            generateButton.addEventListener('click', () => {
+                generateRewriteObservationLine(recordIndex, entry.id);
+            });
+
+            actions.appendChild(generateButton);
+            functionCallBody.appendChild(functionCallTarget);
+            functionCallBody.appendChild(readonlyEditor);
+            contentNode = functionCallBody;
+        } else if (isRewriteObservationRole(entry.role)) {
+            const observation = parseRewriteObservationPayload(entry.text);
+            const observationBody = document.createElement('div');
+            observationBody.className = 'rewrite-observation-body';
+
+            [
+                ['address', 'address', observation.address, '填写 observation 的地址结果'],
+                ['error_code', 'error_code', observation.error_code, '填写 error_code'],
+                ['error_msg', 'error_msg', observation.error_msg, '填写 error_msg'],
+            ].forEach(([fieldKey, labelText, fieldValue, placeholder]) => {
+                const field = document.createElement('label');
+                field.className = `rewrite-observation-field rewrite-observation-field--${fieldKey}`;
+
+                const label = document.createElement('span');
+                label.className = 'rewrite-observation-label';
+                label.textContent = labelText;
+
+                const input = document.createElement('input');
+                input.className = 'rewrite-observation-input';
+                input.type = 'text';
+                input.value = String(fieldValue ?? '');
+                input.placeholder = placeholder;
+                updateRewriteObservationFieldLayout(field, input, labelText);
+                input.addEventListener('focus', () => {
+                    beginRewriteEditSession(recordIndex, entry.id, fieldKey);
+                });
+                input.addEventListener('input', (event) => {
+                    updateRewriteObservationFieldLayout(field, event.target, labelText);
+                    updateRewriteObservationField(recordIndex, entry.id, fieldKey, event.target.value);
+                });
+                input.addEventListener('blur', () => {
+                    endRewriteEditSession({ force: false });
+                    updateRewriteHistoryButtons();
+                });
+
+                field.appendChild(label);
+                field.appendChild(input);
+                observationBody.appendChild(field);
+            });
+            contentNode = observationBody;
+        } else {
+            const editor = document.createElement('textarea');
+            editor.className = 'rewrite-line-editor';
+            editor.rows = 1;
+            editor.value = stripRewriteLinePrefix(entry.text || '');
+            editor.placeholder = '空框，可填写改写后的对话内容';
+            editor.addEventListener('focus', () => {
+                beginRewriteEditSession(recordIndex, entry.id, 'text');
+            });
+            editor.addEventListener('input', (event) => {
+                updateRewriteLineText(recordIndex, entry.id, event.target.value);
+            });
+            editor.addEventListener('blur', () => {
+                endRewriteEditSession({ force: false });
+                updateRewriteHistoryButtons();
+            });
+            contentNode = editor;
+        }
 
         card.addEventListener('dragover', (event) => {
             if (!rewriteDragState || rewriteDragState.lineId === entry.id) return;
@@ -2121,7 +2996,7 @@ function renderRewriteDialogue(record) {
         });
 
         body.appendChild(roleEditor);
-        body.appendChild(editor);
+        body.appendChild(contentNode);
         card.appendChild(toolbar);
         card.appendChild(body);
         rewriteDialogueOutput.appendChild(card);
@@ -2174,9 +3049,12 @@ async function importRewriteFile(file) {
     rewriteRecordHistoryCache.clear();
     rewriteActiveEditSession = null;
     const text = await file.text();
-    const { records, format } = parseRewriteRecords(text, file.name);
-    rewriteRecords = records;
-    rewriteAvailableRoles = collectRewriteAvailableRoles(records);
+    const { parsed, format } = parseRewriteSourcePayload(text, file.name);
+    await resolveRewriteImportPreferences(parsed);
+    const records = parseRewriteRecords(parsed, { dialogueKeyOverride: rewriteDialogueKeyPreference });
+    rewriteImportedRecords = cloneRewriteRecordData(records) || [];
+    rewriteRecords = cloneRewriteRecordData(records) || [];
+    rewriteAvailableRoles = collectRewriteAvailableRoles(rewriteRecords);
     rewriteSelectedIndex = -1;
     rewriteSourceName = file.name;
     rewriteSourceFormat = format;
@@ -4378,6 +5256,87 @@ rewriteUndoButton.addEventListener('click', () => {
 rewriteRedoButton.addEventListener('click', () => {
     redoRewriteChange();
 });
+if (rewriteSubmitButton) {
+    rewriteSubmitButton.addEventListener('click', () => {
+        submitCurrentRewriteRecord();
+    });
+}
+if (rewriteExportButton) {
+    rewriteExportButton.addEventListener('click', () => {
+        exportRewriteFile();
+    });
+}
+if (rewriteExportCloseButton) {
+    rewriteExportCloseButton.addEventListener('click', () => {
+        closeRewriteExportModal();
+        if (rewriteUploadStatus) {
+            rewriteUploadStatus.textContent = '已取消导出，存在未提交或未标注数据。';
+        }
+    });
+}
+if (rewriteExportCancelButton) {
+    rewriteExportCancelButton.addEventListener('click', () => {
+        closeRewriteExportModal();
+        if (rewriteUploadStatus) {
+            rewriteUploadStatus.textContent = '已取消导出，存在未提交或未标注数据。';
+        }
+    });
+}
+if (rewriteExportConfirmButton) {
+    rewriteExportConfirmButton.addEventListener('click', () => {
+        const pendingAction = rewritePendingExportAction;
+        if (typeof pendingAction === 'function') {
+            pendingAction();
+        } else {
+            closeRewriteExportModal();
+        }
+    });
+}
+if (rewriteExportModal) {
+    rewriteExportModal.addEventListener('click', (event) => {
+        if (event.target === rewriteExportModal || event.target.classList.contains('modal-backdrop')) {
+            closeRewriteExportModal();
+            if (rewriteUploadStatus) {
+                rewriteUploadStatus.textContent = '已取消导出，存在未提交或未标注数据。';
+            }
+        }
+    });
+}
+if (rewriteKeyCloseButton) {
+    rewriteKeyCloseButton.addEventListener('click', () => {
+        cancelRewriteKeyPrompt();
+    });
+}
+if (rewriteKeyCancelButton) {
+    rewriteKeyCancelButton.addEventListener('click', () => {
+        cancelRewriteKeyPrompt();
+    });
+}
+if (rewriteKeyConfirmButton) {
+    rewriteKeyConfirmButton.addEventListener('click', () => {
+        confirmRewriteKeyPrompt();
+    });
+}
+if (rewriteKeyInput) {
+    rewriteKeyInput.addEventListener('input', () => {
+        if (rewriteKeyError) {
+            rewriteKeyError.classList.add('hidden');
+        }
+    });
+    rewriteKeyInput.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter') {
+            event.preventDefault();
+            confirmRewriteKeyPrompt();
+        }
+    });
+}
+if (rewriteKeyModal) {
+    rewriteKeyModal.addEventListener('click', (event) => {
+        if (event.target === rewriteKeyModal || event.target.classList.contains('modal-backdrop')) {
+            cancelRewriteKeyPrompt();
+        }
+    });
+}
 rewriteFileInput.addEventListener('change', async (event) => {
     const [file] = Array.from(event.target.files || []);
     if (!file) return;
