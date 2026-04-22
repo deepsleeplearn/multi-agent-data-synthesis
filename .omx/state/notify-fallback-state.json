@@ -6,7 +6,7 @@
   "notify_script": "/opt/homebrew/lib/node_modules/oh-my-codex/dist/scripts/notify-hook.js",
   "authority_only": false,
   "poll_ms": 250,
-  "effective_poll_ms": 250,
+  "effective_poll_ms": 1000,
   "idle_max_poll_ms": 1000,
   "pid_file": "/Users/gj/Documents/vsfile/Css-Data-Synthesis-Test/.omx/state/notify-fallback.pid",
   "max_lifetime_ms": 21600000,
@@ -15,9 +15,9 @@
   "dispatch_drain": {
     "enabled": true,
     "max_per_tick": 5,
-    "run_count": 18130,
+    "run_count": 18289,
     "leader_only": true,
-    "last_tick_at": "2026-04-22T05:55:41.677Z",
+    "last_tick_at": "2026-04-22T05:57:57.562Z",
     "last_result": {
       "processed": 0,
       "skipped": 0,
@@ -29,17 +29,17 @@
     "enabled": true,
     "leader_only": true,
     "stale_threshold_ms": 180000,
-    "precomputed_leader_stale": true,
-    "last_tick_at": "2026-04-22T05:55:41.677Z",
+    "precomputed_leader_stale": false,
+    "last_tick_at": "2026-04-22T05:57:57.562Z",
     "last_error": null,
-    "run_count": 18130
+    "run_count": 18289
   },
   "ralph_continue_steer": {
     "enabled": true,
     "cadence_ms": 60000,
     "message": "Ralph loop active continue",
     "active": false,
-    "last_state_check_at": "2026-04-22T05:55:41.680Z",
+    "last_state_check_at": "2026-04-22T05:57:57.564Z",
     "last_sent_at": "",
     "cooldown_anchor_at": "",
     "last_reason": "blocked_by_current_session",
@@ -57,7 +57,7 @@
   "fallback_auto_nudge": {
     "enabled": true,
     "stall_ms": 5000,
-    "last_tick_at": "2026-04-22T05:55:41.679Z",
+    "last_tick_at": "2026-04-22T05:57:57.563Z",
     "last_turn_at": "2026-04-22T04:36:59.881Z",
     "last_turn_count": 0,
     "last_message": "",
@@ -78,11 +78,11 @@
     "enabled": true,
     "base_ms": 250,
     "max_ms": 1000,
-    "current_ms": 250,
-    "idle_streak": 0,
-    "last_tick_at": "2026-04-22T05:55:41.680Z",
-    "last_activity_at": "2026-04-22T05:55:41.680Z",
-    "last_activity_reason": "leader_nudge"
+    "current_ms": 1000,
+    "idle_streak": 126,
+    "last_tick_at": "2026-04-22T05:57:57.564Z",
+    "last_activity_at": "2026-04-22T05:55:50.185Z",
+    "last_activity_reason": "hud_state_incomplete"
   },
-  "last_cycle_activity": "leader_nudge"
+  "last_cycle_activity": "hud_state_incomplete"
 }
