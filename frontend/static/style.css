@@ -2788,7 +2788,22 @@ select:focus {
 .modal-actions {
     display: flex;
     justify-content: flex-end;
+    gap: 0.75rem;
+    flex-wrap: wrap;
     margin-top: 1rem;
+}
+
+.review-rewrite-btn {
+    border-color: rgba(205, 146, 69, 0.38);
+    background: linear-gradient(135deg, rgba(255, 244, 219, 0.96) 0%, rgba(255, 234, 192, 0.98) 100%);
+    color: #8c5a12;
+    font-weight: 700;
+    box-shadow: 0 10px 24px rgba(196, 142, 48, 0.14);
+}
+
+.review-rewrite-btn:hover:not(:disabled) {
+    border-color: rgba(205, 146, 69, 0.56);
+    box-shadow: 0 14px 28px rgba(196, 142, 48, 0.2);
 }
 
 .rewrite-export-modal-card {

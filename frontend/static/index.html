@@ -126,6 +126,7 @@
                 <div class="status-group">
                     <span id="session-status" class="status-badge idle">未开始</span>
                     <span id="round-indicator" class="round-indicator">下一轮: -</span>
+                    <button id="auto-mode-btn" class="secondary-btn hidden" type="button">自动模式</button>
                     <button id="review-toggle-btn" class="secondary-btn hidden" type="button">打开评审</button>
                     <button id="end-session-btn" class="secondary-btn" disabled>强制结束会话</button>
                     <button id="mode-switch-btn" class="secondary-btn" type="button">切换改写</button>
@@ -519,7 +520,7 @@
             </label>
 
             <div class="modal-actions">
-                <button id="review-to-rewrite-btn" class="secondary-btn" type="button">转到改写模式</button>
+                <button id="review-to-rewrite-btn" class="secondary-btn review-rewrite-btn" type="button">转到改写模式继续编辑</button>
                 <button id="review-submit-btn" class="primary-btn">提交评审</button>
             </div>
         </section>

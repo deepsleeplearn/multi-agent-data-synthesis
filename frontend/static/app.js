@@ -9,6 +9,7 @@ let sessionTerminalEntries = [];
 let reviewPending = false;
 let reviewAvailable = false;
 let reviewContext = null;
+let reviewSourceMode = 'manual';
 let authenticatedUser = null;
 let sessionStartedAt = '';
 let sessionEndedAt = '';
@@ -31,6 +32,9 @@ let cursorTrailInitialized = false;
 let cursorTrailPoints = [];
 let cursorTrailLastTimestamp = 0;
 let sessionIdCopyFeedbackTimer = null;
+let autoModeJobId = '';
+let autoModePollTimer = null;
+let autoModePollInFlight = false;
 let chatMessages = [];
 let chatLatestMessageId = 0;
 let chatPollTimer = null;
@@ -111,6 +115,7 @@ const loginPasswordToggle = document.getElementById('login-password-toggle');
 const loginPasswordToggleLabel = document.getElementById('login-password-toggle-label');
 const loginButton = document.getElementById('login-btn');
 const startSessionButton = document.getElementById('start-session-btn');
+const autoModeButton = document.getElementById('auto-mode-btn');
 const authUserName = document.getElementById('auth-user-name');
 const authUserMeta = document.getElementById('auth-user-meta');
 const knownAddressInput = document.getElementById('known-address');
@@ -124,6 +129,7 @@ const modeSwitchButton = document.getElementById('mode-switch-btn');
 const reviewModal = document.getElementById('review-modal');
 const rewriteExportModal = document.getElementById('rewrite-export-modal');
 const rewriteKeyModal = document.getElementById('rewrite-key-modal');
+const reviewChoiceGroup = document.querySelector('.review-choice-group');
 const reviewCloseButton = document.getElementById('review-close-btn');
 const reviewToggleButton = document.getElementById('review-toggle-btn');
 const reviewSummary = document.getElementById('review-summary');
@@ -131,6 +137,7 @@ const reviewErrorFields = document.getElementById('review-error-fields');
 const failedFlowStageSelect = document.getElementById('failed-flow-stage');
 const reviewNotes = document.getElementById('review-notes');
 const reviewPersistCheckbox = document.getElementById('review-persist-to-db');
+const reviewPersistToggle = reviewPersistCheckbox?.closest('.toggle') || null;
 const reviewSubmitButton = document.getElementById('review-submit-btn');
 const reviewToRewriteButton = document.getElementById('review-to-rewrite-btn');
 const terminalScrollRegion = document.getElementById('terminal-scroll-region');
@@ -976,6 +983,23 @@ function updateModeSwitchButtons() {
     if (rewriteBackButton) rewriteBackButton.disabled = !canSwitch;
 }
 
+function isTestAdminUser() {
+    return String(authenticatedUser?.display_name || '').trim() === '测试管理员';
+}
+
+function updateAutoModeButtonState() {
+    if (!autoModeButton) return;
+    const shouldShow = Boolean(authenticatedUser) && activeAppMode === 'manual' && isTestAdminUser();
+    autoModeButton.classList.toggle('hidden', !shouldShow);
+    autoModeButton.disabled = !shouldShow
+        || !selectedScenario
+        || sessionBusy
+        || (currentSessionId && !sessionClosed)
+        || reviewPending
+        || isReviewModalVisible()
+        || !isCallStartTimeValid();
+}
+
 function syncAppModeView() {
     const showManual = Boolean(authenticatedUser) && activeAppMode === 'manual';
     const showRewrite = Boolean(authenticatedUser) && activeAppMode === 'rewrite';
@@ -990,6 +1014,7 @@ function syncAppModeView() {
     }
     updateChatLauncher();
     updateModeSwitchButtons();
+    updateAutoModeButtonState();
     updateRewriteHistoryButtons();
     if (showRewrite) {
         window.requestAnimationFrame(() => {
@@ -2095,11 +2120,13 @@ function buildRewriteRecordFromSessionEntries() {
         }
     });
     if (!dialogueProcess.length) return null;
+    const recordId = currentSessionId || autoModeJobId || `manual-${Date.now()}`;
     return {
-        session_id: currentSessionId || `manual-${Date.now()}`,
-        id: currentSessionId || `manual-${Date.now()}`,
+        session_id: currentSessionId || '',
+        auto_mode_id: autoModeJobId || '',
+        id: recordId,
         dialogue_process: dialogueProcess,
-        source: 'manual_test',
+        source: autoModeJobId && !currentSessionId ? 'auto_mode' : 'manual_test',
     };
 }
 
@@ -2120,7 +2147,7 @@ function appendCurrentSessionToRewriteMode() {
     rewriteImportedRecords.push(cloneRewriteRecordData(record));
     rewriteRecords.push(cloneRewriteRecordData(record));
     if (!rewriteSourceName) {
-        rewriteSourceName = 'manual_session_export.json';
+        rewriteSourceName = record.source === 'auto_mode' ? 'auto_mode_export.json' : 'manual_session_export.json';
     }
     if (!rewriteSourceFormat) {
         rewriteSourceFormat = 'json';
@@ -2131,7 +2158,9 @@ function appendCurrentSessionToRewriteMode() {
     renderRewriteFileInfo();
     renderRewriteRecordList();
     const targetIndex = rewriteRecords.length - 1;
-    setRewriteUploadStatus(`已将测试数据追加到改写模式，共 ${rewriteRecords.length} 条记录。`);
+    setRewriteUploadStatus(
+        `${record.source === 'auto_mode' ? '已将自动模式数据' : '已将测试数据'}追加到改写模式，共 ${rewriteRecords.length} 条记录。`
+    );
     selectRewriteRecord(targetIndex);
 }
 
@@ -3293,6 +3322,7 @@ function updateStartSessionButtonState() {
         && !isReviewModalVisible()
         && isCallStartTimeValid();
     startSessionButton.disabled = !canStart;
+    updateAutoModeButtonState();
 }
 
 function sanitizeCloneElementIds(root) {
@@ -3655,17 +3685,23 @@ function setNextRound(roundIndex) {
     document.getElementById('command-prompt').textContent = `[${nextRoundIndex}] 用户:`;
 }
 
-function setSessionIdIndicator(sessionId) {
+function setSessionIdIndicator(sessionId, options = {}) {
     const indicator = document.getElementById('session-id-indicator');
     if (!indicator || !sessionIdCopyButton) return;
+    const {
+        label = 'Session ID',
+        titleReady = '点击复制完整 Session ID',
+        titleEmpty = '启动会话后可复制 Session ID',
+    } = options;
     const normalized = String(sessionId || '').trim();
     indicator.textContent = normalized || '-';
     sessionIdCopyButton.disabled = !normalized;
-    sessionIdCopyButton.title = normalized ? '点击复制完整 Session ID' : '启动会话后可复制 Session ID';
+    sessionIdCopyButton.title = normalized ? titleReady : titleEmpty;
     sessionIdCopyButton.dataset.sessionId = normalized;
     sessionIdCopyButton.dataset.copied = 'false';
+    sessionIdCopyButton.dataset.label = label;
     const labelNode = sessionIdCopyButton.querySelector('.session-id-copy-label');
-    if (labelNode) labelNode.textContent = 'Session ID';
+    if (labelNode) labelNode.textContent = label;
     if (sessionIdCopyFeedbackTimer !== null) {
         window.clearTimeout(sessionIdCopyFeedbackTimer);
         sessionIdCopyFeedbackTimer = null;
@@ -3697,7 +3733,7 @@ async function copyCurrentSessionId() {
     }
     sessionIdCopyFeedbackTimer = window.setTimeout(() => {
         const currentLabelNode = sessionIdCopyButton.querySelector('.session-id-copy-label');
-        if (currentLabelNode) currentLabelNode.textContent = 'Session ID';
+        if (currentLabelNode) currentLabelNode.textContent = sessionIdCopyButton.dataset.label || 'Session ID';
         sessionIdCopyButton.dataset.copied = 'false';
         sessionIdCopyFeedbackTimer = null;
     }, 1600);
@@ -3705,6 +3741,8 @@ async function copyCurrentSessionId() {
 
 function updateInputAvailability(enabled) {
     const endButton = document.getElementById('end-session-btn');
+    const hasRunningManualSession = Boolean(currentSessionId) && !sessionClosed;
+    const hasRunningAutoMode = Boolean(autoModeJobId) && !sessionClosed;
     const canInteract = enabled
         && !sessionBusy
         && !reviewPending
@@ -3713,7 +3751,14 @@ function updateInputAvailability(enabled) {
         && !sessionReviewLocked;
     userInput.disabled = !canInteract;
     sendButton.disabled = !canInteract;
-    endButton.disabled = !currentSessionId || sessionClosed || !authenticatedUser || sessionBusy || sessionReviewLocked;
+    if (endButton) {
+        endButton.disabled = (!hasRunningManualSession && !hasRunningAutoMode)
+            || !authenticatedUser
+            || sessionBusy
+            || sessionReviewLocked;
+        endButton.textContent = hasRunningAutoMode ? '强制结束自动模式' : '强制结束会话';
+        endButton.title = hasRunningAutoMode ? '强制中断当前自动模式任务' : '强制结束当前手工测试会话';
+    }
     if (canInteract) userInput.focus();
     updateModeSwitchButtons();
 }
@@ -3752,11 +3797,15 @@ function resetReviewState() {
     reviewPending = false;
     reviewAvailable = false;
     reviewContext = null;
+    reviewSourceMode = 'manual';
     hideReviewModal();
     document.querySelectorAll('input[name="review-correctness"]').forEach((input) => {
         input.checked = false;
     });
     reviewErrorFields.classList.add('hidden');
+    reviewChoiceGroup?.classList.remove('hidden');
+    reviewPersistToggle?.classList.remove('hidden');
+    reviewSubmitButton?.classList.remove('hidden');
     failedFlowStageSelect.innerHTML = '<option value="">请选择出错流程</option>';
     failedFlowStageSelect.value = '';
     reviewNotes.value = '';
@@ -3776,13 +3825,24 @@ function syncReviewErrorFields() {
 }
 
 function openReviewModal(data, { blocking = true } = {}) {
-    if (!data.review_required || !currentSessionId) return;
+    const reviewIdentifier = String(data?.session_id || data?.auto_mode_id || '').trim();
+    if (!data.review_required || !reviewIdentifier) return;
     reviewPending = blocking;
     reviewAvailable = true;
     reviewContext = data;
-    reviewSummary.textContent = data.status === 'completed'
-        ? `会话已正常结束。Session ID: ${currentSessionId}。请标记当前测试流程是否正确。`
-        : `会话已结束。Session ID: ${currentSessionId}。请标记当前测试流程是否正确，并在有问题时指出出错流程。`;
+    syncReviewModalMode(data);
+    const isAutoModeReview = String(data?.mode || '').trim() === 'auto_mode';
+    if (isAutoModeReview) {
+        reviewSummary.textContent = `自动模式已结束。Auto ID: ${reviewIdentifier}。如需继续处理这段对话，请点击下方“转到改写模式继续编辑”。`;
+    } else {
+        reviewSummary.textContent = data.status === 'completed'
+            ? `会话已正常结束。Session ID: ${currentSessionId}。如需继续处理这段对话，可点击下方“转到改写模式继续编辑”；否则请标记当前测试流程是否正确。`
+            : `会话已结束。Session ID: ${currentSessionId}。如需继续处理这段对话，可点击下方“转到改写模式继续编辑”；否则请标记当前测试流程是否正确，并在有问题时指出出错流程。`;
+    }
+    if (reviewToRewriteButton) {
+        reviewToRewriteButton.textContent = '转到改写模式继续编辑';
+        reviewToRewriteButton.title = '将当前测试生成的对话直接送到改写模式继续编辑';
+    }
     failedFlowStageSelect.innerHTML = '<option value="">请选择出错流程</option>';
     (data.review_options || []).forEach((option) => {
         const element = document.createElement('option');
@@ -3797,17 +3857,21 @@ function openReviewModal(data, { blocking = true } = {}) {
 }
 
 function prepareOptionalReview(data) {
-    if (!data.review_required || !currentSessionId) return;
+    const reviewIdentifier = String(data?.session_id || data?.auto_mode_id || '').trim();
+    if (!data.review_required || !reviewIdentifier) return;
     reviewPending = false;
     reviewAvailable = true;
     reviewContext = data;
+    syncReviewModalMode(data);
     updateReviewToggleButton();
 }
 
 function applySessionView(data) {
     if (!data || !data.session_id) return;
 
+    stopAutoModePolling();
     currentSessionId = data.session_id;
+    autoModeJobId = '';
     currentSlotKeys = Object.keys(data.collected_slots || {});
     sessionClosed = Boolean(data.session_closed);
     sessionTerminalEntries = Array.isArray(data.terminal_entries) ? data.terminal_entries : [];
@@ -4893,6 +4957,7 @@ function setAuthError(message = '') {
 function resetWorkspace() {
     selectedScenario = null;
     currentSessionId = null;
+    stopAutoModePolling();
     currentSlotKeys = [];
     sessionClosed = true;
     sessionBusy = false;
@@ -4941,6 +5006,7 @@ function applyAuthenticatedState(user) {
 
 function applyLoggedOutState(message = '') {
     authenticatedUser = null;
+    stopAutoModePolling();
     authUserName.textContent = '未登录';
     authUserMeta.textContent = '只有备案账号可访问测试台。';
     appShell.classList.add('hidden');
@@ -5158,6 +5224,20 @@ function reopenReviewModal() {
     openReviewModal(reviewContext, { blocking: reviewPending });
 }
 
+function syncReviewModalMode(data = {}) {
+    const isAutoModeReview = String(data?.mode || reviewSourceMode || '').trim() === 'auto_mode';
+    reviewSourceMode = isAutoModeReview ? 'auto_mode' : 'manual';
+    reviewChoiceGroup?.classList.toggle('hidden', isAutoModeReview);
+    reviewPersistToggle?.classList.toggle('hidden', isAutoModeReview);
+    reviewSubmitButton?.classList.toggle('hidden', isAutoModeReview);
+    if (isAutoModeReview) {
+        reviewErrorFields.classList.add('hidden');
+        document.querySelectorAll('input[name="review-correctness"]').forEach((input) => {
+            input.checked = false;
+        });
+    }
+}
+
 async function startSession() {
     if (reviewPending) {
         appendTerminalLine('请先完成上一条测试记录的评审；如已关闭弹窗，可点击“打开评审”继续。', 'error');
@@ -5216,7 +5296,176 @@ async function startSession() {
     }
 }
 
+function applyAutoModeView(data) {
+    autoModeJobId = String(data?.job_id || autoModeJobId || '').trim();
+    currentSessionId = null;
+    currentSlotKeys = Object.keys(data?.collected_slots || {});
+    sessionClosed = Boolean(data?.session_closed);
+    sessionTerminalEntries = Array.isArray(data?.terminal_entries) ? data.terminal_entries : [];
+    sessionReviewLocked = false;
+    sessionStartedAt = String(data?.started_at || '').trim();
+    sessionEndedAt = String(data?.ended_at || '').trim();
+    resetReviewState();
+    setSessionStatus(data?.status || 'completed');
+    setSessionIdIndicator(data?.auto_mode_id || '', {
+        label: 'Auto ID',
+        titleReady: '点击复制完整自动模式 ID',
+        titleEmpty: '自动模式启动后可复制 Auto ID',
+    });
+    setNextRound(Number(data?.next_round_index || 1) || 1);
+    updateScenarioHeader(data?.scenario || null);
+    updateSessionContext(data?.scenario || null, data?.session_config || {});
+    updateInspector(data?.collected_slots || {}, data?.runtime_state || {}, data?.scenario || null);
+    renderTerminalEntries(sessionTerminalEntries);
+    hideIssueReferencePopover();
+    closeTerminalTurnMenu();
+    syncSessionTimer();
+    updateInputAvailability(false);
+    if (Boolean(data?.session_closed) && Boolean(data?.job_done)) {
+        resetReviewState();
+        openReviewModal(
+            {
+                review_required: true,
+                mode: 'auto_mode',
+                auto_mode_id: data?.auto_mode_id || autoModeJobId,
+                status: data?.status || 'completed',
+                review_options: [],
+                persist_to_db_default: false,
+            },
+            { blocking: false },
+        );
+    }
+}
+
+function stopAutoModePolling() {
+    autoModeJobId = '';
+    autoModePollInFlight = false;
+    if (autoModePollTimer !== null) {
+        window.clearTimeout(autoModePollTimer);
+        autoModePollTimer = null;
+    }
+}
+
+function scheduleAutoModePoll(delayMs = 700) {
+    if (!autoModeJobId) return;
+    if (autoModePollTimer !== null) {
+        window.clearTimeout(autoModePollTimer);
+    }
+    autoModePollTimer = window.setTimeout(() => {
+        autoModePollTimer = null;
+        void pollAutoModeJob();
+    }, delayMs);
+}
+
+async function pollAutoModeJob() {
+    if (!autoModeJobId || autoModePollInFlight) return;
+    autoModePollInFlight = true;
+    let errorMessage = '';
+    try {
+        const data = await apiFetch(`/api/session/auto-mode/${encodeURIComponent(autoModeJobId)}`);
+        applyAutoModeView(data);
+        if (data?.job_done) {
+            stopAutoModePolling();
+            setSessionBusyState(false);
+            return;
+        }
+        scheduleAutoModePoll();
+    } catch (error) {
+        errorMessage = error.message;
+        stopAutoModePolling();
+        setSessionBusyState(false);
+    } finally {
+        autoModePollInFlight = false;
+        if (errorMessage) {
+            appendTerminalLine(`[系统错误] ${errorMessage}`, 'error');
+        }
+    }
+}
+
+async function runAutoMode() {
+    if (!isTestAdminUser()) return;
+    if (reviewPending) {
+        appendTerminalLine('请先完成上一条测试记录的评审；如已关闭弹窗，可点击“打开评审”继续。', 'error');
+        return;
+    }
+    if (!selectedScenario) {
+        appendTerminalLine('请先在左侧选择一个场景。', 'error');
+        return;
+    }
+    if (!updateCallStartTimeValidationState()) {
+        updateStartSessionButtonState();
+        return;
+    }
+    if (currentSessionId && !sessionClosed) {
+        appendTerminalLine('请先结束当前手工测试会话，再执行自动模式。', 'error');
+        return;
+    }
+
+    const payload = {
+        scenario_id: selectedScenario.id,
+        auto_generate_hidden_settings: document.getElementById('auto-hidden-settings').checked,
+        known_address: knownAddressInput.value,
+        call_start_time: callStartTimeInput.value.trim(),
+        use_session_start_time_as_call_start_time: useSessionStartTimeCheckbox.checked,
+        persist_to_db: document.getElementById('persist-to-db').checked,
+    };
+
+    stopAutoModePolling();
+    terminalOutput.innerHTML = '';
+    appendTerminalLine('正在执行自动模式...', 'system');
+    setSessionBusyState(true);
+    let errorMessage = '';
+    try {
+        const data = await apiFetch('/api/session/auto-mode', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        });
+        applyAutoModeView(data);
+        if (data?.job_done) {
+            stopAutoModePolling();
+            setSessionBusyState(false);
+        } else {
+            autoModeJobId = String(data?.job_id || '').trim();
+            scheduleAutoModePoll();
+        }
+    } catch (error) {
+        errorMessage = error.message;
+        stopAutoModePolling();
+        setSessionBusyState(false);
+    } finally {
+        if (errorMessage) {
+            appendTerminalLine(`[系统错误] ${errorMessage}`, 'error');
+        }
+    }
+}
+
 async function forceEndSession() {
+    if (autoModeJobId && !sessionClosed) {
+        setSessionBusyState(true);
+        let errorMessage = '';
+        try {
+            const data = await apiFetch(`/api/session/auto-mode/${encodeURIComponent(autoModeJobId)}/abort`, {
+                method: 'POST',
+            });
+            applyAutoModeView(data);
+            if (data?.job_done) {
+                stopAutoModePolling();
+                setSessionBusyState(false);
+            } else {
+                scheduleAutoModePoll(450);
+            }
+        } catch (error) {
+            errorMessage = error.message;
+            setSessionBusyState(false);
+        } finally {
+            if (errorMessage) {
+                appendTerminalLine(`[系统错误] ${errorMessage}`, 'error');
+            }
+        }
+        return;
+    }
+
     if (!currentSessionId || sessionClosed) return;
 
     setSessionBusyState(true);
@@ -5342,6 +5591,7 @@ loginForm.addEventListener('submit', login);
 loginPasswordToggle.addEventListener('click', togglePasswordVisibility);
 document.getElementById('logout-btn').onclick = logout;
 startSessionButton.onclick = startSession;
+if (autoModeButton) autoModeButton.onclick = runAutoMode;
 document.getElementById('end-session-btn').onclick = forceEndSession;
 modeSwitchButton.addEventListener('click', () => {
     if (modeSwitchButton.disabled) return;

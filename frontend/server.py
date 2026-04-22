@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import sqlite3
 import sys
@@ -38,7 +39,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 try:
     from css_data_synthesis_test.address_utils import extract_address_components
-    from css_data_synthesis_test.agents import ServiceAgent
+    from css_data_synthesis_test.agents import ServiceAgent, UserAgent
     from css_data_synthesis_test.cli import (
         _hydrate_manual_test_scenario_locally,
         _manual_test_requires_generated_hidden_settings,
@@ -47,6 +48,7 @@ try:
     from css_data_synthesis_test.config import load_config
     from css_data_synthesis_test.function_call import (
         build_address_model_observation,
+        format_address_observation_line,
     )
     from css_data_synthesis_test.hidden_settings_tool import (
         HiddenSettingsTool,
@@ -115,6 +117,8 @@ except Exception as exc:  # pragma: no cover
 
 sessions: dict[str, dict[str, Any]] = {}
 auth_sessions: dict[str, dict[str, Any]] = {}
+auto_mode_jobs: dict[str, dict[str, Any]] = {}
+AUTO_MODE_JOB_LOCK = threading.RLock()
 SESSION_REVIEW_DB_PATH = PROJECT_ROOT / "outputs" / "frontend_manual_test.sqlite3"
 SESSION_REVIEW_DB_LOCK = threading.RLock()
 _SESSION_REVIEW_DB_STATE_PATH: Path | None = None
@@ -164,6 +168,26 @@ def _build_service_policy():
         product_routing_apply_probability=config.product_routing_apply_probability,
     )
     return service_agent.policy
+
+
+def _build_service_agent() -> ServiceAgent:
+    return ServiceAgent(
+        llm_client,
+        model=config.service_agent_model,
+        temperature=config.default_temperature,
+        ok_prefix_probability=config.service_ok_prefix_probability,
+        product_routing_enabled=config.product_routing_enabled,
+        product_routing_apply_probability=config.product_routing_apply_probability,
+    )
+
+
+def _build_user_agent() -> UserAgent:
+    return UserAgent(
+        llm_client,
+        model=config.user_agent_model,
+        temperature=config.default_temperature,
+        second_round_include_issue_probability=config.second_round_include_issue_probability,
+    )
 
 
 def _session_redis_client():
@@ -955,6 +979,319 @@ def _prepare_manual_test_scenario(req: StartSessionRequest) -> tuple[Scenario, s
         config_max_rounds=config.max_rounds,
     )
     return scenario, known_address_notice, rounds_limit
+
+
+def _create_auto_mode_job(req: StartSessionRequest) -> tuple[str, dict[str, Any]]:
+    scenario, known_address_notice, rounds_limit = _prepare_manual_test_scenario(req)
+    scenario = replace(scenario, max_turns=rounds_limit)
+    required_slots = effective_required_slots(scenario)
+    collected_slots = {slot: "" for slot in required_slots}
+    for slot in SUPPLEMENTARY_COLLECTED_SLOTS:
+        collected_slots.setdefault(slot, "")
+    collected_slots["product_routing_result"] = str(
+        scenario.hidden_context.get("product_routing_result", "")
+    ).strip()
+
+    started_at = _current_display_timestamp()
+    auto_mode_id = f"auto-{datetime.now(DISPLAY_TIMEZONE).strftime('%Y%m%d%H%M%S')}-{uuid.uuid4().hex[:8]}"
+    session = {
+        "auto_mode_id": auto_mode_id,
+        "scenario": scenario,
+        "runtime_state": ServiceRuntimeState(),
+        "transcript": [],
+        "terminal_entries": [],
+        "required_slots": required_slots,
+        "collected_slots": collected_slots,
+        "rounds_limit": rounds_limit,
+        "status": "active",
+        "started_at": started_at,
+        "ended_at": "",
+        "session_config": {
+            "scenario_id": scenario.scenario_id,
+            "known_address": _sanitize_manual_user_text(req.known_address),
+            "call_start_time": scenario.call_start_time,
+            "use_session_start_time_as_call_start_time": bool(req.use_session_start_time_as_call_start_time),
+            "max_rounds": req.max_rounds,
+            "auto_generate_hidden_settings": bool(req.auto_generate_hidden_settings),
+            "persist_to_db": bool(req.persist_to_db),
+        },
+    }
+    _append_terminal_lines(
+        session,
+        lines=[
+            f"自动模式场景: {scenario.scenario_id}",
+            f"轮次上限: {rounds_limit}",
+            known_address_notice,
+            "自动模式正在逐轮生成，请稍候...",
+        ],
+        tone="system",
+        round_count_snapshot=0,
+    )
+    job_id = str(uuid.uuid4())
+    job = {
+        "session": session,
+        "done": False,
+        "error": "",
+        "abort_requested": False,
+        "created_at": time.time(),
+        "updated_at": time.time(),
+    }
+    with AUTO_MODE_JOB_LOCK:
+        auto_mode_jobs[job_id] = job
+    return job_id, job
+
+
+def _build_auto_mode_job_view(job_id: str, job: dict[str, Any]) -> dict[str, Any]:
+    session = job["session"]
+    transcript = session["transcript"]
+    return {
+        "job_id": job_id,
+        "auto_mode_id": str(session.get("auto_mode_id", "")).strip(),
+        "mode": "auto_mode",
+        "status": session["status"],
+        "scenario": session["scenario"].to_dict(),
+        "session_config": dict(session.get("session_config", {})),
+        "required_slots": list(session["required_slots"]),
+        "collected_slots": dict(session["collected_slots"]),
+        "runtime_state": _build_runtime_state_view(session),
+        "rounds_limit": session["rounds_limit"],
+        "started_at": str(session.get("started_at", "")).strip(),
+        "ended_at": str(session.get("ended_at", "")).strip(),
+        "session_closed": bool(job.get("done")),
+        "next_round_index": _next_round_index(transcript),
+        "completed_rounds": _completed_round_count(transcript),
+        "terminal_entries": _copy_terminal_entries(session.get("terminal_entries", [])),
+        "job_done": bool(job.get("done")),
+        "job_error": str(job.get("error", "")).strip(),
+    }
+
+
+def _normalize_auto_mode_service_action(
+    action: dict[str, Any] | ServicePolicyResult,
+    *,
+    policy: ServiceDialoguePolicy,
+) -> dict[str, Any]:
+    if isinstance(action, ServicePolicyResult):
+        return {
+            "reply": action.reply,
+            "slot_updates": dict(action.slot_updates),
+            "is_ready_to_close": bool(action.is_ready_to_close),
+            "close_status": str(action.close_status or "").strip(),
+            "close_reason": str(action.close_reason or "").strip(),
+            "used_model_intent_inference": bool(
+                getattr(policy, "last_used_model_intent_inference", False)
+            ),
+        }
+    return {
+        "reply": str(action.get("reply", "")).strip(),
+        "slot_updates": dict(action.get("slot_updates", {})),
+        "is_ready_to_close": bool(action.get("is_ready_to_close", False)),
+        "close_status": str(action.get("close_status", "")).strip(),
+        "close_reason": str(action.get("close_reason", "")).strip(),
+        "used_model_intent_inference": bool(action.get("used_model_intent_inference", False)),
+    }
+
+
+def _finalize_auto_mode_job(
+    job_id: str,
+    *,
+    status_value: str = "",
+    error_message: str = "",
+) -> None:
+    with AUTO_MODE_JOB_LOCK:
+        job = auto_mode_jobs.get(job_id)
+        if not job:
+            return
+        session = job["session"]
+        session["status"] = status_value or ("error" if error_message else session.get("status", "completed"))
+        session["ended_at"] = _current_display_timestamp()
+        if error_message:
+            _append_terminal_lines(
+                session,
+                lines=[f"[自动模式错误] {error_message}"],
+                tone="error",
+                round_count_snapshot=_completed_round_count(session.get("transcript", [])),
+            )
+        job["done"] = True
+        job["error"] = error_message
+        job["updated_at"] = time.time()
+
+
+def _is_auto_mode_abort_requested(job_id: str) -> bool:
+    with AUTO_MODE_JOB_LOCK:
+        job = auto_mode_jobs.get(job_id)
+        if not job:
+            return True
+        return bool(job.get("abort_requested"))
+
+
+def _run_auto_mode_job_thread(job_id: str) -> None:
+    asyncio.run(_run_auto_mode_job_async(job_id))
+
+
+async def _run_auto_mode_job_async(job_id: str) -> None:
+    with AUTO_MODE_JOB_LOCK:
+        job = auto_mode_jobs.get(job_id)
+        if not job:
+            return
+        session = job["session"]
+        scenario = session["scenario"]
+        runtime_state = session["runtime_state"]
+        transcript = session["transcript"]
+        collected_slots = session["collected_slots"]
+        required_slots = session["required_slots"]
+        rounds_limit = int(session["rounds_limit"])
+        job["updated_at"] = time.time()
+
+    service_agent = _build_service_agent()
+    user_agent = _build_user_agent()
+
+    try:
+        if _is_auto_mode_abort_requested(job_id):
+            _finalize_auto_mode_job(job_id, status_value="aborted", error_message="已强制结束自动模式。")
+            return
+        initial_user_utterance = service_agent.build_initial_user_utterance(scenario)
+        opening_user_turn = DialogueTurn(
+            speaker=USER_SPEAKER,
+            text=initial_user_utterance,
+            round_index=1,
+        )
+        with AUTO_MODE_JOB_LOCK:
+            transcript.append(opening_user_turn)
+            _append_turn_entry(session, opening_user_turn)
+            job["updated_at"] = time.time()
+        if _is_auto_mode_abort_requested(job_id):
+            _finalize_auto_mode_job(job_id, status_value="aborted", error_message="已强制结束自动模式。")
+            return
+
+        opening_action = _normalize_auto_mode_service_action(
+            service_agent.respond(
+                scenario=scenario,
+                transcript=transcript,
+                collected_slots=collected_slots,
+                runtime_state=runtime_state,
+            ),
+            policy=service_agent.policy,
+        )
+        opening_service_turn = DialogueTurn(
+            speaker=SERVICE_SPEAKER,
+            text=opening_action["reply"],
+            round_index=1,
+            model_intent_inference_used=bool(opening_action.get("used_model_intent_inference", False)),
+            previous_user_intent_model_inference_used=bool(
+                opening_action.get("used_model_intent_inference", False)
+            ),
+        )
+        with AUTO_MODE_JOB_LOCK:
+            _merge_slots(collected_slots, opening_action["slot_updates"], required_slots)
+            _merge_slots(
+                collected_slots,
+                opening_action["slot_updates"],
+                list(SUPPLEMENTARY_COLLECTED_SLOTS),
+            )
+            transcript.append(opening_service_turn)
+            _append_turn_entry(session, opening_service_turn)
+            job["updated_at"] = time.time()
+        if _is_auto_mode_abort_requested(job_id):
+            _finalize_auto_mode_job(job_id, status_value="aborted", error_message="已强制结束自动模式。")
+            return
+
+        ready_to_close = opening_action["is_ready_to_close"]
+        forced_close_status = str(opening_action.get("close_status", "")).strip()
+
+        if not forced_close_status and not (
+            ready_to_close and _all_required_slots_filled(collected_slots, required_slots)
+        ):
+            for round_index in range(2, rounds_limit + 1):
+                if _is_auto_mode_abort_requested(job_id):
+                    _finalize_auto_mode_job(job_id, status_value="aborted", error_message="已强制结束自动模式。")
+                    return
+                user_action = await user_agent.respond_async(
+                    scenario=scenario,
+                    transcript=transcript,
+                    round_index=round_index,
+                )
+                user_turn = DialogueTurn(
+                    speaker=USER_SPEAKER,
+                    text=user_action["reply"],
+                    round_index=round_index,
+                )
+                auto_address_observation = _append_address_ie_display_lines(
+                    policy=service_agent.policy,
+                    turn=user_turn,
+                    transcript=transcript + [user_turn],
+                    runtime_state=runtime_state,
+                )
+                with AUTO_MODE_JOB_LOCK:
+                    transcript.append(user_turn)
+                    _append_turn_entry(session, user_turn)
+                    job["updated_at"] = time.time()
+                if _is_auto_mode_abort_requested(job_id):
+                    _finalize_auto_mode_job(job_id, status_value="aborted", error_message="已强制结束自动模式。")
+                    return
+
+                service_action = _build_auto_address_confirmation_result(
+                    policy=service_agent.policy,
+                    runtime_state=runtime_state,
+                    observation=auto_address_observation,
+                )
+                if service_action is None:
+                    service_action = _normalize_auto_mode_service_action(
+                        service_agent.respond(
+                            scenario=scenario,
+                            transcript=transcript,
+                            collected_slots=collected_slots,
+                            runtime_state=runtime_state,
+                        ),
+                        policy=service_agent.policy,
+                    )
+                else:
+                    service_action = _normalize_auto_mode_service_action(
+                        service_action,
+                        policy=service_agent.policy,
+                    )
+                service_turn = DialogueTurn(
+                    speaker=SERVICE_SPEAKER,
+                    text=service_action["reply"],
+                    round_index=round_index,
+                    model_intent_inference_used=bool(
+                        service_action.get("used_model_intent_inference", False)
+                    ),
+                    previous_user_intent_model_inference_used=bool(
+                        service_action.get("used_model_intent_inference", False)
+                    ),
+                )
+                with AUTO_MODE_JOB_LOCK:
+                    _merge_slots(collected_slots, service_action["slot_updates"], required_slots)
+                    _merge_slots(
+                        collected_slots,
+                        service_action["slot_updates"],
+                        list(SUPPLEMENTARY_COLLECTED_SLOTS),
+                    )
+                    transcript.append(service_turn)
+                    _append_turn_entry(session, service_turn)
+                    job["updated_at"] = time.time()
+                if _is_auto_mode_abort_requested(job_id):
+                    _finalize_auto_mode_job(job_id, status_value="aborted", error_message="已强制结束自动模式。")
+                    return
+
+                ready_to_close = service_action["is_ready_to_close"]
+                forced_close_status = str(service_action.get("close_status", "")).strip()
+                if forced_close_status:
+                    break
+                if ready_to_close and _all_required_slots_filled(collected_slots, required_slots):
+                    break
+
+        missing_slots = [
+            slot for slot in required_slots if not collected_slots.get(slot, "").strip()
+        ]
+        status_value = forced_close_status or (
+            "completed" if ready_to_close and not missing_slots else "incomplete"
+        )
+        _finalize_auto_mode_job(job_id, status_value=status_value)
+    except Exception as exc:
+        traceback.print_exc()
+        _finalize_auto_mode_job(job_id, status_value="error", error_message=str(exc))
 
 
 def _build_initial_lines(
@@ -2312,6 +2649,69 @@ def start_session(
     except Exception as exc:
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"初始化对话失败: {exc}") from exc
+
+
+@app.post("/api/session/auto-mode")
+async def run_auto_mode(
+    req: StartSessionRequest,
+    current_user: dict[str, str] = Depends(_require_authenticated_user),
+):
+    if not _is_chat_admin(current_user):
+        raise HTTPException(status_code=403, detail="只有测试管理员可以使用自动模式。")
+    try:
+        job_id, job = _create_auto_mode_job(req)
+        initial_view = _build_auto_mode_job_view(job_id, job)
+        worker = threading.Thread(
+            target=_run_auto_mode_job_thread,
+            args=(job_id,),
+            daemon=True,
+        )
+        worker.start()
+        return initial_view
+    except HTTPException:
+        raise
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"自动模式启动失败: {exc}") from exc
+
+
+@app.get("/api/session/auto-mode/{job_id}")
+def get_auto_mode_job(
+    job_id: str,
+    current_user: dict[str, str] = Depends(_require_authenticated_user),
+):
+    if not _is_chat_admin(current_user):
+        raise HTTPException(status_code=403, detail="只有测试管理员可以使用自动模式。")
+    with AUTO_MODE_JOB_LOCK:
+        job = auto_mode_jobs.get(job_id)
+        if not job:
+            raise HTTPException(status_code=404, detail="自动模式任务不存在或已失效。")
+        return _build_auto_mode_job_view(job_id, job)
+
+
+@app.post("/api/session/auto-mode/{job_id}/abort")
+def abort_auto_mode_job(
+    job_id: str,
+    current_user: dict[str, str] = Depends(_require_authenticated_user),
+):
+    if not _is_chat_admin(current_user):
+        raise HTTPException(status_code=403, detail="只有测试管理员可以使用自动模式。")
+    with AUTO_MODE_JOB_LOCK:
+        job = auto_mode_jobs.get(job_id)
+        if not job:
+            raise HTTPException(status_code=404, detail="自动模式任务不存在或已失效。")
+        if not bool(job.get("done")):
+            job["abort_requested"] = True
+            job["updated_at"] = time.time()
+            _append_terminal_lines(
+                job["session"],
+                lines=["已收到强制结束请求，正在停止自动模式..."],
+                tone="system",
+                round_count_snapshot=_completed_round_count(job["session"].get("transcript", [])),
+            )
+        return _build_auto_mode_job_view(job_id, job)
 
 
 @app.post("/api/session/respond")

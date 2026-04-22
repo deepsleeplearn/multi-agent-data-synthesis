@@ -110,6 +110,8 @@ class ServiceDialoguePolicy:
     ADDRESS_DISTRICT_STREET_FOLLOWUP_PROMPT = "好的，请您继续说一下区和街道。"
     ADDRESS_LOCALITY_FOLLOWUP_PROMPT = "请问具体是在哪个小区或村呢？尽量详细到门牌号。"
     ADDRESS_LOCALITY_WHICH_FOLLOWUP_PROMPT = "请问是在哪个小区或哪个村呢？尽量详细到门牌号。"
+    ADDRESS_BUILDING_FOLLOWUP_PROMPT = "请问是几栋几单元几楼几号呢？"
+    ADDRESS_HOUSE_NUMBER_FOLLOWUP_PROMPT = "好的，请您再说一下具体门牌号。"
     ADDRESS_RURAL_DETAIL_FOLLOWUP_PROMPT = "好的，请您提供一下详细的地址，具体到门牌号。"
     ADDRESS_RECOLLECTION_PROMPT = "了解了，麻烦您重新提供一下地址，包括省、市、区、乡镇。"
     ADDRESS_CONFIRMATION_TEMPLATE = "跟您确认一下，地址是{address}，对吗？"
@@ -142,6 +144,8 @@ class ServiceDialoguePolicy:
     ADDRESS_DISTRICT_STREET_FOLLOWUP_PROMPT: PromptConfig = [("好的，请您继续说一下区和街道。", 1.0)]
     ADDRESS_LOCALITY_FOLLOWUP_PROMPT: PromptConfig = [("请问具体是在哪个小区或村呢？尽量详细到门牌号。", 1.0)]
     ADDRESS_LOCALITY_WHICH_FOLLOWUP_PROMPT: PromptConfig = [("请问是在哪个小区或哪个村呢？尽量详细到门牌号。", 1.0)]
+    ADDRESS_BUILDING_FOLLOWUP_PROMPT: PromptConfig = [("请问是几栋几单元几楼几号呢？", 1.0)]
+    ADDRESS_HOUSE_NUMBER_FOLLOWUP_PROMPT: PromptConfig = [("好的，请您再说一下具体门牌号。", 1.0)]
     ADDRESS_RURAL_DETAIL_FOLLOWUP_PROMPT: PromptConfig = [("好的，请您提供一下详细的地址，具体到门牌号。", 1.0)]
     ADDRESS_RECOLLECTION_PROMPT: PromptConfig = [("了解了，麻烦您重新提供一下地址，包括省、市、区、乡镇。", 1.0)]
     ADDRESS_CONFIRMATION_TEMPLATE: PromptConfig = [("跟您确认一下，地址是{address}，对吗？", 1.0)]
@@ -3755,6 +3759,8 @@ class ServiceDialoguePolicy:
             or normalized in cls._prompt_signatures(cls.ADDRESS_DISTRICT_STREET_FOLLOWUP_PROMPT)
             or normalized in cls._prompt_signatures(cls.ADDRESS_LOCALITY_FOLLOWUP_PROMPT)
             or normalized in cls._prompt_signatures(cls.ADDRESS_LOCALITY_WHICH_FOLLOWUP_PROMPT)
+            or normalized in cls._prompt_signatures(cls.ADDRESS_BUILDING_FOLLOWUP_PROMPT)
+            or normalized in cls._prompt_signatures(cls.ADDRESS_HOUSE_NUMBER_FOLLOWUP_PROMPT)
             or normalized in cls._prompt_signatures(cls.ADDRESS_RURAL_DETAIL_FOLLOWUP_PROMPT)
             or normalized.startswith("好的，请问您是在哪个省哪个市呢")
             or normalized.startswith("好的，还请您说一下完整的省、市、区")
@@ -3765,6 +3771,8 @@ class ServiceDialoguePolicy:
             or normalized.startswith("好的，请您继续说一下区和街道")
             or normalized.startswith("请问具体是在哪个小区或村呢？尽量详细到门牌号")
             or normalized.startswith("请问是在哪个小区或哪个村呢？尽量详细到门牌号")
+            or normalized.startswith("请问是几栋几单元几楼几号呢")
+            or normalized.startswith("好的，请您再说一下具体门牌号")
             or normalized.startswith("好的，请您继续说一下小区、楼栋和门牌号")
             or normalized.startswith("好的，请您提供一下详细的地址")
         )
@@ -3907,6 +3915,12 @@ class ServiceDialoguePolicy:
 
     def _address_locality_which_followup_prompt(self) -> str:
         return self._choose_prompt_text(self.ADDRESS_LOCALITY_WHICH_FOLLOWUP_PROMPT)
+
+    def _address_building_followup_prompt(self) -> str:
+        return self._choose_prompt_text(self.ADDRESS_BUILDING_FOLLOWUP_PROMPT)
+
+    def _address_house_number_followup_prompt(self) -> str:
+        return self._choose_prompt_text(self.ADDRESS_HOUSE_NUMBER_FOLLOWUP_PROMPT)
 
     def _address_rural_detail_followup_prompt(self) -> str:
         return self._choose_prompt_text(self.ADDRESS_RURAL_DETAIL_FOLLOWUP_PROMPT)
