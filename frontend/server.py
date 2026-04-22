@@ -1678,6 +1678,42 @@ def _append_address_ie_display_lines(
     transcript: list[DialogueTurn],
     runtime_state: ServiceRuntimeState,
 ) -> dict[str, Any] | None:
+    previous_service_text = ""
+    for previous_turn in reversed(transcript[:-1]):
+        if previous_turn.speaker == SERVICE_SPEAKER:
+            previous_service_text = previous_turn.text
+            break
+    if (
+        runtime_state.expected_address_confirmation
+        and not runtime_state.address_confirmation_triggered_by_observation
+        and (
+            runtime_state.address_confirmation_started_from_known_address
+            or (
+                policy.is_address_confirmation_prompt(previous_service_text)
+                and policy._normalize_prompt_text(previous_service_text).startswith("您的地址是")
+            )
+        )
+    ):
+        confirmation_intent = policy._classify_confirmation_intent(
+            turn.text,
+            prompt_kind="address_confirmation",
+            user_round_index=turn.round_index,
+        )
+        if confirmation_intent == "yes":
+            confirmation_address = str(
+                runtime_state.pending_address_confirmation or ""
+            ).strip()
+            if confirmation_address:
+                observation = build_address_model_observation(
+                    confirmation_address,
+                    client=llm_client,
+                )
+                turn.post_display_lines.append(policy.ADDRESS_IE_FUNCTION_CALL_DISPLAY)
+                turn.post_display_lines.append(
+                    f"observation: {json.dumps(observation, ensure_ascii=False)}"
+                )
+                return None
+
     should_insert_for_collection = policy.should_insert_address_ie_function_call(
         user_text=turn.text,
         transcript=transcript,

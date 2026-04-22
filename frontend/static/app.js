@@ -16,6 +16,7 @@ let sessionEndedAt = '';
 let sessionTimerInterval = null;
 let autoKnownAddressValue = '';
 let autoCallStartTimeValue = '';
+let currentAutoModeId = '';
 let faultIssueReferenceCategories = null;
 let magnifierPressTimer = null;
 let magnifierPointerId = null;
@@ -35,6 +36,7 @@ let sessionIdCopyFeedbackTimer = null;
 let autoModeJobId = '';
 let autoModePollTimer = null;
 let autoModePollInFlight = false;
+let rewriteRecordMenuState = null;
 let chatMessages = [];
 let chatLatestMessageId = 0;
 let chatPollTimer = null;
@@ -170,6 +172,8 @@ const chatLauncherOnline = document.getElementById('chat-launcher-online');
 const chatLauncherUnread = document.getElementById('chat-launcher-unread');
 const chatMentionDropdown = document.getElementById('chat-mention-dropdown');
 const chatMessageMenu = document.getElementById('chat-message-menu');
+const rewriteRecordMenu = document.getElementById('rewrite-record-menu');
+const rewriteRecordDeleteButton = document.getElementById('rewrite-record-delete-btn');
 const chatReplyButton = document.getElementById('chat-reply-btn');
 const chatEditButton = document.getElementById('chat-edit-btn');
 const chatRecallButton = document.getElementById('chat-recall-btn');
@@ -915,6 +919,7 @@ function cancelRewriteKeyPrompt() {
 }
 
 function resetRewriteWorkspace() {
+    closeRewriteRecordMenu();
     rewriteRecords = [];
     rewriteImportedRecords = [];
     rewriteSelectedIndex = -1;
@@ -975,6 +980,31 @@ function resetRewriteWorkspace() {
     }
     setRewriteUploadStatus('尚未导入文件。');
     updateRewriteHistoryButtons();
+}
+
+function closeRewriteRecordMenu() {
+    rewriteRecordMenuState = null;
+    if (!rewriteRecordMenu) return;
+    rewriteRecordMenu.classList.add('hidden');
+    rewriteRecordMenu.setAttribute('aria-hidden', 'true');
+    rewriteRecordMenu.style.left = '';
+    rewriteRecordMenu.style.top = '';
+}
+
+function openRewriteRecordMenu(recordIndex, clientX, clientY) {
+    if (!rewriteRecordMenu || !Number.isInteger(recordIndex) || recordIndex < 0 || recordIndex >= rewriteRecords.length) {
+        closeRewriteRecordMenu();
+        return;
+    }
+    rewriteRecordMenuState = { recordIndex };
+    const menuWidth = Math.max(rewriteRecordMenu.offsetWidth || 160, 140);
+    const menuHeight = Math.max(rewriteRecordMenu.offsetHeight || 56, 48);
+    const left = Math.min(clientX, window.innerWidth - menuWidth - 12);
+    const top = Math.min(clientY, window.innerHeight - menuHeight - 12);
+    rewriteRecordMenu.style.left = `${Math.max(12, left)}px`;
+    rewriteRecordMenu.style.top = `${Math.max(12, top)}px`;
+    rewriteRecordMenu.classList.remove('hidden');
+    rewriteRecordMenu.setAttribute('aria-hidden', 'false');
 }
 
 function updateModeSwitchButtons() {
@@ -2120,13 +2150,14 @@ function buildRewriteRecordFromSessionEntries() {
         }
     });
     if (!dialogueProcess.length) return null;
-    const recordId = currentSessionId || autoModeJobId || `manual-${Date.now()}`;
+    const autoRecordId = String(currentAutoModeId || '').trim();
+    const recordId = currentSessionId || autoRecordId || `manual-${Date.now()}`;
     return {
         session_id: currentSessionId || '',
-        auto_mode_id: autoModeJobId || '',
+        auto_mode_id: autoRecordId,
         id: recordId,
         dialogue_process: dialogueProcess,
-        source: autoModeJobId && !currentSessionId ? 'auto_mode' : 'manual_test',
+        source: autoRecordId && !currentSessionId ? 'auto_mode' : 'manual_test',
     };
 }
 
@@ -2787,6 +2818,7 @@ function renderRewriteRecordList() {
         const button = document.createElement('button');
         button.type = 'button';
         button.className = 'scenario-item';
+        button.dataset.recordIndex = String(index);
         if (meta.hasSourceIssue) {
             button.classList.add('is-invalid-source');
             button.title = `原始对话未通过当前结构校验：${meta.sourceValidation.text}`;
@@ -3155,6 +3187,7 @@ function renderRewriteDialogue(record) {
 
 function selectRewriteRecord(index) {
     if (index < 0 || index >= rewriteRecords.length) return;
+    closeRewriteRecordMenu();
     endRewriteEditSession({ force: false });
     rewriteSelectedIndex = index;
     const record = rewriteRecords[index];
@@ -3171,6 +3204,67 @@ function selectFirstFilteredRewriteRecord() {
     const matchedIndexes = getFilteredRewriteRecordIndexes();
     if (!matchedIndexes.length) return;
     selectRewriteRecord(matchedIndexes[0]);
+}
+
+function rebuildRewriteIndexedCache(cache, removedIndex) {
+    const nextCache = new Map();
+    cache.forEach((value, key) => {
+        const numericKey = Number(key);
+        if (!Number.isInteger(numericKey)) return;
+        if (numericKey === removedIndex) return;
+        const nextKey = numericKey > removedIndex ? numericKey - 1 : numericKey;
+        nextCache.set(nextKey, value);
+    });
+    return nextCache;
+}
+
+function applyRewriteEmptyState() {
+    rewriteSelectedIndex = -1;
+    if (rewriteTitle) rewriteTitle.textContent = buildRewriteSourceTitle();
+    if (rewriteRecordIndicator) rewriteRecordIndicator.textContent = '记录: -';
+    if (rewriteCurrentRecordLabel) rewriteCurrentRecordLabel.textContent = '未选择记录';
+    if (rewritePrevButton) rewritePrevButton.disabled = true;
+    if (rewriteNextButton) rewriteNextButton.disabled = true;
+    renderRewriteRecordList();
+    renderRewriteRecordInfo(null);
+    renderRewriteOriginalData(null);
+    if (rewriteDialogueOutput) {
+        rewriteDialogueOutput.classList.remove('rewrite-dialogue-canvas');
+        rewriteDialogueOutput.innerHTML = '<p class="terminal-hint">导入文件后显示对话内容</p>';
+    }
+    updateRewriteAlternationStatus([]);
+    updateRewriteHistoryButtons();
+}
+
+function deleteRewriteRecord(recordIndex) {
+    if (!Number.isInteger(recordIndex) || recordIndex < 0 || recordIndex >= rewriteRecords.length) return;
+    closeRewriteRecordMenu();
+    endRewriteEditSession({ force: true });
+    rewriteRecords.splice(recordIndex, 1);
+    if (recordIndex < rewriteImportedRecords.length) {
+        rewriteImportedRecords.splice(recordIndex, 1);
+    }
+    const nextEditCache = rebuildRewriteIndexedCache(rewriteRecordEditCache, recordIndex);
+    const nextHistoryCache = rebuildRewriteIndexedCache(rewriteRecordHistoryCache, recordIndex);
+    rewriteRecordEditCache.clear();
+    rewriteRecordHistoryCache.clear();
+    nextEditCache.forEach((value, key) => rewriteRecordEditCache.set(key, value));
+    nextHistoryCache.forEach((value, key) => rewriteRecordHistoryCache.set(key, value));
+    rewriteAvailableRoles = collectRewriteAvailableRoles(rewriteRecords);
+
+    if (!rewriteRecords.length) {
+        setRewriteUploadStatus('当前记录已删除，暂无可编辑记录。');
+        applyRewriteEmptyState();
+        renderRewriteFileInfo();
+        return;
+    }
+
+    const nextIndex = Math.min(recordIndex, rewriteRecords.length - 1);
+    rewriteSelectedIndex = -1;
+    renderRewriteFileInfo();
+    renderRewriteRecordList();
+    setRewriteUploadStatus(`已删除 1 条记录，当前剩余 ${rewriteRecords.length} 条。`);
+    selectRewriteRecord(nextIndex);
 }
 
 async function importRewriteFile(file) {
@@ -3871,6 +3965,7 @@ function applySessionView(data) {
 
     stopAutoModePolling();
     currentSessionId = data.session_id;
+    currentAutoModeId = '';
     autoModeJobId = '';
     currentSlotKeys = Object.keys(data.collected_slots || {});
     sessionClosed = Boolean(data.session_closed);
@@ -4958,6 +5053,7 @@ function resetWorkspace() {
     selectedScenario = null;
     currentSessionId = null;
     stopAutoModePolling();
+    currentAutoModeId = '';
     currentSlotKeys = [];
     sessionClosed = true;
     sessionBusy = false;
@@ -5298,6 +5394,7 @@ async function startSession() {
 
 function applyAutoModeView(data) {
     autoModeJobId = String(data?.job_id || autoModeJobId || '').trim();
+    currentAutoModeId = String(data?.auto_mode_id || currentAutoModeId || '').trim();
     currentSessionId = null;
     currentSlotKeys = Object.keys(data?.collected_slots || {});
     sessionClosed = Boolean(data?.session_closed);
@@ -5913,6 +6010,20 @@ terminalOutput.addEventListener('contextmenu', (event) => {
         clientY: event.clientY,
     });
 });
+rewriteRecordList.addEventListener('contextmenu', (event) => {
+    const recordNode = event.target.closest('.scenario-item');
+    if (!recordNode) {
+        closeRewriteRecordMenu();
+        return;
+    }
+    event.preventDefault();
+    const recordIndex = Number(recordNode.dataset.recordIndex || '-1');
+    if (!Number.isInteger(recordIndex) || recordIndex < 0) {
+        closeRewriteRecordMenu();
+        return;
+    }
+    openRewriteRecordMenu(recordIndex, event.clientX, event.clientY);
+});
 issueReferenceCloseButton.addEventListener('click', hideIssueReferencePopover);
 terminalToggleAddressIeButton.addEventListener('click', () => {
     if (!terminalTurnMenuState) return;
@@ -5920,6 +6031,10 @@ terminalToggleAddressIeButton.addEventListener('click', () => {
         Number(terminalTurnMenuState.roundIndex || 0),
         !terminalTurnMenuState.hasAddressIeDisplay,
     ).catch(() => {});
+});
+rewriteRecordDeleteButton?.addEventListener('click', () => {
+    if (!rewriteRecordMenuState) return;
+    deleteRewriteRecord(Number(rewriteRecordMenuState.recordIndex));
 });
 document.addEventListener('click', (event) => {
     if (issueReferencePopover.classList.contains('hidden')) return;
@@ -5933,6 +6048,11 @@ document.addEventListener('click', (event) => {
     if (!terminalTurnMenu || terminalTurnMenu.classList.contains('hidden')) return;
     if (event.target.closest('#terminal-turn-menu')) return;
     closeTerminalTurnMenu();
+});
+document.addEventListener('click', (event) => {
+    if (!rewriteRecordMenu || rewriteRecordMenu.classList.contains('hidden')) return;
+    if (event.target.closest('#rewrite-record-menu')) return;
+    closeRewriteRecordMenu();
 });
 document.addEventListener('click', (event) => {
     if (!chatOnlineDrawerOpen) return;
@@ -5963,6 +6083,7 @@ document.addEventListener('click', (event) => {
     if (event.target.closest('#chat-message-menu')) return;
     closeChatMessageMenu();
 });
+window.addEventListener('resize', closeRewriteRecordMenu);
 document.addEventListener('keydown', (event) => {
     if (activeAppMode !== 'rewrite') return;
     const isUndo = (event.metaKey || event.ctrlKey) && !event.shiftKey && event.key.toLowerCase() === 'z';
