@@ -6,6 +6,7 @@ let sessionClosed = true;
 let sessionBusy = false;
 let sessionReviewLocked = false;
 let sessionTerminalEntries = [];
+let pendingManualUserEntry = null;
 let terminalProcessingState = null;
 let reviewPending = false;
 let reviewAvailable = false;
@@ -4125,8 +4126,15 @@ function buildTerminalProcessingLine(text = '', { animate = true } = {}) {
 
 function renderTerminalEntries(entries = []) {
     terminalOutput.innerHTML = '';
-    terminalOutput.classList.toggle('is-processing-only', Boolean(terminalProcessingState?.active) && entries.length === 0);
-    entries.forEach((entry) => {
+    const renderedEntries = Array.isArray(entries) ? [...entries] : [];
+    if (pendingManualUserEntry && currentSessionId && !sessionClosed) {
+        renderedEntries.push(pendingManualUserEntry);
+    }
+    terminalOutput.classList.toggle(
+        'is-processing-only',
+        Boolean(terminalProcessingState?.active) && renderedEntries.length === 0,
+    );
+    renderedEntries.forEach((entry) => {
         if (isTerminalProcessingText(entry.text || '')) {
             terminalOutput.appendChild(
                 buildTerminalProcessingLine(entry.text || '', { animate: !sessionClosed }),
@@ -4166,6 +4174,11 @@ function renderTerminalEntries(entries = []) {
                 textNode.textContent = ` ${entry.speaker}: ${entry.text}`;
                 textNode.dataset.roundIndex = String(entry.round_index || '');
                 textNode.dataset.hasAddressIeDisplay = entry.has_address_ie_display ? 'true' : 'false';
+                if (entry.is_pending_reply) {
+                    textNode.classList.add('is-awaiting-response');
+                    textNode.dataset.scanText = textNode.textContent;
+                    line.classList.add('is-awaiting-response');
+                }
                 line.appendChild(textNode);
             } else if (shouldOfferIssueReference(entry)) {
                 const trigger = document.createElement('button');
@@ -4314,6 +4327,31 @@ function setSessionBusyState(busy) {
     renderTerminalEntries(sessionTerminalEntries);
 }
 
+function showPendingManualUserEntry(text) {
+    const normalizedText = String(text || '').trim();
+    if (!normalizedText || !currentSessionId || sessionClosed) {
+        pendingManualUserEntry = null;
+        return;
+    }
+    pendingManualUserEntry = {
+        entry_type: 'turn',
+        tone: 'user',
+        round_index: Number(nextRoundIndex || 1),
+        round_label: String(nextRoundIndex || 1),
+        speaker: '用户',
+        text: normalizedText,
+        has_address_ie_display: false,
+        is_pending_reply: true,
+    };
+    renderTerminalEntries(sessionTerminalEntries);
+}
+
+function clearPendingManualUserEntry() {
+    if (!pendingManualUserEntry) return;
+    pendingManualUserEntry = null;
+    renderTerminalEntries(sessionTerminalEntries);
+}
+
 function resetReviewState() {
     reviewPending = false;
     reviewAvailable = false;
@@ -4396,6 +4434,7 @@ function applySessionView(data) {
     if (!data || !data.session_id) return;
 
     stopAutoModePolling();
+    pendingManualUserEntry = null;
     currentSessionId = data.session_id;
     currentAutoModeId = '';
     autoModeJobId = '';
@@ -5494,6 +5533,7 @@ function resetWorkspace() {
     sessionBusy = false;
     sessionReviewLocked = false;
     sessionTerminalEntries = [];
+    pendingManualUserEntry = null;
     terminalProcessingState = null;
     sessionStartedAt = '';
     sessionEndedAt = '';
@@ -5713,16 +5753,15 @@ async function submitReview() {
             'system',
         );
         sessionReviewLocked = true;
-        openReviewModal(
-            {
-                ...(reviewContext || {}),
-                review_required: true,
-                session_id: data.session_id || currentSessionId,
-                mode: reviewSourceMode || 'manual',
-                review_submitted: true,
-            },
-            { blocking: false },
-        );
+        prepareOptionalReview({
+            ...(reviewContext || {}),
+            review_required: true,
+            session_id: data.session_id || currentSessionId,
+            mode: reviewSourceMode || 'manual',
+            review_submitted: true,
+        });
+        hideReviewModal();
+        updateReviewToggleButton();
         updateInputAvailability(false);
         renderTerminalEntries(sessionTerminalEntries);
     } catch (error) {
@@ -6059,6 +6098,7 @@ async function sendMessage() {
     sessionInputHistoryIndex = -1;
     sessionInputDraft = '';
     userInput.value = '';
+    showPendingManualUserEntry(rawText);
     setSessionBusyState(true);
     let errorMessage = '';
     try {
@@ -6071,6 +6111,9 @@ async function sendMessage() {
     } catch (error) {
         errorMessage = error.message;
     } finally {
+        if (errorMessage) {
+            clearPendingManualUserEntry();
+        }
         setSessionBusyState(false);
         if (errorMessage) {
             appendTerminalLine(`[系统错误] ${errorMessage}`, 'error');

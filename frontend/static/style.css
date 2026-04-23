@@ -1112,6 +1112,11 @@ select:focus {
     line-height: 1.8;
 }
 
+#terminal-output .terminal-line {
+    font-size: 1.24rem;
+    line-height: 1.95;
+}
+
 .terminal-processing-line {
     color: rgba(226, 232, 240, 0.72);
 }
@@ -1194,6 +1199,38 @@ select:focus {
 .terminal-user-text {
     display: inline;
     cursor: context-menu;
+}
+
+.terminal-user-text.is-awaiting-response {
+    position: relative;
+    display: inline-block;
+    color: inherit;
+}
+
+.terminal-user-text.is-awaiting-response::after {
+    content: attr(data-scan-text);
+    position: absolute;
+    inset: 0;
+    color: transparent;
+    pointer-events: none;
+    background-image: linear-gradient(
+        90deg,
+        rgba(224, 242, 254, 0) 0%,
+        rgba(224, 242, 254, 0) 40%,
+        rgba(255, 255, 255, 0.98) 46%,
+        rgba(250, 204, 21, 0.98) 50%,
+        rgba(186, 230, 253, 0.98) 54%,
+        rgba(224, 242, 254, 0) 60%,
+        rgba(224, 242, 254, 0) 100%
+    );
+    background-size: 240% 100%;
+    background-position: 110% 50%;
+    background-repeat: no-repeat;
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+    opacity: 1;
+    animation: terminal-processing-scan 1.2s linear infinite;
 }
 
 .terminal-reference-trigger {

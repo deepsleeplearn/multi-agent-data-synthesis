@@ -1856,22 +1856,49 @@ def _build_auto_address_confirmation_result(
         normalized_error_code = int(error_code)
     except (TypeError, ValueError):
         normalized_error_code = 1
-    if normalized_error_code != 0:
-        return None
     confirmed_address = str(observation.get("address") or "").strip()
-    if not confirmed_address:
+    error_msg = str(observation.get("error_msg") or "").strip()
+
+    if normalized_error_code == 0:
+        if not confirmed_address:
+            return None
+
+        runtime_state.expected_address_confirmation = True
+        runtime_state.address_confirmation_triggered_by_observation = True
+        runtime_state.address_confirmation_started_from_known_address = False
+        runtime_state.awaiting_full_address = False
+        runtime_state.pending_address_confirmation = confirmed_address
+        runtime_state.partial_address_candidate = ""
+        runtime_state.address_vague_retry_count = 0
+        runtime_state.last_address_followup_prompt = ""
+        return ServicePolicyResult(
+            reply=policy._address_confirmation_prompt(confirmed_address),
+            slot_updates={},
+            is_ready_to_close=False,
+        )
+
+    fixed_reply = {
+        "已成功获取四级地址，缺少详细地址信息": "不好意思，我这边没有定位到这个地址，请重新提供一下小区、楼栋和门牌号",
+        "缺少乡镇或街道以及详细地址": "不好意思，我这边没有定位到这个地址，请重新提供一下小区、楼栋和门牌号",
+        "缺少区县、乡镇或街道以及详细地址": "不好意思，我这边没有定位到这个地址，麻烦您再说下区县和乡镇",
+        "缺少市、区县、乡镇或街道以及详细地址": "不好意思，我这边没有定位到这个地址，请重新说一下是哪个城市的哪个区和街道呢？",
+        "未成功获取有效地址": "不好意思，我这边没有定位到这个地址，麻烦您再完整的说下省、市、区、乡镇，精确到门牌号",
+        "缺少乡镇或街道": "不好意思，我没定位到这个街道或镇，麻烦您再说一下呢？",
+    }.get(error_msg)
+    if not fixed_reply:
         return None
 
-    runtime_state.expected_address_confirmation = True
-    runtime_state.address_confirmation_triggered_by_observation = True
+    runtime_state.expected_address_confirmation = False
+    runtime_state.address_confirmation_triggered_by_observation = False
     runtime_state.address_confirmation_started_from_known_address = False
-    runtime_state.awaiting_full_address = False
-    runtime_state.pending_address_confirmation = confirmed_address
-    runtime_state.partial_address_candidate = ""
+    runtime_state.awaiting_full_address = True
+    runtime_state.pending_address_confirmation = ""
+    if confirmed_address and confirmed_address != "无法判断":
+        runtime_state.partial_address_candidate = confirmed_address
     runtime_state.address_vague_retry_count = 0
-    runtime_state.last_address_followup_prompt = ""
+    runtime_state.last_address_followup_prompt = fixed_reply
     return ServicePolicyResult(
-        reply=policy._address_confirmation_prompt(confirmed_address),
+        reply=fixed_reply,
         slot_updates={},
         is_ready_to_close=False,
     )
