@@ -779,8 +779,9 @@ class ServiceAgent:
    - modify：修改了当前核对地址中的某一粒度
    - delete：明确删掉了当前核对地址中的某一粒度或说明某粒度不该有
    - unknown：无法判断
-9. 对 address_confirmation_observation_followup，如果用户只是“对”“是的”“没错”“对对对”“嗯”这类纯确认，应判为 confirm_only。
-10. 对 address_confirmation_observation_followup，如果用户像“对的，10号楼”“是的，2单元504”“对，不过区县要改成...”这类在确认同时补充或修改地址，应判为 add 或 modify，而不是 confirm_only。
+9. 对 address_confirmation_observation_followup，必须判断语义意图，不要只按关键词或残余文本规则判断。
+10. 对 address_confirmation_observation_followup，如果用户只是“对”“是的”“没错”“对对对”“嗯”“对的，没问题”“是的，没问题了”这类纯确认或确认尾句，应判为 confirm_only。
+11. 对 address_confirmation_observation_followup，如果用户像“对的，10号楼”“是的，2单元504”“对，不过区县要改成...”这类在确认同时补充或修改地址，应判为 add 或 modify，而不是 confirm_only。
 
 当前可能的 prompt_kind：
 - phone_number_confirmation：确认刚才识别出的手机号是否正确

@@ -109,7 +109,7 @@ let rewriteTransferNoticeTimer = null;
 let blockingActionNoticeTimer = null;
 let manualShellLeftHidden = false;
 let manualShellRightHidden = false;
-let manualShellLeftWidth = 320;
+let manualShellLeftWidth = 360;
 let manualShellRightWidth = 340;
 let manualShellResizeState = null;
 let selectedModelName = 'gpt-4o';
@@ -210,6 +210,7 @@ const chatLauncherUnread = document.getElementById('chat-launcher-unread');
 const chatMentionDropdown = document.getElementById('chat-mention-dropdown');
 const chatMessageMenu = document.getElementById('chat-message-menu');
 const rewriteRecordMenu = document.getElementById('rewrite-record-menu');
+const rewriteRecordCopyButton = document.getElementById('rewrite-record-copy-btn');
 const rewriteRecordReviewButton = document.getElementById('rewrite-record-review-btn');
 const rewriteRecordDeleteButton = document.getElementById('rewrite-record-delete-btn');
 const chatReplyButton = document.getElementById('chat-reply-btn');
@@ -328,6 +329,9 @@ const CHAT_MESSAGE_HOLD_MOVE_TOLERANCE = 10;
 const CHAT_MENTION_OPTION_LIMIT = 12;
 const SESSION_INPUT_HISTORY_LIMIT = 50;
 const MANUAL_SHELL_LAYOUT_STORAGE_KEY = 'frontend-manual-shell-layout';
+const MANUAL_SHELL_LEFT_DEFAULT_PX = 360;
+const MANUAL_SHELL_LEFT_LEGACY_DEFAULT_PX = 340;
+const MANUAL_SHELL_RIGHT_DEFAULT_PX = 340;
 const MANUAL_SHELL_LEFT_MIN_PX = 248;
 const MANUAL_SHELL_LEFT_MAX_PX = 420;
 const MANUAL_SHELL_RIGHT_MIN_PX = 276;
@@ -504,24 +508,32 @@ function loadManualShellLayoutState() {
         return {
             leftHidden: false,
             rightHidden: false,
-            leftWidth: 320,
-            rightWidth: 340,
+            leftWidth: MANUAL_SHELL_LEFT_DEFAULT_PX,
+            rightWidth: MANUAL_SHELL_RIGHT_DEFAULT_PX,
         };
     }
     try {
         const parsed = JSON.parse(raw);
+        const parsedLeftWidth = Number(parsed?.leftWidth);
+        const leftWidth = Number.isFinite(parsedLeftWidth)
+            ? (parsedLeftWidth <= MANUAL_SHELL_LEFT_LEGACY_DEFAULT_PX
+                ? MANUAL_SHELL_LEFT_DEFAULT_PX
+                : parsedLeftWidth)
+            : MANUAL_SHELL_LEFT_DEFAULT_PX;
+        const parsedRightWidth = Number(parsed?.rightWidth);
+        const rightWidth = Number.isFinite(parsedRightWidth) ? parsedRightWidth : MANUAL_SHELL_RIGHT_DEFAULT_PX;
         return {
             leftHidden: parsed?.leftHidden === true,
             rightHidden: parsed?.rightHidden === true,
-            leftWidth: Number.isFinite(Number(parsed?.leftWidth)) ? Number(parsed.leftWidth) : 320,
-            rightWidth: Number.isFinite(Number(parsed?.rightWidth)) ? Number(parsed.rightWidth) : 340,
+            leftWidth,
+            rightWidth,
         };
     } catch (error) {
         return {
             leftHidden: false,
             rightHidden: false,
-            leftWidth: 320,
-            rightWidth: 340,
+            leftWidth: MANUAL_SHELL_LEFT_DEFAULT_PX,
+            rightWidth: MANUAL_SHELL_RIGHT_DEFAULT_PX,
         };
     }
 }
@@ -2830,6 +2842,45 @@ function cloneRewriteRecordData(value) {
     return value === undefined ? undefined : JSON.parse(JSON.stringify(value));
 }
 
+function sanitizeRewriteRecordIdPart(value) {
+    const normalized = String(value || '').trim();
+    return normalized
+        .replace(/[^\w\u4e00-\u9fa5-]+/g, '-')
+        .replace(/-+/g, '-')
+        .replace(/^-|-$/g, '')
+        .slice(0, 80);
+}
+
+function generateRewriteDuplicateRecordId(record, recordIndex) {
+    const sourceId = sanitizeRewriteRecordIdPart(resolveRewriteRecordId(record)) || `record-${recordIndex + 1}`;
+    const usedIds = new Set(
+        rewriteRecords
+            .map((item) => resolveRewriteRecordId(item))
+            .filter(Boolean),
+    );
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+        const suffix = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
+        const candidate = `${sourceId}-copy-${suffix}`;
+        if (!usedIds.has(candidate)) return candidate;
+    }
+    return `${sourceId}-copy-${globalThis.crypto?.randomUUID?.() || Math.random().toString(36).slice(2)}`;
+}
+
+function assignRewriteRecordId(record, nextId) {
+    if (!record || typeof record !== 'object') return record;
+    record.id = nextId;
+    const preferredKey = String(rewriteIdKeyPreference || '').trim();
+    if (preferredKey) {
+        record[preferredKey] = nextId;
+    }
+    REWRITE_RECORD_ID_KEYS.forEach((key) => {
+        if (Object.prototype.hasOwnProperty.call(record, key)) {
+            record[key] = nextId;
+        }
+    });
+    return record;
+}
+
 function inferRewriteRecordOrigin(record) {
     const source = String(record?.source || '').trim();
     if (source === 'manual_test' || source === 'auto_mode') return 'test';
@@ -3562,6 +3613,63 @@ function moveRewriteLineToEnd(recordIndex, sourceLineId) {
     renderRewriteRecordState(recordIndex);
 }
 
+function clearRewriteDragPreview({ keepState = false } = {}) {
+    if (rewriteDialogueOutput) {
+        rewriteDialogueOutput
+            .querySelectorAll('.rewrite-line-drag-preview')
+            .forEach((node) => node.remove());
+        rewriteDialogueOutput
+            .querySelectorAll('.rewrite-line-card')
+            .forEach((node) => node.classList.remove('is-drop-target-before', 'is-drop-target-after'));
+    }
+    if (!keepState && rewriteDragState) {
+        rewriteDragState.previewTargetId = '';
+        rewriteDragState.previewPosition = '';
+    }
+}
+
+function buildRewriteDragPreviewNode() {
+    if (!rewriteDialogueOutput || !rewriteDragState?.lineId) return null;
+    const sourceCard = rewriteDialogueOutput.querySelector(
+        `.rewrite-line-card[data-line-id="${CSS.escape(rewriteDragState.lineId)}"]`,
+    );
+    if (!sourceCard) return null;
+    const preview = sourceCard.cloneNode(true);
+    preview.classList.remove('is-dragging', 'is-drop-target-before', 'is-drop-target-after', 'is-conflict-focus');
+    preview.classList.add('rewrite-line-drag-preview');
+    preview.removeAttribute('data-line-id');
+    preview.removeAttribute('data-line-index');
+    preview.setAttribute('aria-hidden', 'true');
+    preview.querySelectorAll('input, textarea, select, button').forEach((control) => {
+        control.disabled = true;
+        control.tabIndex = -1;
+    });
+    const meta = preview.querySelector('.rewrite-line-meta');
+    if (meta) {
+        meta.textContent = '拖拽预览';
+    }
+    return preview;
+}
+
+function updateRewriteDragPreview(targetCard, position = 'after') {
+    if (!rewriteDragState || !targetCard || targetCard.classList.contains('rewrite-line-drag-preview')) return;
+    const targetLineId = targetCard.dataset.lineId || '';
+    if (!targetLineId || targetLineId === rewriteDragState.lineId) return;
+    const normalizedPosition = position === 'before' ? 'before' : 'after';
+    clearRewriteDragPreview({ keepState: true });
+    const preview = buildRewriteDragPreviewNode();
+    if (!preview) return;
+    targetCard.classList.toggle('is-drop-target-before', normalizedPosition === 'before');
+    targetCard.classList.toggle('is-drop-target-after', normalizedPosition === 'after');
+    if (normalizedPosition === 'before') {
+        targetCard.parentNode?.insertBefore(preview, targetCard);
+    } else {
+        targetCard.parentNode?.insertBefore(preview, targetCard.nextSibling);
+    }
+    rewriteDragState.previewTargetId = targetLineId;
+    rewriteDragState.previewPosition = normalizedPosition;
+}
+
 function findRewritePreferenceSampleRecord(payload) {
     const coarseRecords = normalizeRewriteRecordsPayloadWithPreference(payload, '');
     return coarseRecords.find((item) => item && typeof item === 'object' && !Array.isArray(item)) || null;
@@ -3977,7 +4085,12 @@ function renderRewriteDialogue(record) {
         dragHandle.textContent = '拖拽';
         dragHandle.draggable = true;
         dragHandle.addEventListener('dragstart', (event) => {
-            rewriteDragState = { lineId: entry.id, sourceIndex: index };
+            rewriteDragState = {
+                lineId: entry.id,
+                sourceIndex: index,
+                previewTargetId: '',
+                previewPosition: '',
+            };
             card.classList.add('is-dragging');
             if (event.dataTransfer) {
                 event.dataTransfer.effectAllowed = 'move';
@@ -3985,10 +4098,11 @@ function renderRewriteDialogue(record) {
             }
         });
         dragHandle.addEventListener('dragend', () => {
+            clearRewriteDragPreview({ keepState: true });
             rewriteDragState = null;
             rewriteDialogueOutput
                 .querySelectorAll('.rewrite-line-card')
-                .forEach((node) => node.classList.remove('is-dragging', 'is-drop-target-before', 'is-drop-target-after'));
+                .forEach((node) => node.classList.remove('is-dragging'));
         });
 
         actions.appendChild(addBeforeButton);
@@ -4131,22 +4245,36 @@ function renderRewriteDialogue(record) {
         }
 
         card.addEventListener('dragover', (event) => {
-            if (!rewriteDragState || rewriteDragState.lineId === entry.id) return;
+            if (!rewriteDragState) return;
+            if (rewriteDragState.lineId === entry.id) {
+                clearRewriteDragPreview({ keepState: true });
+                return;
+            }
             event.preventDefault();
+            rewriteDragState.lastClientX = event.clientX;
+            rewriteDragState.lastClientY = event.clientY;
             maybeAutoScrollRewriteRegion(event.clientY);
             const rect = card.getBoundingClientRect();
             const position = event.clientY < (rect.top + rect.height / 2) ? 'before' : 'after';
-            card.classList.toggle('is-drop-target-before', position === 'before');
-            card.classList.toggle('is-drop-target-after', position === 'after');
+            updateRewriteDragPreview(card, position);
         });
         card.addEventListener('dragleave', () => {
-            card.classList.remove('is-drop-target-before', 'is-drop-target-after');
+            window.requestAnimationFrame(() => {
+                if (!rewriteDragState) return;
+                const hoveredCard = document.elementFromPoint(
+                    rewriteDragState.lastClientX || 0,
+                    rewriteDragState.lastClientY || 0,
+                )?.closest?.('.rewrite-line-card');
+                if (hoveredCard === card || hoveredCard?.classList?.contains('rewrite-line-drag-preview')) return;
+                card.classList.remove('is-drop-target-before', 'is-drop-target-after');
+            });
         });
         card.addEventListener('drop', (event) => {
             if (!rewriteDragState || rewriteDragState.lineId === entry.id) return;
             event.preventDefault();
             const rect = card.getBoundingClientRect();
             const position = event.clientY < (rect.top + rect.height / 2) ? 'before' : 'after';
+            clearRewriteDragPreview({ keepState: true });
             moveRewriteLine(recordIndex, rewriteDragState.lineId, entry.id, position);
             rewriteDragState = null;
         });
@@ -4161,13 +4289,21 @@ function renderRewriteDialogue(record) {
     rewriteDialogueOutput.ondragover = (event) => {
         if (!rewriteDragState) return;
         event.preventDefault();
+        rewriteDragState.lastClientX = event.clientX;
+        rewriteDragState.lastClientY = event.clientY;
         maybeAutoScrollRewriteRegion(event.clientY);
     };
     rewriteDialogueOutput.ondrop = (event) => {
         const targetCard = event.target.closest('.rewrite-line-card');
         if (!rewriteDragState || targetCard) return;
         event.preventDefault();
-        moveRewriteLineToEnd(recordIndex, rewriteDragState.lineId);
+        const { lineId, previewTargetId, previewPosition } = rewriteDragState;
+        clearRewriteDragPreview({ keepState: true });
+        if (previewTargetId) {
+            moveRewriteLine(recordIndex, lineId, previewTargetId, previewPosition || 'after');
+        } else {
+            moveRewriteLineToEnd(recordIndex, lineId);
+        }
         rewriteDragState = null;
     };
     if (rewriteScrollRegion) {
@@ -4207,6 +4343,17 @@ function rebuildRewriteIndexedCache(cache, removedIndex) {
         if (!Number.isInteger(numericKey)) return;
         if (numericKey === removedIndex) return;
         const nextKey = numericKey > removedIndex ? numericKey - 1 : numericKey;
+        nextCache.set(nextKey, value);
+    });
+    return nextCache;
+}
+
+function shiftRewriteIndexedCacheForInsert(cache, insertIndex) {
+    const nextCache = new Map();
+    cache.forEach((value, key) => {
+        const numericKey = Number(key);
+        if (!Number.isInteger(numericKey)) return;
+        const nextKey = numericKey >= insertIndex ? numericKey + 1 : numericKey;
         nextCache.set(nextKey, value);
     });
     return nextCache;
@@ -4262,6 +4409,47 @@ function deleteRewriteRecord(recordIndex) {
     renderRewriteRecordList();
     setRewriteUploadStatus(`已删除 1 条记录，当前剩余 ${rewriteRecords.length} 条。`);
     selectRewriteRecord(nextIndex);
+}
+
+function duplicateRewriteRecord(recordIndex) {
+    if (!Number.isInteger(recordIndex) || recordIndex < 0 || recordIndex >= rewriteRecords.length) return;
+    closeRewriteRecordMenu();
+    endRewriteEditSession({ force: true });
+
+    const sourceRecord = rewriteRecords[recordIndex];
+    const sourceImportedRecord = cloneRewriteRecordData(rewriteImportedRecords[recordIndex]) ?? cloneRewriteRecordData(sourceRecord);
+    const duplicateRecord = cloneRewriteRecordData(sourceRecord) || {};
+    const duplicateImportedRecord = cloneRewriteRecordData(sourceImportedRecord) || cloneRewriteRecordData(duplicateRecord) || {};
+    const duplicateId = generateRewriteDuplicateRecordId(sourceRecord, recordIndex);
+    assignRewriteRecordId(duplicateRecord, duplicateId);
+    assignRewriteRecordId(duplicateImportedRecord, duplicateId);
+    delete duplicateRecord.rewrited;
+    delete duplicateImportedRecord.rewrited;
+
+    const insertIndex = recordIndex + 1;
+    const duplicatedEditableLines = cloneRewriteLines(
+        getRewriteEditableLines(sourceRecord, recordIndex).map((line) => createRewriteEditableLine(line)),
+    );
+    const shiftedEditCache = shiftRewriteIndexedCacheForInsert(rewriteRecordEditCache, insertIndex);
+    const shiftedHistoryCache = shiftRewriteIndexedCacheForInsert(rewriteRecordHistoryCache, insertIndex);
+
+    rewriteRecords.splice(insertIndex, 0, duplicateRecord);
+    rewriteImportedRecords.splice(insertIndex, 0, duplicateImportedRecord);
+    rewriteRecordOrigins.splice(insertIndex, 0, getRewriteRecordOrigin(recordIndex));
+
+    rewriteRecordEditCache.clear();
+    rewriteRecordHistoryCache.clear();
+    shiftedEditCache.forEach((value, key) => rewriteRecordEditCache.set(key, value));
+    shiftedHistoryCache.forEach((value, key) => rewriteRecordHistoryCache.set(key, value));
+    rewriteRecordEditCache.set(insertIndex, duplicatedEditableLines);
+    rewriteRecordHistoryCache.set(insertIndex, { undoStack: [], redoStack: [] });
+
+    rewriteAvailableRoles = collectRewriteAvailableRoles(rewriteRecords);
+    rewriteSelectedIndex = -1;
+    renderRewriteFileInfo();
+    renderRewriteRecordList();
+    setRewriteUploadStatus(`已复制记录 ${resolveRewriteRecordId(sourceRecord) || recordIndex + 1}，新记录 id：${duplicateId}。`);
+    selectRewriteRecord(insertIndex);
 }
 
 async function submitRewriteRecordReview(recordIndex) {
@@ -6743,7 +6931,7 @@ async function startSession() {
 function applyAutoModeView(data) {
     autoModeJobId = String(data?.job_id || autoModeJobId || '').trim();
     currentAutoModeId = String(data?.auto_mode_id || currentAutoModeId || '').trim();
-    currentSessionId = null;
+    currentSessionId = String(data?.session_id || '').trim() || null;
     currentSlotKeys = Object.keys(data?.collected_slots || {});
     sessionClosed = Boolean(data?.session_closed);
     sessionTerminalEntries = Array.isArray(data?.terminal_entries) ? data.terminal_entries : [];
@@ -6751,11 +6939,11 @@ function applyAutoModeView(data) {
     sessionStartedAt = String(data?.started_at || '').trim();
     sessionEndedAt = String(data?.ended_at || '').trim();
     resetReviewState();
-    setSessionStatus(data?.status || 'completed');
-    setSessionIdIndicator(data?.auto_mode_id || '', {
-        label: 'Auto ID',
-        titleReady: '点击复制完整自动模式 ID',
-        titleEmpty: '自动模式启动后可复制 Auto ID',
+    setSessionStatus(data?.status || (currentSessionId ? 'active' : 'completed'));
+    setSessionIdIndicator(data?.auto_mode_id || currentSessionId || '', {
+        label: currentSessionId ? 'Session ID' : 'Auto ID',
+        titleReady: currentSessionId ? '点击复制完整会话 ID' : '点击复制完整自动模式 ID',
+        titleEmpty: currentSessionId ? '自动模式结束后可复制 Session ID' : '自动模式启动后可复制 Auto ID',
     });
     setNextRound(Number(data?.next_round_index || 1) || 1);
     updateScenarioHeader(data?.scenario || null);
@@ -6766,7 +6954,7 @@ function applyAutoModeView(data) {
     hideIssueReferencePopover();
     closeTerminalTurnMenu();
     syncSessionTimer();
-    updateInputAvailability(false);
+    updateInputAvailability(Boolean(currentSessionId) && !sessionClosed);
     if (Boolean(data?.session_closed) && Boolean(data?.job_done)) {
         resetReviewState();
         openReviewModal(
@@ -7502,6 +7690,10 @@ rewriteRecordList.addEventListener('contextmenu', (event) => {
         return;
     }
     openRewriteRecordMenu(recordIndex, event.clientX, event.clientY);
+});
+rewriteRecordCopyButton?.addEventListener('click', () => {
+    if (!rewriteRecordMenuState) return;
+    duplicateRewriteRecord(Number(rewriteRecordMenuState.recordIndex));
 });
 issueReferenceCloseButton.addEventListener('click', hideIssueReferencePopover);
 terminalInsertAddressIeButton.addEventListener('click', () => {

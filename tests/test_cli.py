@@ -276,8 +276,15 @@ class CliTests(unittest.TestCase):
             service_agent_model="gpt-4o",
             default_temperature=0.0,
             service_ok_prefix_probability=0.0,
+            service_query_prefix_weights={"": 1.0},
             product_routing_enabled=False,
             product_routing_apply_probability=0.0,
+            product_routing_entry_weights={},
+            product_routing_brand_series_weights={},
+            product_routing_usage_scene_weights={},
+            product_routing_purchase_or_property_weights={},
+            product_routing_property_year_weights={},
+            product_routing_history_confirmation_weights={},
             max_rounds=6,
         )
         scenario = build_scenario()

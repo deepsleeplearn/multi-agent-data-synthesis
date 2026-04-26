@@ -897,8 +897,15 @@ class HiddenSettingsTool:
     ) -> None:
         customer = candidate.setdefault("customer", {})
         if not _has_meaningful_text(customer.get("address", "")):
+            hidden_context = candidate.get("hidden_context", {})
+            address_seed = str(hidden_context.get("frontend_auto_address_seed", "")).strip()
+            address_scenario_id = (
+                f"{scenario_id}:frontend-auto-address:{address_seed}"
+                if address_seed
+                else scenario_id
+            )
             customer["address"] = self._generate_local_customer_address(
-                scenario_id,
+                address_scenario_id,
                 generation_plan.address_style,
             )
 
@@ -1758,8 +1765,14 @@ class HiddenSettingsTool:
         else:
             actual_address = str(customer.get("address", "")).strip()
             if not _has_meaningful_text(actual_address) or actual_address == configured_known_address:
+                address_seed = str(hidden_context.get("frontend_auto_address_seed", "")).strip()
+                address_scenario_id = (
+                    f"{scenario.scenario_id}:configured-known-address-mismatch:{address_seed}"
+                    if address_seed
+                    else f"{scenario.scenario_id}:configured-known-address-mismatch"
+                )
                 actual_address = self._generate_local_customer_address(
-                    f"{scenario.scenario_id}:configured-known-address-mismatch",
+                    address_scenario_id,
                     generation_plan.address_style,
                 )
             if actual_address == configured_known_address:

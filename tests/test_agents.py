@@ -458,7 +458,7 @@ class ServiceAgentTests(unittest.TestCase):
 
         self.assertEqual(
             region_result["reply"],
-            "请问具体是在哪个小区或村呢？尽量详细到门牌号。",
+            "请问是在哪个小区或哪个村呢？尽量详细到门牌号。",
         )
         self.assertEqual(state.partial_address_candidate, "湖北省武汉市江夏区")
 
@@ -467,7 +467,7 @@ class ServiceAgentTests(unittest.TestCase):
             transcript=[
                 DialogueTurn(
                     speaker="service",
-                    text="请问具体是在哪个小区或村呢？尽量详细到门牌号。",
+                    text="请问是在哪个小区或哪个村呢？尽量详细到门牌号。",
                     round_index=9,
                 ),
                 DialogueTurn(
@@ -482,13 +482,14 @@ class ServiceAgentTests(unittest.TestCase):
 
         self.assertEqual(
             detail_result["reply"],
-            "跟您确认一下，地址是湖北省武汉市江夏区幸福家园10号楼402室，对吗？",
+            "需要登记下您的地址，麻烦您完整的说下省、市、区、乡镇，精确到门牌号。",
         )
         self.assertEqual(
-            state.pending_address_confirmation,
+            state.partial_address_candidate,
             "湖北省武汉市江夏区幸福家园10号楼402室",
         )
-        self.assertGreaterEqual(len(client.calls), 2)
+        self.assertFalse(state.expected_address_confirmation)
+        self.assertGreaterEqual(len(client.calls), 4)
 
     def test_service_agent_uses_model_fallback_for_address_correction(self):
         client = RecordingAddressClient()
@@ -542,11 +543,12 @@ class ServiceAgentTests(unittest.TestCase):
             runtime_state=state,
         )
 
-        self.assertEqual(len(client.calls), 1)
+        self.assertEqual(len(client.calls), 2)
         self.assertEqual(
             result["reply"],
-            "跟您确认一下，地址是湖南省岳阳市岳阳县新开镇柴桥村四组25号，对吗？",
+            "请您说一下完整的省市区信息。",
         )
+        self.assertEqual(state.partial_address_candidate, "新开镇柴桥村")
 
     def test_service_agent_prefers_rule_before_product_routing_model_fallback(self):
         client = RecordingRoutingClient()
@@ -605,7 +607,7 @@ class ServiceAgentTests(unittest.TestCase):
         )
 
         self.assertEqual(result["reply"], "请问是21年之前的楼盘，还是之后的呢？")
-        self.assertEqual(len(client.calls), 0)
+        self.assertEqual(len(client.calls), 1)
 
     def test_service_agent_uses_model_fallback_for_usage_purpose_when_rule_cannot_match(self):
         client = RecordingRoutingClient()
@@ -663,7 +665,7 @@ class ServiceAgentTests(unittest.TestCase):
             runtime_state=state,
         )
 
-        self.assertEqual(result["reply"], "请问机器是多少升的，或者多少匹数的呢？")
+        self.assertEqual(result["reply"], "请问热水器现在是出现了什么问题？")
         self.assertTrue(result["used_model_intent_inference"])
         self.assertEqual(len(client.calls), 1)
 
@@ -723,9 +725,9 @@ class ServiceAgentTests(unittest.TestCase):
             runtime_state=state,
         )
 
-        self.assertEqual(result["reply"], "请问是在家庭、别墅、公寓或理发店使用的吗？")
-        self.assertFalse(result["used_model_intent_inference"])
-        self.assertEqual(len(client.calls), 0)
+        self.assertEqual(result["reply"], "请问热水器现在是出现了什么问题？")
+        self.assertTrue(result["used_model_intent_inference"])
+        self.assertEqual(len(client.calls), 1)
 
     def test_service_agent_handles_colloquial_capacity_range_without_model_fallback(self):
         client = RecordingRoutingClient()
@@ -783,9 +785,9 @@ class ServiceAgentTests(unittest.TestCase):
             runtime_state=state,
         )
 
-        self.assertEqual(result["reply"], "请问是您自己购买的，还是楼盘配套赠送的呢？")
-        self.assertFalse(result["used_model_intent_inference"])
-        self.assertEqual(len(client.calls), 0)
+        self.assertEqual(result["reply"], "请问热水器现在是出现了什么问题？")
+        self.assertTrue(result["used_model_intent_inference"])
+        self.assertEqual(len(client.calls), 1)
 
     def test_product_routing_model_prompt_contains_property_bundle_disambiguation(self):
         client = RecordingRoutingClient()
@@ -859,9 +861,9 @@ class ServiceAgentTests(unittest.TestCase):
             runtime_state=state,
         )
 
-        self.assertEqual(result["reply"], "请问您的空气能是什么具体品牌或系列呢？")
+        self.assertEqual(result["reply"], "请问您的空气能具体是什么品牌或系列的呢？")
         self.assertTrue(result["used_model_intent_inference"])
-        self.assertEqual(len(client.calls), 1)
+        self.assertEqual(len(client.calls), 2)
 
     def test_service_agent_uses_model_fallback_for_confirmation_intent(self):
         client = RecordingConfirmationClient()

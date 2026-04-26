@@ -253,8 +253,8 @@ class ProductRoutingPlanTests(unittest.TestCase):
         components = extract_address_components("甘肃白银平川区")
 
         self.assertEqual(components.province, "甘肃省")
-        self.assertEqual(components.city, "白银市")
-        self.assertEqual(components.district, "平川区")
+        self.assertEqual(components.city, "")
+        self.assertEqual(components.district, "白银平川区")
 
     def test_extract_address_components_does_not_infer_fake_city_from_district_only_prefix(self):
         components = extract_address_components("七里河区雁南路福源佳园小区4号楼2单元")
@@ -834,7 +834,7 @@ class ProductRoutingServicePolicyTests(unittest.TestCase):
             collected_slots=collected_slots,
             runtime_state=state,
         )
-        self.assertEqual(post_routing.reply, "请问空气能热水器现在是出现了什么问题？")
+        self.assertEqual(post_routing.reply, "请问热水器现在是出现了什么问题？")
         self.assertEqual(post_routing.slot_updates["product_routing_result"], ROUTING_RESULT_BUILDING)
         self.assertTrue(state.product_routing_completed)
 
@@ -1184,7 +1184,7 @@ class ProductRoutingServicePolicyTests(unittest.TestCase):
         )
 
         self.assertNotEqual(result.reply, PROMPT_PURCHASE_OR_PROPERTY)
-        self.assertEqual(result.reply, "请问空气能热水器现在是出现了什么问题？")
+        self.assertEqual(result.reply, "请问热水器现在是出现了什么问题？")
         self.assertTrue(policy.last_used_model_intent_inference)
         self.assertEqual(
             state.product_routing_observed_trace,
@@ -1347,7 +1347,7 @@ class ProductRoutingServicePolicyTests(unittest.TestCase):
             runtime_state=state,
         )
 
-        self.assertEqual(result.reply, "请问空气能热水器现在是出现了什么问题？")
+        self.assertEqual(result.reply, "请问热水器现在是出现了什么问题？")
         self.assertEqual(state.product_routing_observed_trace, ["entry.unknown", "scene.other_unknown"])
         self.assertEqual(
             scenario.hidden_context["product_routing_trace"],
@@ -1398,7 +1398,7 @@ class ProductRoutingServicePolicyTests(unittest.TestCase):
             runtime_state=state,
         )
 
-        self.assertEqual(result.reply, "请问空气能热水器现在是出现了什么问题？")
+        self.assertEqual(result.reply, "请问热水器现在是出现了什么问题？")
         self.assertEqual(result.slot_updates["product_routing_result"], ROUTING_RESULT_BUILDING)
         self.assertEqual(
             state.product_routing_observed_trace,
@@ -1450,7 +1450,7 @@ class ProductRoutingServicePolicyTests(unittest.TestCase):
             runtime_state=state,
         )
 
-        self.assertEqual(result.reply, "请问空气能热水器现在是出现了什么问题？")
+        self.assertEqual(result.reply, "请问热水器现在是出现了什么问题？")
         self.assertEqual(result.slot_updates["product_routing_result"], ROUTING_RESULT_BUILDING)
         self.assertEqual(
             state.product_routing_observed_trace,

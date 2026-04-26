@@ -307,7 +307,7 @@ class ReviewDbFetchTests(unittest.TestCase):
         self.assertIn("最终槽位:", cli_output)
         self.assertIn('"issue_description": "加热很慢"', cli_output)
         self.assertIn('"product_routing_result": "楼宇 + 可直接确认机型"', cli_output)
-        self.assertIn('仍缺失槽位: ["address"]', cli_output)
+        self.assertNotIn("仍缺失槽位:", cli_output)
 
     def test_format_review_records_keeps_json_default_and_supports_cli_mode(self):
         record = {

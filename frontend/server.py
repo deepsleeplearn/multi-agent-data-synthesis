@@ -1061,6 +1061,7 @@ def _apply_frontend_auto_address_policy_seed(scenario: Scenario, known_address: 
         {
             "frontend_auto_address_policy_enabled": True,
             "frontend_auto_configured_known_address": sanitized,
+            "frontend_auto_address_seed": secrets.token_hex(8),
         }
     )
     return scenario.with_generated_hidden_settings(
@@ -1754,16 +1755,21 @@ def _create_auto_mode_job(req: StartSessionRequest) -> tuple[str, dict[str, Any]
         "auto_mode_id": auto_mode_id,
         "model_name": selected_model_name,
         "scenario": scenario,
+        "base_scenario": scenario.to_dict(),
+        "policy": _build_service_policy(selected_model_name),
         "runtime_state": ServiceRuntimeState(),
         "transcript": [],
+        "trace": [],
         "terminal_entries": [],
         "auto_mode_preview_lines": auto_mode_preview_lines,
         "required_slots": required_slots,
         "collected_slots": collected_slots,
         "rounds_limit": rounds_limit,
         "status": "active",
+        "aborted_reason": "",
         "started_at": started_at,
         "ended_at": "",
+        "checkpoints": [],
         "session_config": {
             "scenario_id": scenario.scenario_id,
             "model_name": selected_model_name,
@@ -1782,6 +1788,9 @@ def _create_auto_mode_job(req: StartSessionRequest) -> tuple[str, dict[str, Any]
             "persist_to_db": bool(req.persist_to_db),
         },
     }
+    session["initial_runtime_state"] = asdict(session["runtime_state"])
+    session["initial_collected_slots"] = dict(collected_slots)
+    _append_checkpoint(session, source_round_index=0)
     job_id = str(uuid.uuid4())
     job = {
         "session": session,
@@ -1798,24 +1807,32 @@ def _create_auto_mode_job(req: StartSessionRequest) -> tuple[str, dict[str, Any]
 
 def _build_auto_mode_job_view(job_id: str, job: dict[str, Any]) -> dict[str, Any]:
     session = job["session"]
+    continuation_session_id = ""
+    continuation_session: dict[str, Any] | None = None
+    if bool(job.get("done")) and str(session.get("status", "")).strip() != "error":
+        continuation_session_id = _materialize_auto_mode_continuation_session(job_id, session)
+        continuation_session = sessions.get(continuation_session_id)
     transcript = session["transcript"]
+    view_session = continuation_session or session
     return {
         "job_id": job_id,
         "auto_mode_id": str(session.get("auto_mode_id", "")).strip(),
+        "session_id": continuation_session_id,
         "mode": "auto_mode",
-        "status": session["status"],
-        "scenario": session["scenario"].to_dict(),
-        "session_config": dict(session.get("session_config", {})),
-        "required_slots": list(session["required_slots"]),
-        "collected_slots": dict(session["collected_slots"]),
-        "runtime_state": _build_runtime_state_view(session),
-        "rounds_limit": session["rounds_limit"],
-        "started_at": str(session.get("started_at", "")).strip(),
-        "ended_at": str(session.get("ended_at", "")).strip(),
-        "session_closed": bool(job.get("done")),
-        "next_round_index": _next_round_index(transcript),
-        "completed_rounds": _completed_round_count(transcript),
-        "terminal_entries": _copy_terminal_entries(session.get("terminal_entries", [])),
+        "status": view_session["status"] if continuation_session else session["status"],
+        "auto_mode_status": session["status"],
+        "scenario": view_session["scenario"].to_dict(),
+        "session_config": dict(view_session.get("session_config", {})),
+        "required_slots": list(view_session["required_slots"]),
+        "collected_slots": dict(view_session["collected_slots"]),
+        "runtime_state": _build_runtime_state_view(view_session),
+        "rounds_limit": view_session["rounds_limit"],
+        "started_at": str(view_session.get("started_at", "")).strip(),
+        "ended_at": str(view_session.get("ended_at", "")).strip(),
+        "session_closed": False if continuation_session else bool(job.get("done")),
+        "next_round_index": _next_round_index(view_session["transcript"] if continuation_session else transcript),
+        "completed_rounds": _completed_round_count(view_session["transcript"] if continuation_session else transcript),
+        "terminal_entries": _copy_terminal_entries(view_session.get("terminal_entries", [])),
         "auto_mode_preview_lines": [
             str(line).strip()
             for line in session.get("auto_mode_preview_lines", [])
@@ -1824,6 +1841,76 @@ def _build_auto_mode_job_view(job_id: str, job: dict[str, Any]) -> dict[str, Any
         "job_done": bool(job.get("done")),
         "job_error": str(job.get("error", "")).strip(),
     }
+
+
+def _latest_completed_auto_checkpoint(session: dict[str, Any]) -> dict[str, Any] | None:
+    checkpoints = [item for item in session.get("checkpoints", []) if isinstance(item, dict)]
+    if not checkpoints:
+        return None
+    return max(
+        checkpoints,
+        key=lambda item: int(item.get("checkpoint_index", 0) or 0),
+    )
+
+
+def _materialize_auto_mode_continuation_session(job_id: str, auto_session: dict[str, Any]) -> str:
+    continuation_session_id = str(auto_session.get("auto_mode_id", "")).strip() or job_id
+    existing = sessions.get(continuation_session_id)
+    if existing and existing.get("source_auto_mode_job_id") == job_id:
+        return continuation_session_id
+
+    checkpoint = _latest_completed_auto_checkpoint(auto_session)
+    transcript = _deserialize_turns_from_storage(checkpoint.get("transcript")) if checkpoint else list(auto_session.get("transcript", []))
+    if transcript and transcript[-1].speaker == USER_SPEAKER and checkpoint:
+        transcript = _deserialize_turns_from_storage(checkpoint.get("transcript"))
+    terminal_entries = (
+        _copy_terminal_entries(checkpoint.get("terminal_entries", []))
+        if checkpoint
+        else _copy_terminal_entries(auto_session.get("terminal_entries", []))
+    )
+    collected_slots = dict(checkpoint.get("collected_slots", {})) if checkpoint else dict(auto_session.get("collected_slots", {}))
+    runtime_state_payload = dict(checkpoint.get("runtime_state", {})) if checkpoint else asdict(auto_session["runtime_state"])
+    scenario = (
+        Scenario.from_dict(dict(checkpoint.get("scenario", {})))
+        if checkpoint and isinstance(checkpoint.get("scenario"), dict)
+        else Scenario.from_dict(auto_session["scenario"].to_dict())
+    )
+    model_name = _normalize_frontend_model_name(
+        str(auto_session.get("model_name") or auto_session.get("session_config", {}).get("model_name") or "")
+    )
+    continuation = {
+        "username": str(auto_session.get("username", "")).strip(),
+        "model_name": model_name,
+        "scenario": scenario,
+        "base_scenario": dict(auto_session.get("base_scenario", scenario.to_dict())),
+        "policy": _build_service_policy(model_name),
+        "runtime_state": ServiceRuntimeState(**copy.deepcopy(runtime_state_payload)),
+        "transcript": transcript,
+        "trace": list(auto_session.get("trace", [])),
+        "terminal_entries": terminal_entries,
+        "required_slots": list(auto_session.get("required_slots", [])),
+        "collected_slots": collected_slots,
+        "initial_runtime_state": dict(auto_session.get("initial_runtime_state", {})),
+        "initial_collected_slots": dict(auto_session.get("initial_collected_slots", {})),
+        "rounds_limit": int(auto_session.get("rounds_limit", 0) or config.max_rounds),
+        "status": "active",
+        "aborted_reason": "",
+        "started_at": str(auto_session.get("started_at", "")).strip(),
+        "ended_at": "",
+        "review_submitted": False,
+        "session_config": {
+            **dict(auto_session.get("session_config", {})),
+            "source": "auto_mode_continuation",
+            "auto_mode_id": continuation_session_id,
+        },
+        "checkpoints": list(auto_session.get("checkpoints", [])),
+        "source_auto_mode_job_id": job_id,
+        "auto_mode_status": str(auto_session.get("status", "")).strip(),
+    }
+    _rebuild_terminal_entries_from_transcript(continuation, keep_line_entries=True)
+    sessions[continuation_session_id] = continuation
+    _persist_session(continuation_session_id, continuation)
+    return continuation_session_id
 
 
 def _normalize_auto_mode_service_action(
@@ -1885,15 +1972,23 @@ def _finalize_auto_mode_job(
         session = job["session"]
         session["status"] = status_value or ("error" if error_message else session.get("status", "completed"))
         session["ended_at"] = _current_display_timestamp()
-        if error_message:
+        is_abort_message = session["status"] == "aborted" and bool(error_message)
+        if error_message and not is_abort_message:
             _append_terminal_lines(
                 session,
                 lines=[f"[自动模式错误] {error_message}"],
                 tone="error",
                 round_count_snapshot=_completed_round_count(session.get("transcript", [])),
             )
+        elif is_abort_message:
+            _append_terminal_lines(
+                session,
+                lines=[error_message],
+                tone="system",
+                round_count_snapshot=_completed_round_count(session.get("transcript", [])),
+            )
         job["done"] = True
-        job["error"] = error_message
+        job["error"] = "" if is_abort_message else error_message
         job["updated_at"] = time.time()
 
 
@@ -1982,6 +2077,26 @@ async def _run_auto_mode_job_async(job_id: str) -> None:
             )
             transcript.append(opening_service_turn)
             _append_turn_entry(session, opening_service_turn)
+            session["trace"].append(
+                {
+                    "round_index": 1,
+                    "user_text": initial_user_utterance,
+                    "service_reply": opening_action["reply"],
+                    "used_model_intent_inference": bool(opening_action.get("used_model_intent_inference", False)),
+                    "model_intent_inference_attempted": bool(opening_action.get("model_intent_inference_attempted", False)),
+                    "model_intent_inference_unapplied": bool(opening_action.get("model_intent_inference_unapplied", False)),
+                    "previous_user_intent_model_inference_used": bool(opening_action.get("used_model_intent_inference", False)),
+                    "previous_user_intent_model_inference_attempted": bool(opening_action.get("model_intent_inference_attempted", False)),
+                    "previous_user_intent_model_inference_unapplied": bool(opening_action.get("model_intent_inference_unapplied", False)),
+                    "slot_updates": dict(opening_action["slot_updates"]),
+                    "collected_slots_snapshot": dict(collected_slots),
+                    "runtime_state_snapshot": asdict(runtime_state),
+                    "is_ready_to_close": bool(opening_action["is_ready_to_close"]),
+                    "close_status": str(opening_action.get("close_status", "")).strip(),
+                    "close_reason": str(opening_action.get("close_reason", "")).strip(),
+                }
+            )
+            _append_checkpoint(session, source_round_index=1)
             job["updated_at"] = time.time()
         if _is_auto_mode_abort_requested(job_id):
             _finalize_auto_mode_job(job_id, status_value="aborted", error_message="已强制结束自动模式。")
@@ -2083,6 +2198,26 @@ async def _run_auto_mode_job_async(job_id: str) -> None:
                     )
                     transcript.append(service_turn)
                     _append_turn_entry(session, service_turn)
+                    session["trace"].append(
+                        {
+                            "round_index": round_index,
+                            "user_text": user_action["reply"],
+                            "service_reply": service_action["reply"],
+                            "used_model_intent_inference": bool(service_action.get("used_model_intent_inference", False)),
+                            "model_intent_inference_attempted": bool(service_action.get("model_intent_inference_attempted", False)),
+                            "model_intent_inference_unapplied": bool(service_action.get("model_intent_inference_unapplied", False)),
+                            "previous_user_intent_model_inference_used": bool(service_action.get("used_model_intent_inference", False)),
+                            "previous_user_intent_model_inference_attempted": bool(service_action.get("model_intent_inference_attempted", False)),
+                            "previous_user_intent_model_inference_unapplied": bool(service_action.get("model_intent_inference_unapplied", False)),
+                            "slot_updates": dict(service_action["slot_updates"]),
+                            "collected_slots_snapshot": dict(collected_slots),
+                            "runtime_state_snapshot": asdict(runtime_state),
+                            "is_ready_to_close": bool(service_action["is_ready_to_close"]),
+                            "close_status": str(service_action.get("close_status", "")).strip(),
+                            "close_reason": str(service_action.get("close_reason", "")).strip(),
+                        }
+                    )
+                    _append_checkpoint(session, source_round_index=round_index)
                     job["updated_at"] = time.time()
                 if _is_auto_mode_abort_requested(job_id):
                     _finalize_auto_mode_job(job_id, status_value="aborted", error_message="已强制结束自动模式。")
@@ -4031,6 +4166,7 @@ async def run_auto_mode(
         raise HTTPException(status_code=403, detail="只有测试管理员可以使用自动模式。")
     try:
         job_id, job = _create_auto_mode_job(req)
+        job["session"]["username"] = str(current_user.get("username", "")).strip()
         initial_view = _build_auto_mode_job_view(job_id, job)
         worker = threading.Thread(
             target=_run_auto_mode_job_thread,

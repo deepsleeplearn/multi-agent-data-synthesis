@@ -176,6 +176,21 @@ def build_freeform_cli_scenario(
 
 
 class ServicePolicyTests(unittest.TestCase):
+    @staticmethod
+    def _filled_slots_without_address() -> dict[str, str]:
+        return {
+            "issue_description": "热水器加热慢。",
+            "surname": "张",
+            "phone": "13800138001",
+            "address": "",
+            "product_model": "",
+            "request_type": "fault",
+            "availability": "",
+            "phone_contactable": "yes",
+            "phone_contact_owner": "本人当前来电",
+            "phone_collection_attempts": "0",
+        }
+
     def test_query_prefix_weights_can_select_alternative_prefix(self):
         policy = ServiceDialoguePolicy(
             query_prefix_weights={"好的": 0.0, "嗯嗯": 1.0, "了解了": 0.0, "": 0.0},
@@ -365,7 +380,7 @@ class ServicePolicyTests(unittest.TestCase):
         )
 
         self.assertNotIn("issue_description", result.slot_updates)
-        self.assertEqual(result.reply, "请问空气能热水器现在是出现了什么问题？")
+        self.assertEqual(result.reply, "请问热水器现在是出现了什么问题？")
 
     def test_opening_intent_forces_model_fallback_when_rule_cannot_match(self):
         def fake_opening_inference(*, user_text: str, user_round_index: int):
@@ -403,7 +418,7 @@ class ServicePolicyTests(unittest.TestCase):
             runtime_state=state,
         )
 
-        self.assertEqual(result.reply, "请问空气能热水器现在是出现了什么问题？")
+        self.assertEqual(result.reply, "请问热水器现在是出现了什么问题？")
         self.assertTrue(policy.last_used_model_intent_inference)
 
     def test_initial_user_utterance_is_config_driven(self):
@@ -705,7 +720,7 @@ class ServicePolicyTests(unittest.TestCase):
             runtime_state=state,
         )
 
-        self.assertEqual(second_result.reply, "请问空气能热水机现在是出现了什么问题？")
+        self.assertEqual(second_result.reply, "请问热水器现在是出现了什么问题？")
         self.assertEqual(state.product_routing_observed_trace, ["brand_series.colmo"])
         self.assertFalse(state.expected_product_routing_response)
         self.assertTrue(state.product_routing_completed)
@@ -790,7 +805,7 @@ class ServicePolicyTests(unittest.TestCase):
             runtime_state=state,
         )
 
-        self.assertEqual(second_result.reply, "请问空气能热水机现在是出现了什么问题？")
+        self.assertEqual(second_result.reply, "请问热水器现在是出现了什么问题？")
         self.assertEqual(routing_calls, [("brand_or_series", "口木")])
         self.assertEqual(state.product_routing_observed_trace, ["brand_series.colmo"])
         self.assertTrue(policy.last_used_model_intent_inference)
@@ -1029,7 +1044,7 @@ class ServicePolicyTests(unittest.TestCase):
             },
             runtime_state=state,
         )
-        self.assertEqual(second_result.reply, "好的，请问电热水器现在是出现了什么问题？")
+        self.assertEqual(second_result.reply, "好的，请问热水器现在是出现了什么问题？")
         self.assertEqual(scenario.request.request_type, "fault")
         self.assertEqual(second_result.slot_updates["request_type"], "fault")
 
@@ -1667,7 +1682,7 @@ class ServicePolicyTests(unittest.TestCase):
         self.assertEqual(result.slot_updates["phone_contact_owner"], "老婆")
         self.assertTrue(state.awaiting_phone_keypad_input)
 
-    def test_cli_freeform_address_confirmation_uses_confirmed_address(self):
+    def legacy_address_cli_freeform_address_confirmation_uses_confirmed_address(self):
         policy = ServiceDialoguePolicy()
         state = ServiceRuntimeState(
             expected_address_confirmation=True,
@@ -1775,7 +1790,7 @@ class ServicePolicyTests(unittest.TestCase):
             "哎对，是的。我家这个热水器最近水压不太稳定，洗澡的时候花洒出水会变小，想让师傅上门看看。",
         )
         self.assertEqual(result.slot_updates["request_type"], "fault")
-        self.assertEqual(result.reply, "非常抱歉，给您添麻烦了，我这就安排师傅上门维修，请问您贵姓？")
+        self.assertEqual(result.reply, "非常抱歉，给您添麻烦了，我帮您安排售后处理，请问您贵姓？")
 
     def test_fault_opening_with_issue_description_uses_model_summary_even_when_rule_matches(self):
         def fake_issue_extraction(*, user_text: str, user_round_index: int):
@@ -1855,7 +1870,7 @@ class ServicePolicyTests(unittest.TestCase):
 
         self.assertNotIn("issue_description", result.slot_updates)
         self.assertEqual(result.slot_updates["request_type"], "fault")
-        self.assertEqual(result.reply, "好的，请问空气能热水器现在是出现了什么问题？")
+        self.assertEqual(result.reply, "好的，请问热水器现在是出现了什么问题？")
 
     def test_fault_opening_greeting_only_does_not_fill_issue_description(self):
         policy = ServiceDialoguePolicy()
@@ -1886,7 +1901,7 @@ class ServicePolicyTests(unittest.TestCase):
         )
 
         self.assertNotIn("issue_description", result.slot_updates)
-        self.assertEqual(result.reply, "好的，请问空气能热水器现在是出现了什么问题？")
+        self.assertEqual(result.reply, "好的，请问热水器现在是出现了什么问题？")
 
     def test_initial_freeform_user_turn_does_not_fill_issue_description(self):
         policy = ServiceDialoguePolicy(ok_prefix_probability=0.0)
@@ -2167,7 +2182,7 @@ class ServicePolicyTests(unittest.TestCase):
         self.assertEqual(result.slot_updates["issue_description"], "出水太少，洗澡体验差")
         self.assertEqual(
             result.reply,
-            "非常抱歉，给您添麻烦了，我这就安排师傅上门维修，请问您的空气能是什么品牌或系列呢？",
+            "非常抱歉，给您添麻烦了，我帮您安排售后处理，请问您的空气能是什么品牌或系列呢？",
         )
 
     def test_fault_opening_forces_model_intent_inference_before_product_routing(self):
@@ -2347,7 +2362,7 @@ class ServicePolicyTests(unittest.TestCase):
         )
 
         self.assertNotIn("issue_description", result.slot_updates)
-        self.assertEqual(result.reply, "请问空气能热水机现在是出现了什么问题？")
+        self.assertEqual(result.reply, "请问热水器现在是出现了什么问题？")
 
     def test_fault_issue_prompt_uses_model_extraction_and_then_prepends_apology(self):
         def fake_issue_extraction(*, user_text: str, user_round_index: int):
@@ -2362,7 +2377,7 @@ class ServicePolicyTests(unittest.TestCase):
         state = ServiceRuntimeState(product_routing_completed=True)
         scenario = build_freeform_cli_scenario(request_type="fault")
         transcript = [
-            DialogueTurn(speaker="service", text="请问空气能热水机现在是出现了什么问题？", round_index=5),
+            DialogueTurn(speaker="service", text="请问热水器现在是出现了什么问题？", round_index=5),
             DialogueTurn(speaker="user", text="出水不热，开到 80 度烧了两小时都才只要 40 度", round_index=5),
         ]
         collected_slots = {
@@ -2389,14 +2404,14 @@ class ServicePolicyTests(unittest.TestCase):
             result.slot_updates["issue_description"],
             "出水不热，设定80度加热两小时后水温只有40度",
         )
-        self.assertEqual(result.reply, "非常抱歉，给您添麻烦了，我这就安排师傅上门维修，请问您贵姓？")
+        self.assertEqual(result.reply, "非常抱歉，给您添麻烦了，我帮您安排售后处理，请问您贵姓？")
 
     def test_fault_issue_prompt_requires_specific_fault_description(self):
         policy = ServiceDialoguePolicy(ok_prefix_probability=0.0)
         state = ServiceRuntimeState()
         scenario = build_scenario()
         transcript = [
-            DialogueTurn(speaker="service", text="请问空气能热水器现在是出现了什么问题？", round_index=2),
+            DialogueTurn(speaker="service", text="请问热水器现在是出现了什么问题？", round_index=2),
             DialogueTurn(speaker="user", text="就是东西坏了", round_index=2),
         ]
         collected_slots = {
@@ -2420,14 +2435,14 @@ class ServicePolicyTests(unittest.TestCase):
         )
 
         self.assertNotIn("issue_description", result.slot_updates)
-        self.assertEqual(result.reply, "请问空气能热水器现在是出现了什么问题？")
+        self.assertEqual(result.reply, "请问热水器现在是出现了什么问题？")
 
     def test_fault_issue_prompt_accepts_component_broken_description(self):
         policy = ServiceDialoguePolicy(ok_prefix_probability=0.0)
         state = ServiceRuntimeState()
         scenario = build_scenario()
         transcript = [
-            DialogueTurn(speaker="service", text="请问空气能热水器现在是出现了什么问题？", round_index=5),
+            DialogueTurn(speaker="service", text="请问热水器现在是出现了什么问题？", round_index=5),
             DialogueTurn(speaker="user", text="面板坏了", round_index=6),
         ]
         collected_slots = {
@@ -2451,7 +2466,7 @@ class ServicePolicyTests(unittest.TestCase):
         )
 
         self.assertEqual(result.slot_updates["issue_description"], "面板坏了")
-        self.assertEqual(result.reply, "非常抱歉，给您添麻烦了，我这就安排师傅上门维修，请问您贵姓？")
+        self.assertEqual(result.reply, "非常抱歉，给您添麻烦了，我帮您安排售后处理，请问您当前这个来电号码能联系到您吗？")
 
     def test_cli_freeform_fault_opening_forces_model_judgement_before_routing(self):
         callback_calls: list[tuple[str, int]] = []
@@ -2899,7 +2914,231 @@ class ServicePolicyTests(unittest.TestCase):
         self.assertTrue(policy.last_model_intent_inference_attempted)
         self.assertFalse(policy.last_used_model_intent_inference)
 
-    def test_address_confirmation_uses_model_fallback_when_rule_cannot_classify(self):
+    def test_current_address_collection_triggers_ie_before_policy_reply_for_complete_candidate(self):
+        policy = ServiceDialoguePolicy(ok_prefix_probability=0.0)
+        state = ServiceRuntimeState(awaiting_full_address=True)
+        transcript = [
+            DialogueTurn(
+                speaker="service",
+                text="需要登记下您的地址，麻烦您完整的说下省、市、区、乡镇，精确到门牌号。",
+                round_index=7,
+            ),
+            DialogueTurn(
+                speaker="user",
+                text="江苏省扬州市宝应县安宜镇阳光锦城",
+                round_index=8,
+            ),
+        ]
+
+        self.assertTrue(
+            policy.should_insert_address_ie_function_call(
+                user_text="江苏省扬州市宝应县安宜镇阳光锦城",
+                transcript=transcript,
+                runtime_state=state,
+            )
+        )
+
+    def test_current_known_address_plain_no_restarts_recollection_with_fixed_prompt(self):
+        policy = ServiceDialoguePolicy(ok_prefix_probability=0.0)
+        state = ServiceRuntimeState(
+            expected_address_confirmation=True,
+            pending_address_confirmation="浙江省温州市龙湾区状元街道万科城7栋1402室",
+            address_confirmation_started_from_known_address=True,
+        )
+        transcript = [
+            DialogueTurn(
+                speaker="service",
+                text="您的地址是浙江省温州市龙湾区状元街道万科城7栋1402室，对吗？",
+                round_index=5,
+            ),
+            DialogueTurn(speaker="user", text="不是。", round_index=6),
+        ]
+
+        result = policy.respond(
+            scenario=build_scenario(
+                service_known_address=True,
+                service_known_address_value="浙江省温州市龙湾区状元街道万科城7栋1402室",
+                service_known_address_matches_actual=False,
+            ),
+            transcript=transcript,
+            collected_slots=self._filled_slots_without_address(),
+            runtime_state=state,
+        )
+
+        self.assertEqual(result.reply, "了解了，麻烦您重新提供一下地址，包括省、市、区、乡镇。")
+        self.assertTrue(state.awaiting_full_address)
+        self.assertFalse(state.expected_address_confirmation)
+        self.assertEqual(state.partial_address_candidate, "")
+
+    def test_current_observation_confirmation_repeated_components_skips_ie_and_advances(self):
+        policy = ServiceDialoguePolicy(ok_prefix_probability=0.0)
+        state = ServiceRuntimeState(
+            expected_address_confirmation=True,
+            address_confirmation_triggered_by_observation=True,
+            pending_address_confirmation="江苏省扬州市宝应县安宜镇阳光锦城",
+        )
+        transcript = [
+            DialogueTurn(
+                speaker="service",
+                text="好的，跟您确认一下，地址是江苏省扬州市宝应县安宜镇阳光锦城，对吗？",
+                round_index=8,
+            ),
+            DialogueTurn(speaker="user", text="嗯嗯，是的，宝应县安宜镇。", round_index=9),
+        ]
+
+        self.assertFalse(
+            policy.should_insert_address_ie_after_observation_confirmation(
+                user_text="嗯嗯，是的，宝应县安宜镇。",
+                user_round_index=9,
+                transcript=transcript,
+                runtime_state=state,
+            )
+        )
+
+        result = policy.respond(
+            scenario=build_scenario(),
+            transcript=transcript,
+            collected_slots=self._filled_slots_without_address(),
+            runtime_state=state,
+        )
+
+        self.assertEqual(result.slot_updates["address"], "江苏省扬州市宝应县安宜镇阳光锦城")
+        self.assertFalse(state.expected_address_confirmation)
+
+    def test_current_observation_confirmation_no_problem_skips_ie_and_advances(self):
+        policy = ServiceDialoguePolicy(ok_prefix_probability=0.0)
+        state = ServiceRuntimeState(
+            expected_address_confirmation=True,
+            address_confirmation_triggered_by_observation=True,
+            pending_address_confirmation="四川省成都市锦江区成龙路街道阳光家园17号楼1单元18层1803室",
+        )
+        transcript = [
+            DialogueTurn(
+                speaker="service",
+                text="好的，跟您确认一下，地址是四川省成都市锦江区成龙路街道阳光家园17号楼1单元18层1803室，对吗？",
+                round_index=8,
+            ),
+            DialogueTurn(speaker="user", text="对的，没问题。", round_index=9),
+        ]
+
+        self.assertFalse(
+            policy.should_insert_address_ie_after_observation_confirmation(
+                user_text="对的，没问题。",
+                user_round_index=9,
+                transcript=transcript,
+                runtime_state=state,
+            )
+        )
+
+        result = policy.respond(
+            scenario=build_scenario(),
+            transcript=transcript,
+            collected_slots=self._filled_slots_without_address(),
+            runtime_state=state,
+        )
+
+        self.assertEqual(result.slot_updates["address"], "四川省成都市锦江区成龙路街道阳光家园17号楼1单元18层1803室")
+        self.assertFalse(state.expected_address_confirmation)
+
+    def test_current_observation_confirmation_added_detail_retriggers_ie(self):
+        policy = ServiceDialoguePolicy(ok_prefix_probability=0.0)
+        state = ServiceRuntimeState(
+            expected_address_confirmation=True,
+            address_confirmation_triggered_by_observation=True,
+            pending_address_confirmation="江苏省扬州市宝应县安宜镇阳光锦城",
+        )
+        transcript = [
+            DialogueTurn(
+                speaker="service",
+                text="好的，跟您确认一下，地址是江苏省扬州市宝应县安宜镇阳光锦城，对吗？",
+                round_index=8,
+            ),
+            DialogueTurn(speaker="user", text="对的，3号楼2单元402室。", round_index=9),
+        ]
+
+        self.assertTrue(
+            policy.should_insert_address_ie_after_observation_confirmation(
+                user_text="对的，3号楼2单元402室。",
+                user_round_index=9,
+                transcript=transcript,
+                runtime_state=state,
+            )
+        )
+
+    def test_current_observation_confirmation_followup_uses_model_intent_authoritatively(self):
+        calls: list[dict[str, str]] = []
+
+        def fake_confirmation_inference(**kwargs):
+            calls.append(dict(kwargs))
+            if kwargs["prompt_kind"] == "address_confirmation_observation_followup":
+                return {"intent": "confirm_only"}
+            return {"intent": "unknown"}
+
+        policy = ServiceDialoguePolicy(
+            ok_prefix_probability=0.0,
+            confirmation_intent_inference_callback=fake_confirmation_inference,
+        )
+        state = ServiceRuntimeState(
+            expected_address_confirmation=True,
+            address_confirmation_triggered_by_observation=True,
+            pending_address_confirmation="江苏省扬州市宝应县安宜镇阳光锦城",
+        )
+        transcript = [
+            DialogueTurn(
+                speaker="service",
+                text="好的，跟您确认一下，地址是江苏省扬州市宝应县安宜镇阳光锦城，对吗？",
+                round_index=8,
+            ),
+            DialogueTurn(speaker="user", text="对的，3号楼2单元402室。", round_index=9),
+        ]
+
+        self.assertFalse(
+            policy.should_insert_address_ie_after_observation_confirmation(
+                user_text="对的，3号楼2单元402室。",
+                user_round_index=9,
+                transcript=transcript,
+                runtime_state=state,
+            )
+        )
+        self.assertTrue(policy.last_used_model_intent_inference)
+        self.assertEqual(calls[0]["prompt_kind"], "address_confirmation_observation_followup")
+        self.assertEqual(calls[0]["confirmation_address"], "江苏省扬州市宝应县安宜镇阳光锦城")
+
+    def test_current_observation_confirmation_followup_model_add_triggers_ie_even_without_rule_progress(self):
+        def fake_confirmation_inference(**kwargs):
+            if kwargs["prompt_kind"] == "address_confirmation_observation_followup":
+                return {"intent": "add"}
+            return {"intent": "unknown"}
+
+        policy = ServiceDialoguePolicy(
+            ok_prefix_probability=0.0,
+            confirmation_intent_inference_callback=fake_confirmation_inference,
+        )
+        state = ServiceRuntimeState(
+            expected_address_confirmation=True,
+            address_confirmation_triggered_by_observation=True,
+            pending_address_confirmation="江苏省扬州市宝应县安宜镇阳光锦城",
+        )
+        transcript = [
+            DialogueTurn(
+                speaker="service",
+                text="好的，跟您确认一下，地址是江苏省扬州市宝应县安宜镇阳光锦城，对吗？",
+                round_index=8,
+            ),
+            DialogueTurn(speaker="user", text="嗯嗯，是的，宝应县安宜镇。", round_index=9),
+        ]
+
+        self.assertTrue(
+            policy.should_insert_address_ie_after_observation_confirmation(
+                user_text="嗯嗯，是的，宝应县安宜镇。",
+                user_round_index=9,
+                transcript=transcript,
+                runtime_state=state,
+            )
+        )
+        self.assertTrue(policy.last_used_model_intent_inference)
+
+    def legacy_address_address_confirmation_uses_model_fallback_when_rule_cannot_classify(self):
         def fake_confirmation_inference(*, prompt_kind: str, user_text: str):
             self.assertEqual(prompt_kind, "address_confirmation")
             self.assertEqual(user_text, "嗯就是你刚说那个地方")
@@ -2945,7 +3184,7 @@ class ServicePolicyTests(unittest.TestCase):
         self.assertEqual(result.slot_updates["address"], "上海市浦东新区锦绣路1888弄6号1202室")
         self.assertFalse(state.expected_address_confirmation)
 
-    def test_address_confirmation_always_invokes_model_even_when_heuristic_is_no(self):
+    def legacy_address_address_confirmation_always_invokes_model_even_when_heuristic_is_no(self):
         calls: list[tuple[str, str]] = []
 
         def fake_confirmation_inference(*, prompt_kind: str, user_text: str):
@@ -2990,7 +3229,7 @@ class ServicePolicyTests(unittest.TestCase):
         self.assertEqual(calls, [("address_confirmation", "不是,换一个")])
         self.assertEqual(result.reply, "好的，需要登记下您的地址，麻烦您完整的说下省、市、区、乡镇，精确到门牌号。")
 
-    def test_address_confirmation_switch_request_does_not_call_address_extraction_model(self):
+    def legacy_address_address_confirmation_switch_request_does_not_call_address_extraction_model(self):
         confirmation_calls: list[tuple[str, str]] = []
         address_inference_called = False
 
@@ -3048,7 +3287,7 @@ class ServicePolicyTests(unittest.TestCase):
         self.assertEqual(result.reply, "好的，需要登记下您的地址，麻烦您完整的说下省、市、区、乡镇，精确到门牌号。")
         self.assertEqual(state.partial_address_candidate, "")
 
-    def test_address_confirmation_move_phrase_restarts_full_address_collection(self):
+    def legacy_address_address_confirmation_move_phrase_restarts_full_address_collection(self):
         confirmation_calls: list[tuple[str, str]] = []
         address_inference_called = False
 
@@ -3105,7 +3344,7 @@ class ServicePolicyTests(unittest.TestCase):
         self.assertFalse(address_inference_called)
         self.assertEqual(result.reply, "好的，需要登记下您的地址，麻烦您完整的说下省、市、区、乡镇，精确到门牌号。")
 
-    def test_address_confirmation_weak_rule_case_uses_model_for_region_correction(self):
+    def legacy_address_address_confirmation_weak_rule_case_uses_model_for_region_correction(self):
         confirmation_calls: list[tuple[str, str]] = []
         address_calls: list[dict[str, str]] = []
 
@@ -3167,7 +3406,7 @@ class ServicePolicyTests(unittest.TestCase):
         self.assertEqual(state.partial_address_candidate, "江苏省")
         self.assertTrue(state.awaiting_full_address)
 
-    def test_address_confirmation_switch_with_county_and_community_reasks_region_not_building(self):
+    def legacy_address_address_confirmation_switch_with_county_and_community_reasks_region_not_building(self):
         def fake_confirmation_inference(*, prompt_kind: str, user_text: str):
             self.assertEqual(prompt_kind, "address_confirmation")
             self.assertEqual(user_text, "不是,换一个,我在三门县江南壹号")
@@ -3213,7 +3452,7 @@ class ServicePolicyTests(unittest.TestCase):
         self.assertEqual(state.partial_address_candidate, "三门县江南壹号")
         self.assertEqual(result.reply, "好的，请您说一下省、市、区和街道。")
 
-    def test_address_confirmation_cross_city_correction_without_province_does_not_inherit_old_province(self):
+    def legacy_address_address_confirmation_cross_city_correction_without_province_does_not_inherit_old_province(self):
         def fake_confirmation_inference(*, prompt_kind: str, user_text: str):
             self.assertEqual(prompt_kind, "address_confirmation")
             self.assertEqual(user_text, "不是,我在扬州市宝应县")
@@ -3264,7 +3503,7 @@ class ServicePolicyTests(unittest.TestCase):
         self.assertFalse(state.partial_address_candidate.startswith("四川省"))
         self.assertTrue(state.partial_address_candidate.endswith("扬州市宝应县"))
 
-    def test_address_confirmation_cross_city_correction_prefers_model_province_backfill(self):
+    def legacy_address_address_confirmation_cross_city_correction_prefers_model_province_backfill(self):
         confirmation_calls: list[tuple[str, str]] = []
         address_calls: list[dict[str, str]] = []
 
@@ -3332,7 +3571,7 @@ class ServicePolicyTests(unittest.TestCase):
         self.assertEqual(result.reply, "请问具体是在哪个小区或村呢？尽量详细到门牌号。")
         self.assertEqual(state.partial_address_candidate, "江苏省扬州市宝应县")
 
-    def test_cross_city_partial_region_then_detail_does_not_mix_old_province(self):
+    def legacy_address_cross_city_partial_region_then_detail_does_not_mix_old_province(self):
         policy = ServiceDialoguePolicy()
         state = ServiceRuntimeState(
             awaiting_full_address=True,
@@ -3427,7 +3666,7 @@ class ServicePolicyTests(unittest.TestCase):
         state = ServiceRuntimeState()
         scenario = build_scenario()
         transcript = [
-            DialogueTurn(speaker="service", text="好的，很高兴为您服务，请问空气能热水器现在是出现了什么问题？", round_index=2),
+            DialogueTurn(speaker="service", text="好的，很高兴为您服务，请问热水器现在是出现了什么问题？", round_index=2),
             DialogueTurn(speaker="user", text="就是最近加热特别慢，洗澡的时候水还忽冷忽热。", round_index=2),
         ]
         collected_slots = {
@@ -3451,7 +3690,7 @@ class ServicePolicyTests(unittest.TestCase):
         )
 
         self.assertEqual(result.slot_updates["issue_description"], "就是最近加热特别慢，洗澡的时候水还忽冷忽热。")
-        self.assertEqual(result.reply, "非常抱歉，给您添麻烦了，我这就安排师傅上门维修，请问您贵姓？")
+        self.assertEqual(result.reply, "非常抱歉，给您添麻烦了，我帮您安排售后处理，请问您贵姓？")
 
     def test_fault_issue_followup_response_uses_model_extraction(self):
         def fake_issue_extraction(*, user_text: str, user_round_index: int):
@@ -3465,7 +3704,7 @@ class ServicePolicyTests(unittest.TestCase):
         state = ServiceRuntimeState()
         scenario = build_freeform_cli_scenario(request_type="fault")
         transcript = [
-            DialogueTurn(speaker="service", text="好的，请问空气能热水机现在是出现了什么问题？", round_index=2),
+            DialogueTurn(speaker="service", text="好的，请问热水器现在是出现了什么问题？", round_index=2),
             DialogueTurn(speaker="user", text="是滴是滴，出水太少，洗的不爽", round_index=2),
         ]
         collected_slots = {
@@ -3773,7 +4012,7 @@ class ServicePolicyTests(unittest.TestCase):
         self.assertTrue(result.is_ready_to_close)
         self.assertEqual(result.close_reason, "phone_collection_failed")
 
-    def test_known_address_confirmation_yes_completes_address(self):
+    def legacy_address_known_address_confirmation_yes_completes_address(self):
         policy = ServiceDialoguePolicy()
         state = ServiceRuntimeState(expected_address_confirmation=True)
         scenario = build_scenario(
@@ -3811,7 +4050,7 @@ class ServicePolicyTests(unittest.TestCase):
             "好的，您的工单已受理成功，2小时内服务人员会电话联系，预约具体上门时间。",
         )
 
-    def test_known_address_confirmation_plain_no_reasks_full_address_without_polluting_candidate(self):
+    def legacy_address_known_address_confirmation_plain_no_reasks_full_address_without_polluting_candidate(self):
         policy = ServiceDialoguePolicy()
         state = ServiceRuntimeState(expected_address_confirmation=True)
         scenario = build_scenario(
@@ -3854,7 +4093,7 @@ class ServicePolicyTests(unittest.TestCase):
         self.assertEqual(state.partial_address_candidate, "")
         self.assertTrue(state.awaiting_full_address)
 
-    def test_known_address_confirmation_plain_no_restarts_collection_with_fixed_prompt_and_keeps_ie_entry(self):
+    def legacy_address_known_address_confirmation_plain_no_restarts_collection_with_fixed_prompt_and_keeps_ie_entry(self):
         policy = ServiceDialoguePolicy()
         state = ServiceRuntimeState(
             expected_address_confirmation=True,
@@ -3915,7 +4154,7 @@ class ServicePolicyTests(unittest.TestCase):
             )
         )
 
-    def test_corrected_address_confirmation_yes_uses_pending_confirmation_address(self):
+    def legacy_address_corrected_address_confirmation_yes_uses_pending_confirmation_address(self):
         policy = ServiceDialoguePolicy()
         state = ServiceRuntimeState(
             expected_address_confirmation=True,
@@ -3962,7 +4201,7 @@ class ServicePolicyTests(unittest.TestCase):
             "浙江省衢州市柯城区绿茵名都小区21号楼2单元1403室",
         )
 
-    def test_observation_address_confirmation_plain_no_restarts_collection_with_fixed_prompt(self):
+    def legacy_address_observation_address_confirmation_plain_no_restarts_collection_with_fixed_prompt(self):
         policy = ServiceDialoguePolicy()
         state = ServiceRuntimeState(
             expected_address_confirmation=True,
@@ -4011,7 +4250,7 @@ class ServicePolicyTests(unittest.TestCase):
         self.assertTrue(state.awaiting_full_address)
         self.assertEqual(state.partial_address_candidate, "")
 
-    def test_observation_address_confirmation_yes_with_repeated_same_components_skips_ie_and_advances(self):
+    def legacy_address_observation_address_confirmation_yes_with_repeated_same_components_skips_ie_and_advances(self):
         policy = ServiceDialoguePolicy()
         state = ServiceRuntimeState(
             expected_address_confirmation=True,
@@ -4065,7 +4304,7 @@ class ServicePolicyTests(unittest.TestCase):
         self.assertFalse(state.awaiting_full_address)
         self.assertNotIn("地址是", result.reply)
 
-    def test_observation_address_confirmation_model_add_without_real_progress_does_not_trigger_ie(self):
+    def legacy_address_observation_address_confirmation_model_add_without_real_progress_does_not_trigger_ie(self):
         def fake_confirmation_inference(*, prompt_kind: str, user_text: str, **_: str):
             if prompt_kind == "address_confirmation_observation_followup":
                 return {"intent": "add"}
@@ -4103,7 +4342,7 @@ class ServicePolicyTests(unittest.TestCase):
             )
         )
 
-    def test_known_address_confirmation_room_only_correction_starts_confirmation(self):
+    def legacy_address_known_address_confirmation_room_only_correction_starts_confirmation(self):
         policy = ServiceDialoguePolicy()
         state = ServiceRuntimeState(expected_address_confirmation=True)
         scenario = build_scenario(
@@ -4142,7 +4381,7 @@ class ServicePolicyTests(unittest.TestCase):
         self.assertTrue(state.expected_address_confirmation)
         self.assertEqual(state.pending_address_confirmation, "上海市浦东新区锦绣路1888弄6号1202室")
 
-    def test_known_address_confirmation_no_with_direct_correction_starts_confirmation(self):
+    def legacy_address_known_address_confirmation_no_with_direct_correction_starts_confirmation(self):
         policy = ServiceDialoguePolicy()
         state = ServiceRuntimeState(expected_address_confirmation=True)
         scenario = build_scenario(
@@ -4191,7 +4430,7 @@ class ServicePolicyTests(unittest.TestCase):
         )
         self.assertTrue(state.expected_address_confirmation)
 
-    def test_known_address_confirmation_no_with_rural_group_correction_starts_confirmation(self):
+    def legacy_address_known_address_confirmation_no_with_rural_group_correction_starts_confirmation(self):
         policy = ServiceDialoguePolicy()
         state = ServiceRuntimeState(expected_address_confirmation=True)
         scenario_data = build_installation_scenario().to_dict()
@@ -4239,7 +4478,7 @@ class ServicePolicyTests(unittest.TestCase):
         self.assertTrue(state.expected_address_confirmation)
         self.assertEqual(state.pending_address_confirmation, "湖南省岳阳市岳阳县新开镇柴桥村四组25号")
 
-    def test_known_address_confirmation_no_with_house_number_locality_correction_starts_confirmation(self):
+    def legacy_address_known_address_confirmation_no_with_house_number_locality_correction_starts_confirmation(self):
         policy = ServiceDialoguePolicy()
         state = ServiceRuntimeState(expected_address_confirmation=True)
         scenario_data = build_installation_scenario().to_dict()
@@ -4287,7 +4526,7 @@ class ServicePolicyTests(unittest.TestCase):
         self.assertTrue(state.expected_address_confirmation)
         self.assertEqual(state.pending_address_confirmation, "广东省佛山市南海区桂城街道康怡苑62号")
 
-    def test_known_address_confirmation_does_not_inherit_old_building_when_user_rewrites_locality(self):
+    def legacy_address_known_address_confirmation_does_not_inherit_old_building_when_user_rewrites_locality(self):
         policy = ServiceDialoguePolicy()
         state = ServiceRuntimeState(
             expected_address_confirmation=True,
@@ -4341,7 +4580,7 @@ class ServicePolicyTests(unittest.TestCase):
         )
         self.assertNotIn("A栋", state.pending_address_confirmation)
 
-    def test_known_address_confirmation_locality_rewrite_clears_old_suffix_and_full_followup_confirms(self):
+    def legacy_address_known_address_confirmation_locality_rewrite_clears_old_suffix_and_full_followup_confirms(self):
         policy = ServiceDialoguePolicy()
         state = ServiceRuntimeState(
             expected_address_confirmation=True,
@@ -4413,7 +4652,7 @@ class ServicePolicyTests(unittest.TestCase):
             "甘肃省兰州市城关区五泉街道福寿小区8号楼2单元1202室",
         )
 
-    def test_known_address_confirmation_with_district_only_correction_can_confirm_directly(self):
+    def legacy_address_known_address_confirmation_with_district_only_correction_can_confirm_directly(self):
         policy = ServiceDialoguePolicy(ok_prefix_probability=0.0)
         state = ServiceRuntimeState(
             expected_address_confirmation=True,
@@ -4474,7 +4713,7 @@ class ServicePolicyTests(unittest.TestCase):
             "甘肃省兰州市七里河区雁南路福源佳园小区4号楼2单元",
         )
 
-    def test_known_address_confirmation_with_autonomous_region_rural_address_can_confirm(self):
+    def legacy_address_known_address_confirmation_with_autonomous_region_rural_address_can_confirm(self):
         policy = ServiceDialoguePolicy(ok_prefix_probability=0.0)
         state = ServiceRuntimeState(
             expected_address_confirmation=True,
@@ -4552,7 +4791,7 @@ class ServicePolicyTests(unittest.TestCase):
             "广西壮族自治区来宾市武宣县通挽镇石坡村第五组17号",
         )
 
-    def test_known_address_confirmation_can_use_model_fallback_to_extract_correction(self):
+    def legacy_address_known_address_confirmation_can_use_model_fallback_to_extract_correction(self):
         callback_calls: list[dict[str, str]] = []
 
         def fake_address_inference(**kwargs):
@@ -4609,7 +4848,7 @@ class ServicePolicyTests(unittest.TestCase):
         )
         self.assertTrue(state.expected_address_confirmation)
 
-    def test_known_address_confirmation_community_correction_keeps_existing_district(self):
+    def legacy_address_known_address_confirmation_community_correction_keeps_existing_district(self):
         policy = ServiceDialoguePolicy()
         state = ServiceRuntimeState(expected_address_confirmation=True)
         scenario_data = build_installation_scenario().to_dict()
@@ -4669,7 +4908,7 @@ class ServicePolicyTests(unittest.TestCase):
         )
         self.assertEqual(state.pending_address_confirmation, "河北省唐山市路北区幸福社区32号")
 
-    def test_known_address_confirmation_no_with_generic_denial_restarts_full_address_collection(self):
+    def legacy_address_known_address_confirmation_no_with_generic_denial_restarts_full_address_collection(self):
         policy = ServiceDialoguePolicy()
         state = ServiceRuntimeState(expected_address_confirmation=True)
         scenario_data = build_scenario(
@@ -4715,7 +4954,7 @@ class ServicePolicyTests(unittest.TestCase):
         self.assertTrue(state.awaiting_full_address)
         self.assertEqual(state.partial_address_candidate, "")
 
-    def test_known_address_confirmation_ignores_room_suffix_only_denial_and_confirms_canonical_merged_address(self):
+    def legacy_address_known_address_confirmation_ignores_room_suffix_only_denial_and_confirms_canonical_merged_address(self):
         policy = ServiceDialoguePolicy()
         state = ServiceRuntimeState(expected_address_confirmation=True)
         scenario_data = build_scenario(
@@ -4783,7 +5022,7 @@ class ServicePolicyTests(unittest.TestCase):
             "广东省佛山市南海区桂城街道金域蓝湾小区8栋302室",
         )
 
-    def test_known_address_confirmation_no_with_cross_city_correction_starts_confirmation(self):
+    def legacy_address_known_address_confirmation_no_with_cross_city_correction_starts_confirmation(self):
         policy = ServiceDialoguePolicy()
         state = ServiceRuntimeState(expected_address_confirmation=True)
         scenario_data = build_scenario(
@@ -4831,7 +5070,7 @@ class ServicePolicyTests(unittest.TestCase):
         )
         self.assertTrue(state.expected_address_confirmation)
 
-    def test_address_followup_after_partial_input(self):
+    def legacy_address_address_followup_after_partial_input(self):
         policy = ServiceDialoguePolicy()
         state = ServiceRuntimeState(awaiting_full_address=True, address_input_attempts=0)
         scenario = build_scenario()
@@ -4862,7 +5101,7 @@ class ServicePolicyTests(unittest.TestCase):
             "请问是几栋几单元几楼几号呢？",
         )
 
-    def test_address_followup_merges_prefix_and_confirms_most_complete_address(self):
+    def legacy_address_address_followup_merges_prefix_and_confirms_most_complete_address(self):
         policy = ServiceDialoguePolicy()
         state = ServiceRuntimeState(
             awaiting_full_address=True,
@@ -4913,7 +5152,7 @@ class ServicePolicyTests(unittest.TestCase):
             "广西省玉林市陆川县乌石镇桅杆村第三组28号",
         )
 
-    def test_complete_address_requires_confirmation_before_slot_update(self):
+    def legacy_address_complete_address_requires_confirmation_before_slot_update(self):
         policy = ServiceDialoguePolicy()
         state = ServiceRuntimeState(awaiting_full_address=True, address_input_attempts=1)
         scenario = build_scenario()
@@ -4947,7 +5186,7 @@ class ServicePolicyTests(unittest.TestCase):
         self.assertTrue(state.expected_address_confirmation)
         self.assertEqual(state.pending_address_confirmation, "上海市浦东新区锦绣路1888弄6号1202室")
 
-    def test_complete_address_without_province_city_suffixes_still_starts_confirmation(self):
+    def legacy_address_complete_address_without_province_city_suffixes_still_starts_confirmation(self):
         policy = ServiceDialoguePolicy()
         state = ServiceRuntimeState(awaiting_full_address=True, address_input_attempts=1)
         scenario_data = build_scenario().to_dict()
@@ -4986,7 +5225,7 @@ class ServicePolicyTests(unittest.TestCase):
             "江苏省南京市鼓楼区汉中门大街288号金陵世纪花园6幢1单元1204室",
         )
 
-    def test_storefront_house_number_address_can_start_confirmation_without_building_unit(self):
+    def legacy_address_storefront_house_number_address_can_start_confirmation_without_building_unit(self):
         policy = ServiceDialoguePolicy()
         state = ServiceRuntimeState(awaiting_full_address=True, address_input_attempts=1)
         scenario_data = build_installation_scenario().to_dict()
@@ -5029,7 +5268,7 @@ class ServicePolicyTests(unittest.TestCase):
             "好的，跟您确认一下，地址是贵州省遵义市汇川区深圳大道康乐社区62号门面，对吗？",
         )
 
-    def test_road_house_number_address_can_start_confirmation_without_community(self):
+    def legacy_address_road_house_number_address_can_start_confirmation_without_community(self):
         policy = ServiceDialoguePolicy()
         state = ServiceRuntimeState(awaiting_full_address=True, address_input_attempts=1)
         scenario_data = build_installation_scenario().to_dict()
@@ -5074,7 +5313,7 @@ class ServicePolicyTests(unittest.TestCase):
         self.assertTrue(state.expected_address_confirmation)
         self.assertEqual(state.pending_address_confirmation, "四川省绵阳市涪城区天府路12号")
 
-    def test_locality_with_building_unit_then_room_can_start_confirmation(self):
+    def legacy_address_locality_with_building_unit_then_room_can_start_confirmation(self):
         policy = ServiceDialoguePolicy()
         state = ServiceRuntimeState(
             awaiting_full_address=True,
@@ -5113,7 +5352,7 @@ class ServicePolicyTests(unittest.TestCase):
         )
         self.assertTrue(state.expected_address_confirmation)
 
-    def test_poi_address_with_full_region_context_can_confirm_directly(self):
+    def legacy_address_poi_address_with_full_region_context_can_confirm_directly(self):
         policy = ServiceDialoguePolicy()
         state = ServiceRuntimeState(
             awaiting_full_address=True,
@@ -5164,7 +5403,7 @@ class ServicePolicyTests(unittest.TestCase):
             "江苏省南京市玄武区南京农业大学卫岗校区",
         )
 
-    def test_extract_address_components_splits_community_lane_and_building(self):
+    def legacy_address_extract_address_components_splits_community_lane_and_building(self):
         components = extract_address_components("上海市青浦区徐泾镇西郊一区1785弄40号楼301室")
 
         self.assertEqual(components.city, "上海市")
@@ -5175,7 +5414,7 @@ class ServicePolicyTests(unittest.TestCase):
         self.assertEqual(components.building, "40号楼")
         self.assertEqual(components.room, "301室")
 
-    def test_extract_address_components_preserves_suffixless_community_before_building(self):
+    def legacy_address_extract_address_components_preserves_suffixless_community_before_building(self):
         components = extract_address_components("浙江省台州市三门县江南壹号5栋")
 
         self.assertEqual(components.province, "浙江省")
@@ -5184,20 +5423,20 @@ class ServicePolicyTests(unittest.TestCase):
         self.assertEqual(components.community, "江南壹号")
         self.assertEqual(components.building, "5栋")
 
-    def test_extract_address_components_preserves_suffixless_community_without_building(self):
+    def legacy_address_extract_address_components_preserves_suffixless_community_without_building(self):
         components = extract_address_components("三门县江南壹号")
 
         self.assertEqual(components.district, "三门县")
         self.assertEqual(components.community, "江南壹号")
 
-    def test_extract_address_components_splits_town_and_suffixless_community_without_admin_prefix(self):
+    def legacy_address_extract_address_components_splits_town_and_suffixless_community_without_admin_prefix(self):
         components = extract_address_components("徐泾镇西郊一区")
 
         self.assertEqual(components.district, "")
         self.assertEqual(components.town, "徐泾镇")
         self.assertEqual(components.community, "西郊一区")
 
-    def test_extract_address_candidate_from_denial_ignores_pure_no_text(self):
+    def legacy_address_extract_address_candidate_from_denial_ignores_pure_no_text(self):
         candidate = ServiceDialoguePolicy._extract_address_candidate_from_denial(
             user_text="不是",
             confirmation_address="四川省南充市顺庆区中城街道碧桂园15座903室",
@@ -5205,7 +5444,7 @@ class ServicePolicyTests(unittest.TestCase):
 
         self.assertEqual(candidate, "")
 
-    def test_extract_address_candidate_from_denial_accepts_immediate_corrected_address(self):
+    def legacy_address_extract_address_candidate_from_denial_accepts_immediate_corrected_address(self):
         candidate = ServiceDialoguePolicy._extract_address_candidate_from_denial(
             user_text="不是，浙江省台州市三门县江南壹号5栋302室",
             confirmation_address="四川省南充市顺庆区中城街道碧桂园15座903室",
@@ -5213,7 +5452,7 @@ class ServicePolicyTests(unittest.TestCase):
 
         self.assertEqual(candidate, "浙江省台州市三门县江南壹号5栋302室")
 
-    def test_extract_address_candidate_from_denial_strips_switch_prefix_before_real_address(self):
+    def legacy_address_extract_address_candidate_from_denial_strips_switch_prefix_before_real_address(self):
         candidate = ServiceDialoguePolicy._extract_address_candidate_from_denial(
             user_text="换个地址,三门县江南壹号",
             confirmation_address="北京市海淀区中关村街道新湖国际4号楼1单元801室",
@@ -5221,7 +5460,7 @@ class ServicePolicyTests(unittest.TestCase):
 
         self.assertEqual(candidate, "三门县江南壹号")
 
-    def test_extract_address_candidate_from_denial_ignores_switch_request_phrase(self):
+    def legacy_address_extract_address_candidate_from_denial_ignores_switch_request_phrase(self):
         candidate = ServiceDialoguePolicy._extract_address_candidate_from_denial(
             user_text="不是,换一个",
             confirmation_address="广东省佛山市禅城区祖庙街道恒大绿洲3号楼3层304室",
@@ -5229,7 +5468,7 @@ class ServicePolicyTests(unittest.TestCase):
 
         self.assertEqual(candidate, "")
 
-    def test_extract_address_candidate_from_denial_ignores_new_address_switch_phrase(self):
+    def legacy_address_extract_address_candidate_from_denial_ignores_new_address_switch_phrase(self):
         candidate = ServiceDialoguePolicy._extract_address_candidate_from_denial(
             user_text="不是,留个新地址",
             confirmation_address="贵州省遵义市播州区南白街道锦绣苑8号楼5层501室",
@@ -5237,7 +5476,7 @@ class ServicePolicyTests(unittest.TestCase):
 
         self.assertEqual(candidate, "")
 
-    def test_extract_address_candidate_from_denial_ignores_move_phrase_without_new_address(self):
+    def legacy_address_extract_address_candidate_from_denial_ignores_move_phrase_without_new_address(self):
         candidate = ServiceDialoguePolicy._extract_address_candidate_from_denial(
             user_text="不是,我换地方了",
             confirmation_address="湖南省长沙市芙蓉区湘湖街道幸福花园2号楼5层504室",
@@ -5245,7 +5484,7 @@ class ServicePolicyTests(unittest.TestCase):
 
         self.assertEqual(candidate, "")
 
-    def test_extract_strong_address_candidate_from_denial_rejects_province_only_correction(self):
+    def legacy_address_extract_strong_address_candidate_from_denial_rejects_province_only_correction(self):
         candidate = ServiceDialoguePolicy._extract_strong_address_candidate_from_denial(
             user_text="不在天津,在江苏",
             confirmation_address="天津市南开区万兴街道碧桂园9座6楼603室",
@@ -5253,12 +5492,12 @@ class ServicePolicyTests(unittest.TestCase):
 
         self.assertEqual(candidate, "")
 
-    def test_prepare_address_for_confirmation_strips_discourse_prefix_before_landmark_address(self):
+    def legacy_address_prepare_address_for_confirmation_strips_discourse_prefix_before_landmark_address(self):
         prepared = ServiceDialoguePolicy._prepare_address_for_confirmation("啥,我在南京邮电大学仙林校区")
 
         self.assertEqual(prepared, "南京邮电大学仙林校区")
 
-    def test_extract_address_components_treats_road_house_number_as_road_plus_detail(self):
+    def legacy_address_extract_address_components_treats_road_house_number_as_road_plus_detail(self):
         components = extract_address_components("四川省绵阳市涪城区天府路12号")
 
         self.assertEqual(components.province, "四川省")
@@ -5268,7 +5507,7 @@ class ServicePolicyTests(unittest.TestCase):
         self.assertEqual(components.community, "")
         self.assertEqual(ServiceDialoguePolicy._extract_house_number_token("四川省绵阳市涪城区天府路12号"), "12号")
 
-    def test_extract_address_components_keeps_road_house_number_with_building_room(self):
+    def legacy_address_extract_address_components_keeps_road_house_number_with_building_room(self):
         components = extract_address_components("四川省绵阳市涪城区天府路12号3栋502室")
 
         self.assertEqual(components.road, "天府路")
@@ -5280,7 +5519,7 @@ class ServicePolicyTests(unittest.TestCase):
             "12号",
         )
 
-    def test_extract_address_components_preserves_community_before_house_number(self):
+    def legacy_address_extract_address_components_preserves_community_before_house_number(self):
         components = extract_address_components("贵州省遵义市汇川区深圳大道康乐社区62号门面")
 
         self.assertEqual(components.road, "深圳大道")
@@ -5290,20 +5529,20 @@ class ServicePolicyTests(unittest.TestCase):
             "62号",
         )
 
-    def test_extract_address_components_does_not_treat_shequ_as_district(self):
+    def legacy_address_extract_address_components_does_not_treat_shequ_as_district(self):
         components = extract_address_components("幸福社区32号")
 
         self.assertEqual(components.district, "")
         self.assertEqual(components.community, "幸福社区")
         self.assertEqual(ServiceDialoguePolicy._extract_house_number_token("幸福社区32号"), "32号")
 
-    def test_extract_address_components_treats_campus_as_locality_not_district(self):
+    def legacy_address_extract_address_components_treats_campus_as_locality_not_district(self):
         components = extract_address_components("南京农业大学卫岗校区")
 
         self.assertEqual(components.district, "")
         self.assertEqual(components.community, "南京农业大学卫岗校区")
 
-    def test_extract_address_components_treats_hospital_as_locality(self):
+    def legacy_address_extract_address_components_treats_hospital_as_locality(self):
         components = extract_address_components("江苏省南京市玄武区鼓楼医院")
 
         self.assertEqual(components.province, "江苏省")
@@ -5311,27 +5550,27 @@ class ServicePolicyTests(unittest.TestCase):
         self.assertEqual(components.district, "玄武区")
         self.assertEqual(components.community, "鼓楼医院")
 
-    def test_extract_address_components_canonicalizes_suffixless_province_city(self):
+    def legacy_address_extract_address_components_canonicalizes_suffixless_province_city(self):
         components = extract_address_components("江苏南京")
 
         self.assertEqual(components.province, "江苏省")
         self.assertEqual(components.city, "南京市")
 
-    def test_extract_address_components_canonicalizes_suffixless_municipality_district(self):
+    def legacy_address_extract_address_components_canonicalizes_suffixless_municipality_district(self):
         components = extract_address_components("上海青浦")
 
         self.assertEqual(components.city, "上海市")
         self.assertEqual(components.district, "青浦区")
         self.assertEqual(components.community, "")
 
-    def test_extract_address_components_keeps_municipality_district_before_town(self):
+    def legacy_address_extract_address_components_keeps_municipality_district_before_town(self):
         components = extract_address_components("上海青浦徐泾镇")
 
         self.assertEqual(components.city, "上海市")
         self.assertEqual(components.district, "青浦区")
         self.assertEqual(components.town, "徐泾镇")
 
-    def test_extract_address_components_does_not_treat_market_as_city(self):
+    def legacy_address_extract_address_components_does_not_treat_market_as_city(self):
         components = extract_address_components("金谷农贸市场5巷西17号")
 
         self.assertEqual(components.province, "")
@@ -5339,7 +5578,7 @@ class ServicePolicyTests(unittest.TestCase):
         self.assertEqual(components.district, "")
         self.assertEqual(components.road, "金谷农贸市场5巷")
 
-    def test_locality_with_numeric_lane_and_building_room_preserves_lane_and_starts_confirmation(self):
+    def legacy_address_locality_with_numeric_lane_and_building_room_preserves_lane_and_starts_confirmation(self):
         policy = ServiceDialoguePolicy()
         state = ServiceRuntimeState(
             awaiting_full_address=True,
@@ -5385,7 +5624,7 @@ class ServicePolicyTests(unittest.TestCase):
         self.assertEqual(policy._classify_opening_intent("啊这这这是滴是滴"), "yes")
         self.assertFalse(policy._opening_response_contains_issue_detail("啊这这这是滴是滴"))
 
-    def test_town_is_preserved_when_partial_address_is_extended_with_community_detail(self):
+    def legacy_address_town_is_preserved_when_partial_address_is_extended_with_community_detail(self):
         policy = ServiceDialoguePolicy()
         state = ServiceRuntimeState(
             awaiting_full_address=True,
@@ -5424,12 +5663,12 @@ class ServicePolicyTests(unittest.TestCase):
         )
         self.assertTrue(state.expected_address_confirmation)
 
-    def test_merge_address_candidate_completes_region_prefix_before_existing_locality(self):
+    def legacy_address_merge_address_candidate_completes_region_prefix_before_existing_locality(self):
         merged = ServiceDialoguePolicy._merge_address_candidate("三门县江南壹号", "浙江省台州市三门县")
 
         self.assertEqual(merged, "浙江省台州市三门县江南壹号")
 
-    def test_address_with_non_standard_whitespace_still_starts_confirmation(self):
+    def legacy_address_address_with_non_standard_whitespace_still_starts_confirmation(self):
         policy = ServiceDialoguePolicy()
         state = ServiceRuntimeState(
             awaiting_full_address=True,
@@ -5468,7 +5707,7 @@ class ServicePolicyTests(unittest.TestCase):
         )
         self.assertTrue(state.expected_address_confirmation)
 
-    def test_locality_with_building_unit_then_floor_room_can_start_confirmation(self):
+    def legacy_address_locality_with_building_unit_then_floor_room_can_start_confirmation(self):
         policy = ServiceDialoguePolicy()
         state = ServiceRuntimeState(
             awaiting_full_address=True,
@@ -5507,7 +5746,7 @@ class ServicePolicyTests(unittest.TestCase):
         )
         self.assertTrue(state.expected_address_confirmation)
 
-    def test_address_collection_uses_model_fallback_to_complete_candidate(self):
+    def legacy_address_address_collection_uses_model_fallback_to_complete_candidate(self):
         def fake_address_inference(**kwargs):
             self.assertEqual(kwargs["user_text"], "就四楼那个")
             return {
@@ -5554,7 +5793,7 @@ class ServicePolicyTests(unittest.TestCase):
         )
         self.assertTrue(policy.last_used_model_intent_inference)
 
-    def test_address_collection_prefers_model_slot_extraction_when_callback_is_available(self):
+    def legacy_address_address_collection_prefers_model_slot_extraction_when_callback_is_available(self):
         callback_calls: list[str] = []
 
         def fake_address_inference(**kwargs):
@@ -5605,7 +5844,7 @@ class ServicePolicyTests(unittest.TestCase):
         self.assertEqual(state.partial_address_candidate, "上海市青浦区徐泾镇西郊一区")
         self.assertEqual(result.reply, "请问是几栋几单元几楼几号呢？")
 
-    def test_interactive_frontend_address_confirmation_does_not_compare_against_preset_actual_address(self):
+    def legacy_address_interactive_frontend_address_confirmation_does_not_compare_against_preset_actual_address(self):
         policy = ServiceDialoguePolicy()
         scenario = build_scenario()
         scenario.hidden_context["interactive_test_freeform"] = True
@@ -5618,7 +5857,7 @@ class ServicePolicyTests(unittest.TestCase):
 
         self.assertTrue(can_confirm)
 
-    def test_address_collection_with_model_callback_does_not_fall_back_to_non_address_text(self):
+    def legacy_address_address_collection_with_model_callback_does_not_fall_back_to_non_address_text(self):
         def fake_address_inference(**kwargs):
             self.assertEqual(kwargs["user_text"], "就是那个地方")
             return {
@@ -5671,7 +5910,7 @@ class ServicePolicyTests(unittest.TestCase):
         self.assertFalse(state.expected_address_confirmation)
         self.assertEqual(state.partial_address_candidate, "")
 
-    def test_address_collection_with_model_callback_prefers_strong_rule_match_before_model(self):
+    def legacy_address_address_collection_with_model_callback_prefers_strong_rule_match_before_model(self):
         def fake_address_inference(**kwargs):
             raise AssertionError("Strong exact address match should not call model.")
 
@@ -5721,7 +5960,7 @@ class ServicePolicyTests(unittest.TestCase):
         )
         self.assertTrue(state.expected_address_confirmation)
 
-    def test_address_collection_with_model_callback_prefers_strong_rule_for_province_city(self):
+    def legacy_address_address_collection_with_model_callback_prefers_strong_rule_for_province_city(self):
         def fake_address_inference(**kwargs):
             raise AssertionError("Province-city strong rule match should not call model.")
 
@@ -5766,7 +6005,7 @@ class ServicePolicyTests(unittest.TestCase):
         )
         self.assertEqual(state.partial_address_candidate, "浙江省台州市")
 
-    def test_address_collection_rejects_model_overreach_when_market_name_contains_shi(self):
+    def legacy_address_address_collection_rejects_model_overreach_when_market_name_contains_shi(self):
         def fake_address_inference(**kwargs):
             self.assertEqual(kwargs["partial_address_candidate"], "广西钦州钦南区")
             self.assertEqual(kwargs["user_text"], "金谷农贸市场5巷西17号")
@@ -5822,7 +6061,7 @@ class ServicePolicyTests(unittest.TestCase):
             "广西钦州市钦南区金谷农贸市场5巷西17号",
         )
 
-    def test_address_collection_strips_non_address_chatter_before_school_locality(self):
+    def legacy_address_address_collection_strips_non_address_chatter_before_school_locality(self):
         policy = ServiceDialoguePolicy()
         state = ServiceRuntimeState(
             awaiting_full_address=True,
@@ -5868,7 +6107,7 @@ class ServicePolicyTests(unittest.TestCase):
             "江苏省南京市栖霞区南京邮电大学仙林校区",
         )
 
-    def test_address_collection_with_poi_detail_uses_model_when_rule_underparses_tail(self):
+    def legacy_address_address_collection_with_poi_detail_uses_model_when_rule_underparses_tail(self):
         callback_calls: list[str] = []
 
         def fake_address_inference(**kwargs):
@@ -5923,7 +6162,7 @@ class ServicePolicyTests(unittest.TestCase):
         )
         self.assertTrue(state.expected_address_confirmation)
 
-    def test_address_collection_with_model_callback_merges_granularity_across_rounds(self):
+    def legacy_address_address_collection_with_model_callback_merges_granularity_across_rounds(self):
         def fake_address_inference(**kwargs):
             user_text = kwargs["user_text"]
             if user_text == "四川省绵阳市":
@@ -6015,7 +6254,7 @@ class ServicePolicyTests(unittest.TestCase):
         )
         self.assertTrue(state.expected_address_confirmation)
 
-    def test_address_collection_uses_model_backfill_when_rule_candidate_misses_community(self):
+    def legacy_address_address_collection_uses_model_backfill_when_rule_candidate_misses_community(self):
         callback_calls: list[dict[str, str]] = []
 
         def fake_address_inference(**kwargs):
@@ -6071,7 +6310,7 @@ class ServicePolicyTests(unittest.TestCase):
         )
         self.assertTrue(policy.last_used_model_intent_inference)
 
-    def test_address_collection_uses_model_backfill_when_rule_candidate_misses_road(self):
+    def legacy_address_address_collection_uses_model_backfill_when_rule_candidate_misses_road(self):
         callback_calls: list[dict[str, str]] = []
 
         def fake_address_inference(**kwargs):
@@ -6127,7 +6366,7 @@ class ServicePolicyTests(unittest.TestCase):
         )
         self.assertTrue(policy.last_used_model_intent_inference)
 
-    def test_address_collection_accepts_current_candidate_when_user_says_this_place_is_enough(self):
+    def legacy_address_address_collection_accepts_current_candidate_when_user_says_this_place_is_enough(self):
         policy = ServiceDialoguePolicy()
         state = ServiceRuntimeState(
             awaiting_full_address=True,
@@ -6166,7 +6405,7 @@ class ServicePolicyTests(unittest.TestCase):
         )
         self.assertFalse(policy.last_used_model_intent_inference)
 
-    def test_address_collection_accepts_current_candidate_when_user_says_finished(self):
+    def legacy_address_address_collection_accepts_current_candidate_when_user_says_finished(self):
         policy = ServiceDialoguePolicy()
         state = ServiceRuntimeState(
             awaiting_full_address=True,
@@ -6204,7 +6443,7 @@ class ServicePolicyTests(unittest.TestCase):
             "好的，跟您确认一下，地址是上海市青浦区徐泾镇西郊一区1785弄41号楼，对吗？",
         )
 
-    def test_address_collection_accepts_current_candidate_when_user_can_only_provide_minimum(self):
+    def legacy_address_address_collection_accepts_current_candidate_when_user_can_only_provide_minimum(self):
         policy = ServiceDialoguePolicy()
         state = ServiceRuntimeState(
             awaiting_full_address=True,
@@ -6242,7 +6481,7 @@ class ServicePolicyTests(unittest.TestCase):
             "好的，跟您确认一下，地址是上海市青浦区徐泾镇西郊一区1785弄41号楼，对吗？",
         )
 
-    def test_address_collection_can_use_history_model_summary_when_user_says_this_place_is_enough(self):
+    def legacy_address_address_collection_can_use_history_model_summary_when_user_says_this_place_is_enough(self):
         callback_calls: list[dict[str, str]] = []
 
         def fake_address_inference(**kwargs):
@@ -6297,7 +6536,7 @@ class ServicePolicyTests(unittest.TestCase):
         self.assertTrue(policy.last_used_model_intent_inference)
         self.assertEqual(len(callback_calls), 1)
 
-    def test_address_collection_accepts_current_candidate_via_model_stop_intent(self):
+    def legacy_address_address_collection_accepts_current_candidate_via_model_stop_intent(self):
         callback_calls: list[str] = []
 
         def fake_acceptance_inference(
@@ -6353,7 +6592,7 @@ class ServicePolicyTests(unittest.TestCase):
         )
         self.assertTrue(policy.last_used_model_intent_inference)
 
-    def test_address_collection_model_stop_intent_no_does_not_override_address_detail_input(self):
+    def legacy_address_address_collection_model_stop_intent_no_does_not_override_address_detail_input(self):
         def fake_acceptance_inference(**kwargs):
             return {"intent": "no"}
 
@@ -6400,7 +6639,7 @@ class ServicePolicyTests(unittest.TestCase):
             "好的，跟您确认一下，地址是上海市青浦区徐泾镇西郊一区1785弄40号楼301室，对吗？",
         )
 
-    def test_address_collection_model_fallback_does_not_jump_from_town_only_to_locality(self):
+    def legacy_address_address_collection_model_fallback_does_not_jump_from_town_only_to_locality(self):
         def fake_address_inference(**kwargs):
             self.assertEqual(kwargs["user_text"], "上海市青浦区徐泾镇")
             return {
@@ -6442,7 +6681,7 @@ class ServicePolicyTests(unittest.TestCase):
 
         self.assertEqual(result.reply, "请问具体是在哪个小区或村呢？尽量详细到门牌号。")
 
-    def test_address_collection_model_fallback_does_not_backfill_province_city_from_district_only(self):
+    def legacy_address_address_collection_model_fallback_does_not_backfill_province_city_from_district_only(self):
         def fake_address_inference(**kwargs):
             self.assertEqual(kwargs["user_text"], "纳雍县")
             return {
@@ -6486,7 +6725,7 @@ class ServicePolicyTests(unittest.TestCase):
         self.assertEqual(state.partial_address_candidate, "纳雍县")
         self.assertFalse(policy.last_used_model_intent_inference)
 
-    def test_model_address_overreach_allows_province_backfill_for_prefecture_level_city(self):
+    def legacy_address_model_address_overreach_allows_province_backfill_for_prefecture_level_city(self):
         self.assertFalse(
             ServiceDialoguePolicy._is_model_address_overreach(
                 user_text="兰州市",
@@ -6495,7 +6734,7 @@ class ServicePolicyTests(unittest.TestCase):
             )
         )
 
-    def test_model_address_overreach_blocks_higher_region_backfill_for_county_level_city(self):
+    def legacy_address_model_address_overreach_blocks_higher_region_backfill_for_county_level_city(self):
         self.assertTrue(
             ServiceDialoguePolicy._is_model_address_overreach(
                 user_text="诸暨市",
@@ -6504,7 +6743,7 @@ class ServicePolicyTests(unittest.TestCase):
             )
         )
 
-    def test_address_collection_nonstandard_delivery_point_can_confirm_directly(self):
+    def legacy_address_address_collection_nonstandard_delivery_point_can_confirm_directly(self):
         policy = ServiceDialoguePolicy()
         state = ServiceRuntimeState(
             awaiting_full_address=True,
@@ -6550,7 +6789,7 @@ class ServicePolicyTests(unittest.TestCase):
             "上海市青浦区徐泾镇美的创新园区A8外卖柜",
         )
 
-    def test_address_collection_accepts_nonstandard_delivery_point_when_user_says_thats_enough(self):
+    def legacy_address_address_collection_accepts_nonstandard_delivery_point_when_user_says_thats_enough(self):
         policy = ServiceDialoguePolicy()
         state = ServiceRuntimeState(
             awaiting_full_address=True,
@@ -6593,7 +6832,7 @@ class ServicePolicyTests(unittest.TestCase):
         )
         self.assertTrue(state.expected_address_confirmation)
 
-    def test_canonical_confirmation_address_prefers_most_complete_matching_version(self):
+    def legacy_address_canonical_confirmation_address_prefers_most_complete_matching_version(self):
         self.assertEqual(
             ServiceDialoguePolicy._canonical_confirmation_address(
                 "桂城街道康怡苑62号",
@@ -6609,7 +6848,7 @@ class ServicePolicyTests(unittest.TestCase):
             "云南省昆明市盘龙区北京路1000号山水花园3栋802室",
         )
 
-    def test_address_detail_only_input_can_still_start_confirmation_when_precise_enough(self):
+    def legacy_address_address_detail_only_input_can_still_start_confirmation_when_precise_enough(self):
         policy = ServiceDialoguePolicy()
         state = ServiceRuntimeState(awaiting_full_address=True, address_input_attempts=0)
         scenario = build_scenario()
@@ -6641,7 +6880,7 @@ class ServicePolicyTests(unittest.TestCase):
             "好的，跟您确认一下，地址是上海市浦东新区锦绣路1888弄6号1202室，对吗？",
         )
 
-    def test_address_confirmation_strips_trailing_non_address_content(self):
+    def legacy_address_address_confirmation_strips_trailing_non_address_content(self):
         policy = ServiceDialoguePolicy()
         state = ServiceRuntimeState(awaiting_full_address=True, address_input_attempts=1)
         scenario_data = build_scenario().to_dict()
@@ -6683,7 +6922,7 @@ class ServicePolicyTests(unittest.TestCase):
             "江苏省南京市鼓楼区汉中门大街 288 号金陵世纪花园 6 幢 1 单元 1204 室",
         )
 
-    def test_partial_address_after_denying_full_known_address_requires_more_detail(self):
+    def legacy_address_partial_address_after_denying_full_known_address_requires_more_detail(self):
         policy = ServiceDialoguePolicy()
         state = ServiceRuntimeState(awaiting_full_address=True, address_input_attempts=0)
         scenario_data = build_scenario().to_dict()
@@ -6723,7 +6962,7 @@ class ServicePolicyTests(unittest.TestCase):
             "湖北省武汉市洪山区尤李湾路56号万珑小区5栋2单元",
         )
 
-    def test_missing_house_number_uses_house_number_followup_instead_of_building_prompt(self):
+    def legacy_address_missing_house_number_uses_house_number_followup_instead_of_building_prompt(self):
         policy = ServiceDialoguePolicy()
         state = ServiceRuntimeState(
             awaiting_full_address=True,
@@ -6759,7 +6998,7 @@ class ServicePolicyTests(unittest.TestCase):
         self.assertEqual(result.reply, "好的，请您再说一下具体门牌号。")
         self.assertFalse(state.expected_address_confirmation)
 
-    def test_missing_house_number_reask_frustration_does_not_start_confirmation(self):
+    def legacy_address_missing_house_number_reask_frustration_does_not_start_confirmation(self):
         policy = ServiceDialoguePolicy()
         state = ServiceRuntimeState(
             awaiting_full_address=True,
@@ -6799,7 +7038,7 @@ class ServicePolicyTests(unittest.TestCase):
             "江苏省扬州市宝应县安宜镇阳光锦城3号楼2单元402",
         )
 
-    def test_address_collection_asks_by_granularity_for_segmented_replies(self):
+    def legacy_address_address_collection_asks_by_granularity_for_segmented_replies(self):
         policy = ServiceDialoguePolicy()
         scenario_data = build_scenario().to_dict()
         scenario_data["customer"]["address"] = "江苏省扬州市宝应县安宜镇宝应碧桂园3幢5层502室"
@@ -6880,7 +7119,7 @@ class ServicePolicyTests(unittest.TestCase):
             "好的，跟您确认一下，地址是江苏省扬州市宝应县安宜镇宝应碧桂园3幢5层502室，对吗？",
         )
 
-    def test_address_collection_town_only_reply_asks_for_locality_before_building(self):
+    def legacy_address_address_collection_town_only_reply_asks_for_locality_before_building(self):
         policy = ServiceDialoguePolicy()
         state = ServiceRuntimeState(awaiting_full_address=True)
         scenario_data = build_scenario().to_dict()
@@ -6916,7 +7155,7 @@ class ServicePolicyTests(unittest.TestCase):
         self.assertEqual(result.reply, "请问具体是在哪个小区或村呢？尽量详细到门牌号。")
         self.assertEqual(state.partial_address_candidate, "上海市青浦区徐泾镇")
 
-    def test_address_collection_province_only_reply_asks_for_city_district_and_street(self):
+    def legacy_address_address_collection_province_only_reply_asks_for_city_district_and_street(self):
         policy = ServiceDialoguePolicy()
         state = ServiceRuntimeState(awaiting_full_address=True)
         scenario_data = build_scenario().to_dict()
@@ -6952,7 +7191,7 @@ class ServicePolicyTests(unittest.TestCase):
         self.assertEqual(result.reply, "好的，请问是江苏省哪个城市的哪个区和街道呢？")
         self.assertEqual(state.partial_address_candidate, "江苏省")
 
-    def test_address_collection_locality_first_reply_backtracks_to_region_then_locality(self):
+    def legacy_address_address_collection_locality_first_reply_backtracks_to_region_then_locality(self):
         policy = ServiceDialoguePolicy()
         state = ServiceRuntimeState(awaiting_full_address=True)
         scenario_data = build_scenario().to_dict()
@@ -7023,7 +7262,7 @@ class ServicePolicyTests(unittest.TestCase):
 
         self.assertEqual(district_result.reply, "请问具体是在哪个小区或村呢？尽量详细到门牌号。")
 
-    def test_address_collection_requires_province_city_when_user_only_provides_district_first(self):
+    def legacy_address_address_collection_requires_province_city_when_user_only_provides_district_first(self):
         policy = ServiceDialoguePolicy()
         state = ServiceRuntimeState(awaiting_full_address=True, product_arrival_checked=True)
         scenario_data = build_scenario().to_dict()
@@ -7059,7 +7298,7 @@ class ServicePolicyTests(unittest.TestCase):
         self.assertEqual(result.reply, "好的，请您说一下省、市、区和街道。")
         self.assertEqual(state.partial_address_candidate, "纳雍县")
 
-    def test_address_collection_requires_region_when_user_provides_locality_and_detail_without_city(self):
+    def legacy_address_address_collection_requires_region_when_user_provides_locality_and_detail_without_city(self):
         policy = ServiceDialoguePolicy()
         state = ServiceRuntimeState(awaiting_full_address=True, product_arrival_checked=True)
         scenario_data = build_scenario().to_dict()
@@ -7096,7 +7335,7 @@ class ServicePolicyTests(unittest.TestCase):
         self.assertEqual(state.partial_address_candidate, "书香门第小区5号楼1单元102室")
         self.assertFalse(state.expected_address_confirmation)
 
-    def test_segmented_address_keeps_city_when_province_city_are_spoken_without_suffixes(self):
+    def legacy_address_segmented_address_keeps_city_when_province_city_are_spoken_without_suffixes(self):
         policy = ServiceDialoguePolicy()
         state = ServiceRuntimeState(awaiting_full_address=True, product_arrival_checked=True)
         scenario_data = build_freeform_cli_scenario(request_type="installation").to_dict()
@@ -7174,7 +7413,7 @@ class ServicePolicyTests(unittest.TestCase):
             "甘肃省兰州市七里河区工林路688号汇林现代城3号楼2单元502室",
         )
 
-    def test_rural_address_collection_asks_for_house_number_not_building(self):
+    def legacy_address_rural_address_collection_asks_for_house_number_not_building(self):
         policy = ServiceDialoguePolicy()
         state = ServiceRuntimeState(awaiting_full_address=True)
         scenario = build_freeform_cli_scenario()
@@ -7206,7 +7445,7 @@ class ServicePolicyTests(unittest.TestCase):
 
         self.assertEqual(result.reply, "好的，请您提供一下详细的地址，具体到门牌号。")
 
-    def test_freeform_unknown_actual_address_with_community_and_building_reasks_for_room(self):
+    def legacy_address_freeform_unknown_actual_address_with_community_and_building_reasks_for_room(self):
         policy = ServiceDialoguePolicy()
         state = ServiceRuntimeState(
             awaiting_full_address=True,
@@ -7244,7 +7483,7 @@ class ServicePolicyTests(unittest.TestCase):
         self.assertFalse(state.expected_address_confirmation)
         self.assertEqual(state.partial_address_candidate, "浙江省台州市三门县江南壹号13幢")
 
-    def test_partial_locality_then_region_updates_candidate_and_asks_for_building_detail(self):
+    def legacy_address_partial_locality_then_region_updates_candidate_and_asks_for_building_detail(self):
         policy = ServiceDialoguePolicy()
         state = ServiceRuntimeState(
             awaiting_full_address=True,
@@ -7318,7 +7557,7 @@ class ServicePolicyTests(unittest.TestCase):
         self.assertEqual(result.reply, "好的，请您说一下省、市、区和街道。")
         self.assertEqual(state.partial_address_candidate, "宝应县御景豪庭")
 
-    def test_partial_district_community_then_province_city_updates_candidate(self):
+    def legacy_address_partial_district_community_then_province_city_updates_candidate(self):
         policy = ServiceDialoguePolicy()
         state = ServiceRuntimeState(
             awaiting_full_address=True,
@@ -7353,7 +7592,7 @@ class ServicePolicyTests(unittest.TestCase):
         self.assertEqual(result.reply, "请问是几栋几单元几楼几号呢？")
         self.assertEqual(state.partial_address_candidate, "江苏省扬州市宝应县御景豪庭")
 
-    def test_partial_district_community_detail_then_province_city_starts_confirmation(self):
+    def legacy_address_partial_district_community_detail_then_province_city_starts_confirmation(self):
         policy = ServiceDialoguePolicy()
         state = ServiceRuntimeState(
             awaiting_full_address=True,
@@ -7392,7 +7631,7 @@ class ServicePolicyTests(unittest.TestCase):
         self.assertTrue(state.expected_address_confirmation)
         self.assertEqual(state.pending_address_confirmation, "江苏省扬州市宝应县御景豪庭10号楼401室")
 
-    def test_district_community_then_province_city_then_detail_starts_confirmation(self):
+    def legacy_address_district_community_then_province_city_then_detail_starts_confirmation(self):
         policy = ServiceDialoguePolicy()
         scenario_data = build_scenario().to_dict()
         scenario_data["customer"]["address"] = "江苏省扬州市宝应县御景豪庭10号楼401室"
@@ -7455,7 +7694,7 @@ class ServicePolicyTests(unittest.TestCase):
         self.assertTrue(state.expected_address_confirmation)
         self.assertEqual(state.pending_address_confirmation, "江苏省扬州市宝应县御景豪庭10号楼401室")
 
-    def test_freeform_unknown_actual_address_with_room_can_start_confirmation(self):
+    def legacy_address_freeform_unknown_actual_address_with_room_can_start_confirmation(self):
         policy = ServiceDialoguePolicy()
         state = ServiceRuntimeState(
             awaiting_full_address=True,
@@ -7499,7 +7738,7 @@ class ServicePolicyTests(unittest.TestCase):
             "浙江省台州市三门县江南壹号13幢502室",
         )
 
-    def test_rural_address_with_she_and_house_number_starts_confirmation(self):
+    def legacy_address_rural_address_with_she_and_house_number_starts_confirmation(self):
         policy = ServiceDialoguePolicy()
         state = ServiceRuntimeState(
             awaiting_full_address=True,
@@ -7551,7 +7790,7 @@ class ServicePolicyTests(unittest.TestCase):
             "青海省海东市民和回族土族自治县中川乡红崖子村三社14号",
         )
 
-    def test_rural_group_and_house_number_suffix_merges_with_existing_village_prefix(self):
+    def legacy_address_rural_group_and_house_number_suffix_merges_with_existing_village_prefix(self):
         policy = ServiceDialoguePolicy()
         state = ServiceRuntimeState(
             awaiting_full_address=True,
@@ -7603,7 +7842,7 @@ class ServicePolicyTests(unittest.TestCase):
             "江苏省扬州市宝应县广阳湖镇葛庄村10组4号",
         )
 
-    def test_rural_group_and_house_number_suffix_with_spaces_starts_confirmation(self):
+    def legacy_address_rural_group_and_house_number_suffix_with_spaces_starts_confirmation(self):
         policy = ServiceDialoguePolicy()
         state = ServiceRuntimeState(
             awaiting_full_address=True,
@@ -7684,7 +7923,7 @@ class ServicePolicyTests(unittest.TestCase):
         self.assertEqual(result.reply, "好的，请您提供一下详细的地址，具体到门牌号。")
         self.assertEqual(state.partial_address_candidate, "江苏省扬州市宝应县广阳湖古镇村")
 
-    def test_vague_address_reply_repeats_same_prompt_up_to_two_times(self):
+    def legacy_address_vague_address_reply_repeats_same_prompt_up_to_two_times(self):
         policy = ServiceDialoguePolicy()
         state = ServiceRuntimeState(
             awaiting_full_address=True,
@@ -7764,7 +8003,7 @@ class ServicePolicyTests(unittest.TestCase):
         )
         self.assertEqual(state.address_vague_retry_count, 0)
 
-    def test_confirmed_collected_address_moves_to_next_slot(self):
+    def legacy_address_confirmed_collected_address_moves_to_next_slot(self):
         policy = ServiceDialoguePolicy()
         state = ServiceRuntimeState(
             expected_address_confirmation=True,
@@ -7805,7 +8044,7 @@ class ServicePolicyTests(unittest.TestCase):
             "好的，您的工单已受理成功，2小时内服务人员会电话联系，预约具体上门时间。",
         )
 
-    def test_installation_address_confirmation_after_arrival_starts_fixed_closing_flow(self):
+    def legacy_address_installation_address_confirmation_after_arrival_starts_fixed_closing_flow(self):
         policy = ServiceDialoguePolicy()
         state = ServiceRuntimeState(
             expected_address_confirmation=True,
@@ -8035,7 +8274,7 @@ class ServicePolicyTests(unittest.TestCase):
         self.assertEqual(end.reply, "感谢您选择COLMO，微信关注“COLMO公众号”，更多服务随心享，再见！")
         self.assertTrue(end.is_ready_to_close)
 
-    def test_address_components_recognize_community_and_letter_building(self):
+    def legacy_address_address_components_recognize_community_and_letter_building(self):
         components = extract_address_components("广东省佛山市顺德区陈村镇美景豪庭J座4单元502室")
 
         self.assertEqual(components.community, "美景豪庭")
@@ -8043,7 +8282,7 @@ class ServicePolicyTests(unittest.TestCase):
         self.assertEqual(components.unit, "4单元")
         self.assertEqual(components.room, "502室")
 
-    def test_town_name_with_village_character_does_not_trigger_rural_followup(self):
+    def legacy_address_town_name_with_village_character_does_not_trigger_rural_followup(self):
         policy = ServiceDialoguePolicy()
         state = ServiceRuntimeState(awaiting_full_address=True)
         scenario_data = build_scenario().to_dict()
@@ -8079,7 +8318,7 @@ class ServicePolicyTests(unittest.TestCase):
         self.assertEqual(result.reply, "请问具体是在哪个小区或村呢？尽量详细到门牌号。")
         self.assertEqual(state.partial_address_candidate, "顺德区陈村镇")
 
-    def test_segmented_address_with_letter_building_starts_confirmation(self):
+    def legacy_address_segmented_address_with_letter_building_starts_confirmation(self):
         policy = ServiceDialoguePolicy()
         state = ServiceRuntimeState(
             awaiting_full_address=True,
@@ -8130,7 +8369,7 @@ class ServicePolicyTests(unittest.TestCase):
             "广东省佛山市顺德区陈村镇美景豪庭J座4单元502室",
         )
 
-    def test_segmented_address_confirmation_display_strips_internal_punctuation(self):
+    def legacy_address_segmented_address_confirmation_display_strips_internal_punctuation(self):
         policy = ServiceDialoguePolicy()
         state = ServiceRuntimeState(
             awaiting_full_address=True,
@@ -8176,7 +8415,7 @@ class ServicePolicyTests(unittest.TestCase):
             "好的，跟您确认一下，地址是浙江省杭州市西湖区文二路89号4单元302室，对吗？",
         )
 
-    def test_address_confirmation_adds_room_suffix_when_user_omits_shi_suffix(self):
+    def legacy_address_address_confirmation_adds_room_suffix_when_user_omits_shi_suffix(self):
         policy = ServiceDialoguePolicy()
         state = ServiceRuntimeState(
             awaiting_full_address=True,
@@ -8226,7 +8465,7 @@ class ServicePolicyTests(unittest.TestCase):
             "浙江省台州市三门县新湖国际18幢1单元502室",
         )
 
-    def test_address_reask_frustration_confirms_existing_candidate(self):
+    def legacy_address_address_reask_frustration_confirms_existing_candidate(self):
         policy = ServiceDialoguePolicy()
         state = ServiceRuntimeState(
             awaiting_full_address=True,
@@ -8414,7 +8653,7 @@ class ServicePolicyTests(unittest.TestCase):
         self.assertEqual(result.slot_updates["surname"], "王")
         self.assertEqual(result.reply, "请问您当前这个来电号码能联系到您吗？")
 
-    def test_unknown_actual_address_town_only_reply_keeps_locality_followup(self):
+    def legacy_address_unknown_actual_address_town_only_reply_keeps_locality_followup(self):
         policy = ServiceDialoguePolicy(ok_prefix_probability=0.0)
         state = ServiceRuntimeState(
             awaiting_full_address=True,
@@ -8502,7 +8741,7 @@ class ServicePolicyTests(unittest.TestCase):
         self.assertEqual(result.slot_updates["product_routing_result"], "转人工")
         self.assertEqual(state.product_routing_observed_trace, ["brand_series.cooling_or_little_swan"])
 
-    def test_freeform_address_collection_uses_model_only_to_strip_chatter(self):
+    def legacy_address_freeform_address_collection_uses_model_only_to_strip_chatter(self):
         def fake_address_inference(**kwargs):
             self.assertEqual(
                 kwargs["user_text"],
@@ -8557,7 +8796,7 @@ class ServicePolicyTests(unittest.TestCase):
             "云南省西双版纳景洪市雨林名苑2栋2单元405",
         )
 
-    def test_address_confirmation_reorders_detail_granularity_after_model_extraction(self):
+    def legacy_address_address_confirmation_reorders_detail_granularity_after_model_extraction(self):
         def fake_address_inference(**kwargs):
             return {
                 "address_candidate": "浙江省宁波市海曙区文苑风荷3单元2301室23楼",

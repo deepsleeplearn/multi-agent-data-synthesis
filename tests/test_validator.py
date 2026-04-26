@@ -14,7 +14,7 @@ class ValidatorTests(unittest.TestCase):
             rounds_used=2,
             transcript=[
                 DialogueTurn(speaker="user", text="美的空气能热水器需要维修", round_index=1),
-                DialogueTurn(speaker="service", text="好的，请问空气能热水器现在是出现了什么问题？", round_index=1),
+                DialogueTurn(speaker="service", text="好的，请问热水器现在是出现了什么问题？", round_index=1),
             ],
             collected_slots={},
             missing_slots=[],

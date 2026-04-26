@@ -819,6 +819,87 @@ class FrontendServerTests(unittest.TestCase):
         self.assertIn(policy.ADDRESS_IE_FUNCTION_CALL_DISPLAY, user_turn.post_display_lines)
         self.assertTrue(any(line.startswith("observation:") for line in user_turn.post_display_lines))
 
+    def test_known_address_plain_yes_inserts_address_ie_display_lines(self):
+        policy = frontend_server.ServiceDialoguePolicy()
+        runtime_state = frontend_server.ServiceRuntimeState(
+            expected_address_confirmation=True,
+            address_confirmation_started_from_known_address=True,
+            pending_address_confirmation="浙江省杭州市拱墅区和睦街道幸福花园15栋2单元701室",
+        )
+        service_turn = frontend_server.DialogueTurn(
+            speaker=frontend_server.SERVICE_SPEAKER,
+            text="您的地址是浙江省杭州市拱墅区和睦街道幸福花园15栋2单元701室，对吗？",
+            round_index=6,
+        )
+        user_turn = frontend_server.DialogueTurn(
+            speaker=frontend_server.USER_SPEAKER,
+            text="是的。",
+            round_index=7,
+        )
+        observation = {
+            "address": "浙江省杭州市拱墅区和睦街道幸福花园15栋2单元701室",
+            "error_code": 0,
+            "error_msg": "已成功获取完整地址",
+        }
+
+        with patch("frontend.server.build_address_model_observation", return_value=observation) as mocked_observation:
+            result = frontend_server._append_address_ie_display_lines(
+                policy=policy,
+                turn=user_turn,
+                transcript=[service_turn, user_turn],
+                runtime_state=runtime_state,
+            )
+
+        self.assertIsNone(result)
+        mocked_observation.assert_called_once_with(
+            "浙江省杭州市拱墅区和睦街道幸福花园15栋2单元701室",
+            client=frontend_server.llm_client,
+            model=frontend_server.config.service_agent_model,
+        )
+        self.assertIn(policy.ADDRESS_IE_FUNCTION_CALL_DISPLAY, user_turn.post_display_lines)
+        self.assertTrue(any(line.startswith("observation:") for line in user_turn.post_display_lines))
+
+    def test_observation_error_code_zero_starts_address_confirmation(self):
+        policy = frontend_server.ServiceDialoguePolicy(ok_prefix_probability=0.0)
+        runtime_state = frontend_server.ServiceRuntimeState(awaiting_full_address=True)
+
+        result = frontend_server._build_auto_address_confirmation_result(
+            policy=policy,
+            runtime_state=runtime_state,
+            observation={
+                "address": "江苏省扬州市宝应县安宜镇阳光锦城",
+                "error_code": 0,
+                "error_msg": "已成功获取完整地址",
+            },
+        )
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result.reply, "跟您确认一下，地址是江苏省扬州市宝应县安宜镇阳光锦城，对吗？")
+        self.assertTrue(runtime_state.expected_address_confirmation)
+        self.assertTrue(runtime_state.address_confirmation_triggered_by_observation)
+        self.assertEqual(runtime_state.pending_address_confirmation, "江苏省扬州市宝应县安宜镇阳光锦城")
+
+    def test_observation_error_code_one_uses_current_fixed_followup_mapping(self):
+        policy = frontend_server.ServiceDialoguePolicy(ok_prefix_probability=0.0)
+        runtime_state = frontend_server.ServiceRuntimeState()
+
+        result = frontend_server._build_auto_address_confirmation_result(
+            policy=policy,
+            runtime_state=runtime_state,
+            observation={
+                "address": "上海市浦东新区",
+                "error_code": 1,
+                "error_msg": "缺少乡镇或街道以及详细地址",
+            },
+        )
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result.reply, "不好意思，我这边没有定位到这个地址，请重新提供一下小区、楼栋和门牌号")
+        self.assertTrue(runtime_state.awaiting_full_address)
+        self.assertFalse(runtime_state.expected_address_confirmation)
+        self.assertEqual(runtime_state.partial_address_candidate, "上海市浦东新区")
+        self.assertEqual(runtime_state.last_address_followup_prompt, result.reply)
+
     def test_pending_ie_prediction_uses_current_policy_for_known_address_confirmation(self):
         policy = frontend_server.ServiceDialoguePolicy()
         runtime_state = frontend_server.ServiceRuntimeState(
@@ -900,6 +981,169 @@ class FrontendServerTests(unittest.TestCase):
         self.assertEqual(req.history_device_brand, "")
         self.assertEqual(req.history_device_category, "")
         self.assertEqual(req.history_device_purchase_date, "")
+
+    def test_completed_auto_mode_materializes_rewindable_manual_continuation_session(self):
+        self._login_admin()
+        scenario = frontend_server._resolve_scenario(scenario_id="frontend_case", scenario_index=0)
+        required_slots, collected_slots = frontend_server._build_collected_slots(scenario)
+        policy = frontend_server._build_service_policy("gpt-4o")
+        auto_session = {
+            "auto_mode_id": "auto-test-continuation",
+            "username": "chat-admin",
+            "model_name": "gpt-4o",
+            "scenario": scenario,
+            "base_scenario": scenario.to_dict(),
+            "policy": policy,
+            "runtime_state": frontend_server.ServiceRuntimeState(),
+            "transcript": [],
+            "trace": [],
+            "terminal_entries": [],
+            "required_slots": required_slots,
+            "collected_slots": collected_slots,
+            "initial_runtime_state": {},
+            "initial_collected_slots": {},
+            "rounds_limit": 6,
+            "status": "completed",
+            "aborted_reason": "",
+            "started_at": "2026-04-26 10:00:00",
+            "ended_at": "2026-04-26 10:01:00",
+            "review_submitted": False,
+            "session_config": {"model_name": "gpt-4o", "source": "auto_mode"},
+            "checkpoints": [],
+        }
+        auto_session["initial_runtime_state"] = asdict(auto_session["runtime_state"])
+        auto_session["initial_collected_slots"] = dict(collected_slots)
+        frontend_server._append_checkpoint(auto_session, source_round_index=0)
+        user_turn = frontend_server.DialogueTurn(
+            speaker=frontend_server.USER_SPEAKER,
+            text="美的空气能热水器需要维修",
+            round_index=1,
+        )
+        service_turn = frontend_server.DialogueTurn(
+            speaker=frontend_server.SERVICE_SPEAKER,
+            text="您好，很高兴为您服务，请问是美的空气能热水机需要维修吗？",
+            round_index=1,
+        )
+        auto_session["transcript"].extend([user_turn, service_turn])
+        frontend_server._append_turn_entry(auto_session, user_turn)
+        frontend_server._append_turn_entry(auto_session, service_turn)
+        frontend_server._append_checkpoint(auto_session, source_round_index=1)
+        job = {
+            "session": auto_session,
+            "done": True,
+            "error": "",
+            "abort_requested": False,
+            "created_at": 0,
+            "updated_at": 0,
+        }
+
+        view = frontend_server._build_auto_mode_job_view("job-1", job)
+
+        self.assertEqual(view["session_id"], "auto-test-continuation")
+        self.assertFalse(view["session_closed"])
+        self.assertEqual(view["status"], "active")
+        self.assertIn("auto-test-continuation", frontend_server.sessions)
+        user_entries = [
+            entry for entry in view["terminal_entries"]
+            if entry.get("entry_type") == "turn" and entry.get("tone") == "user"
+        ]
+        self.assertEqual(user_entries[0]["restore_checkpoint_index"], 0)
+
+        rewind_response = self.client.post(
+            "/api/session/rewind",
+            json={"session_id": "auto-test-continuation", "clicked_user_round_index": 1},
+        )
+        self.assertEqual(rewind_response.status_code, 200)
+        rewind_payload = rewind_response.json()
+        self.assertEqual(rewind_payload["next_round_index"], 1)
+        self.assertFalse(rewind_payload["session_closed"])
+        self.assertEqual(rewind_payload["transcript"], [])
+
+        respond_response = self.client.post(
+            "/api/session/respond",
+            json={"session_id": "auto-test-continuation", "text": "美的空气能热水器需要维修"},
+        )
+        self.assertEqual(respond_response.status_code, 200)
+        self.assertEqual(respond_response.json()["next_round_index"], 2)
+
+    def test_aborted_auto_mode_materializes_without_error_terminal_line(self):
+        self._login_admin()
+        scenario = frontend_server._resolve_scenario(scenario_id="frontend_case", scenario_index=0)
+        required_slots, collected_slots = frontend_server._build_collected_slots(scenario)
+        auto_session = {
+            "auto_mode_id": "auto-test-aborted",
+            "username": "chat-admin",
+            "model_name": "gpt-4o",
+            "scenario": scenario,
+            "base_scenario": scenario.to_dict(),
+            "policy": frontend_server._build_service_policy("gpt-4o"),
+            "runtime_state": frontend_server.ServiceRuntimeState(),
+            "transcript": [],
+            "trace": [],
+            "terminal_entries": [],
+            "required_slots": required_slots,
+            "collected_slots": collected_slots,
+            "initial_runtime_state": {},
+            "initial_collected_slots": {},
+            "rounds_limit": 6,
+            "status": "active",
+            "aborted_reason": "",
+            "started_at": "2026-04-26 10:00:00",
+            "ended_at": "",
+            "review_submitted": False,
+            "session_config": {"model_name": "gpt-4o", "source": "auto_mode"},
+            "checkpoints": [],
+        }
+        auto_session["initial_runtime_state"] = asdict(auto_session["runtime_state"])
+        auto_session["initial_collected_slots"] = dict(collected_slots)
+        frontend_server._append_checkpoint(auto_session, source_round_index=0)
+        user_turn = frontend_server.DialogueTurn(
+            speaker=frontend_server.USER_SPEAKER,
+            text="美的热水器需要维修",
+            round_index=1,
+        )
+        service_turn = frontend_server.DialogueTurn(
+            speaker=frontend_server.SERVICE_SPEAKER,
+            text="您好，很高兴为您服务，请问是美的热水器需要维修吗？",
+            round_index=1,
+        )
+        auto_session["transcript"].extend([user_turn, service_turn])
+        frontend_server._append_turn_entry(auto_session, user_turn)
+        frontend_server._append_turn_entry(auto_session, service_turn)
+        frontend_server._append_checkpoint(auto_session, source_round_index=1)
+        job_id = "job-aborted"
+        frontend_server.auto_mode_jobs[job_id] = {
+            "session": auto_session,
+            "done": False,
+            "error": "",
+            "abort_requested": True,
+            "created_at": 0,
+            "updated_at": 0,
+        }
+
+        frontend_server._finalize_auto_mode_job(
+            job_id,
+            status_value="aborted",
+            error_message="已强制结束自动模式。",
+        )
+        view = frontend_server._build_auto_mode_job_view(job_id, frontend_server.auto_mode_jobs[job_id])
+
+        self.assertEqual(view["session_id"], "auto-test-aborted")
+        self.assertFalse(view["session_closed"])
+        self.assertEqual(view["status"], "active")
+        self.assertEqual(view["job_error"], "")
+        self.assertNotIn(
+            "[自动模式错误]",
+            "\n".join(str(entry.get("text", "")) for entry in view["terminal_entries"]),
+        )
+        self.assertEqual(
+            [
+                entry.get("restore_checkpoint_index")
+                for entry in view["terminal_entries"]
+                if entry.get("entry_type") == "turn" and entry.get("tone") == "user"
+            ],
+            [0],
+        )
 
     def test_rewind_endpoint_restores_session_snapshot_and_reopens_session(self):
         self._login()

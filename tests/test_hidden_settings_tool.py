@@ -475,6 +475,35 @@ class HiddenSettingsToolTests(unittest.TestCase):
             self.assertFalse(generated.hidden_context["service_known_address"])
             self.assertEqual(generated.hidden_context["service_known_address_value"], "")
 
+    def test_frontend_auto_address_seed_diversifies_local_actual_address(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            base = build_base_scenario()
+            empty_customer = replace(base.customer, address="")
+
+            def hydrate_with_seed(seed: str) -> str:
+                scenario = base.with_generated_hidden_settings(
+                    customer=empty_customer,
+                    request=base.request,
+                    hidden_context={
+                        **dict(base.hidden_context),
+                        "frontend_auto_address_policy_enabled": True,
+                        "frontend_auto_configured_known_address": "",
+                        "frontend_auto_address_seed": seed,
+                    },
+                )
+                tool = HiddenSettingsTool(
+                    SequenceFakeClient([]),
+                    build_config(Path(temp_dir) / f"{seed}.jsonl"),
+                )
+                return tool.hydrate_scenario_locally(scenario).customer.address
+
+            first_address = hydrate_with_seed("seed-a")
+            second_address = hydrate_with_seed("seed-b")
+
+            self.assertNotEqual(first_address, second_address)
+            self.assertRegex(first_address, r"(省|市).*(区|县|市|镇).*(街道|镇)")
+            self.assertRegex(second_address, r"(省|市).*(区|县|市|镇).*(街道|镇)")
+
     def test_reply_noise_target_probabilities_scale_with_total_probability(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             store_path = Path(temp_dir) / "hidden_settings_history.jsonl"

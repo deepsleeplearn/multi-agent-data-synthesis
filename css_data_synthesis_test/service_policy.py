@@ -1359,7 +1359,10 @@ class ServiceDialoguePolicy:
                     slot_updates["issue_description"] = user_text.strip()
             elif self._signature_matches_prompt(
                 previous_service_signature,
-                self._format_prompt_config(self.FAULT_ISSUE_PROMPT, product=self._product_name(scenario)),
+                self._format_prompt_config(
+                    self.FAULT_ISSUE_PROMPT,
+                    product=self._fault_issue_product_name(scenario),
+                ),
             ):
                 issue_description = self._resolve_issue_description(
                     user_text,
@@ -1881,6 +1884,8 @@ class ServiceDialoguePolicy:
             )
             if confirmation_intent == "yes":
                 residual_text = self._strip_address_confirmation_affirmation_prefix(text)
+                if self._is_address_confirmation_noop_residual(residual_text):
+                    return "confirm_only"
                 prepared_user_address = self._prepare_address_for_confirmation(residual_text)
                 if prepared_user_address:
                     merged_candidate = self._merge_address_candidate(
@@ -1931,19 +1936,32 @@ class ServiceDialoguePolicy:
             if isinstance(payload, dict):
                 intent = str(payload.get("intent", "")).strip().lower()
                 if intent in {"confirm_only", "modify", "add", "delete", "unknown"}:
-                    rule_intent = _rule_evidence_intent()
-                    if intent == "confirm_only":
-                        self.last_used_model_intent_inference = True
-                        return "confirm_only" if rule_intent != "add" else "add"
-                    if intent in {"add", "modify", "delete"}:
-                        self.last_used_model_intent_inference = True
-                        if rule_intent in {"add", "modify", "delete"}:
-                            return rule_intent
-                        return "confirm_only" if rule_intent == "confirm_only" else "unknown"
                     self.last_used_model_intent_inference = True
-                    return rule_intent
+                    return intent
 
         return _rule_evidence_intent()
+
+    @staticmethod
+    def _is_address_confirmation_noop_residual(text: str) -> bool:
+        compact = re.sub(r"[，,。！？!?\s]", "", str(text or ""))
+        if not compact:
+            return True
+        return compact in {
+            "没问题",
+            "没有问题",
+            "没啥问题",
+            "没什么问题",
+            "没问题了",
+            "没有问题了",
+            "可以",
+            "可以的",
+            "行",
+            "行的",
+            "对",
+            "对的",
+            "没错",
+            "正确",
+        }
 
     @classmethod
     def _strip_address_confirmation_affirmation_prefix(cls, text: str) -> str:
@@ -2201,11 +2219,17 @@ class ServiceDialoguePolicy:
     ) -> dict[str, Any] | None:
         self.last_model_intent_inference_attempted = True
         signature = inspect.signature(callback)
-        accepted_kwargs = {
-            name: value
-            for name, value in kwargs.items()
-            if name in signature.parameters
-        }
+        if any(
+            parameter.kind == inspect.Parameter.VAR_KEYWORD
+            for parameter in signature.parameters.values()
+        ):
+            accepted_kwargs = kwargs
+        else:
+            accepted_kwargs = {
+                name: value
+                for name, value in kwargs.items()
+                if name in signature.parameters
+            }
         return callback(**accepted_kwargs)
 
     @classmethod
@@ -4327,8 +4351,18 @@ class ServiceDialoguePolicy:
         value = str(scenario.product.category).strip()
         return value or "空气能热水机"
 
+    @classmethod
+    def _fault_issue_product_name(cls, scenario: Scenario) -> str:
+        product_name = cls._product_name(scenario)
+        if "热水" in product_name:
+            return "热水器"
+        return product_name
+
     def _fault_issue_prompt(self, scenario: Scenario) -> str:
-        prompt_config = self._format_prompt_config(self.FAULT_ISSUE_PROMPT, product=self._product_name(scenario))
+        prompt_config = self._format_prompt_config(
+            self.FAULT_ISSUE_PROMPT,
+            product=self._fault_issue_product_name(scenario),
+        )
         return self._with_optional_ok_prefix(self._choose_prompt_text(prompt_config))
 
     def _address_prompt(self) -> str:
