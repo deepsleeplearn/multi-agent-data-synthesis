@@ -1141,7 +1141,8 @@ class ServiceAgent:
 3. 不要脑补用户没说出的信息。
 4. answer_key 必须属于当前 prompt_key 对应的候选集合；如果拿不准或跨到了别的节点，返回空字符串。
 5. 要忽略常见口头语、犹豫前缀、附带闲聊后再判断真实意图，例如“这个我不清楚，家里人帮我找”“我瞅瞅，单独生活用水的”“应该是送的”“好像是自己买的吧”，都应按核心事实判断，而不是因为前缀口语返回空。
-6. 对 brand_or_series 节点要特别注意：
+6. 如果用户原话只是在表白、寒暄、感谢、抱怨、问费用、问上门时间，或谈其他和当前产品归属问题无关的内容，必须返回空字符串；不要把这类答非所问归入“不清楚/其他”分支。例如 usage_scene 问使用场所时，用户只说“我爱你”“谢谢”“什么时候上门”，answer_key 必须为空。
+7. 对 brand_or_series 节点要特别注意：
    - 用户在电话里说品牌/系列时，常会出现同音、近音、方言、口误、错别字、音译写法。你需要按“听起来像哪个候选品牌/系列”判断，但前提是该说法不是另一个明确市面品牌。
    - 这个节点不要因为用户带“好像/大概/应该/可能/的”就返回空；这些只是语气词。只要核心音近候选品牌/系列，就输出对应 answer_key。
    - 判断近音时重点看普通话读音、声母/韵母接近程度、电话听感、语音转写常见错字，不要只看字面含义；即使用户写出来的词看起来像普通名词，只要在“空气能品牌/系列”上下文里明显更像候选系列，就按候选系列处理。
@@ -1157,23 +1158,23 @@ class ServiceAgent:
    - 如果用户表达的是疑似“烈焰”的中文音译、谐音、近音、口误说法，且该说法不是另一个明确市面品牌，也判为 brand_series.lieyan；重点泛化识别 lián/liè + yàn/yè 这类电话听感接近“烈焰”的两字表达，不要只匹配已列示例。
    - 用户直接或主动提供具体型号，判为 entry.model
    - 用户说不清楚、提供不了、只知道是美的，判为 entry.unknown
-7. 对 usage_scene 节点要特别注意：
+8. 对 usage_scene 节点要特别注意：
    - 家庭、家里、家用、自家、自己家、住宅，判为 scene.family
    - 别墅、公寓、理发店，判为 scene.villa_apartment_barber
    - 其他场所、不知道、不清楚，判为 scene.other_unknown
    - 用户只说“是/不是/对/不对”但没有给出场所，也判为 scene.other_unknown
-8. 对 history_device_confirmation 节点要特别注意：
+9. 对 history_device_confirmation 节点要特别注意：
    - 用户确认查询到的历史空气能设备就是本次设备，判为 history_device.yes
    - 用户否定、不确定、不清楚是否一致，判为 history_device.no_unknown
    - 用户先说“对/是/没错/就是这台”等肯定词，后面补充“买了五六年了/时间差不多/确实买过/是那台老机器”等购买时间或背景信息，也必须判为 history_device.yes。
    - 像“不是这台”“不对，不是这个”“不是查询到的那台”“不是名下这台”必须判为 history_device.no_unknown；不要因为句子里包含“是这台”三个字就误判为 yes。
-9. 对 purchase_or_property 节点要特别注意：
+10. 对 purchase_or_property 节点要特别注意：
    - “自己购买 / 我买的 / 后来单独买的” 才是 purchase.self_buy
    - “买房送的 / 交房就有 / 房子原来就有 / 开发商配的 / 楼盘自带” 都是 purchase.property_bundle
    - “应该是送的 / 好像送的 / 可能是送的 / 估计是送的” 也按 purchase.property_bundle
    - “应该是自己买的 / 好像自己买的 / 估计自己买的” 按 purchase.self_buy
    - 句子里出现“自己”这个词，不等于就是 self_buy；例如“房子自己就有”应判为 purchase.property_bundle
-10. 对 property_year 节点要特别注意：
+11. 对 property_year 节点要特别注意：
    - “21年前 / 2020年 / 19年的楼盘 / 2018年交付” 判为 property_year.before_2021
    - “21年后 / 2022年 / 22年的楼盘” 判为 property_year.after_2021
    - “忘了 / 记不清 / 太久了不记得 / 说不好 / 不清楚”，且用户没提供可辅助判断的大概年份时，判为 property_year.unknown

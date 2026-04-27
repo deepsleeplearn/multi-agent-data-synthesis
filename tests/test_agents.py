@@ -828,6 +828,8 @@ class ServiceAgentTests(unittest.TestCase):
         self.assertIn("scene.villa_apartment_barber", system_prompt)
         self.assertIn("scene.other_unknown", system_prompt)
         self.assertIn("answer_key 必须属于当前 prompt_key", system_prompt)
+        self.assertIn("我爱你", system_prompt)
+        self.assertIn("answer_key 必须为空", system_prompt)
 
     def test_service_agent_uses_model_fallback_for_opening_intent(self):
         client = RecordingOpeningClient()

@@ -1,0 +1,919 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>空气能热水器链路</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f6f7f8;
+      --surface: #ffffff;
+      --surface-2: #eef2f4;
+      --ink: #182026;
+      --muted: #64717c;
+      --line: #d8e0e6;
+      --accent: #0f766e;
+      --accent-soft: #dff4f0;
+      --warn: #a65f00;
+      --shadow: 0 18px 45px rgba(24, 32, 38, 0.08);
+      --radius: 8px;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      width: 100%;
+      height: 100vh;
+      min-height: 100vh;
+      overflow: hidden;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", Arial, sans-serif;
+      letter-spacing: 0;
+    }
+
+    button, input {
+      font: inherit;
+    }
+
+    .app {
+      height: 100vh;
+      min-height: 0;
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr);
+      overflow: hidden;
+    }
+
+    header {
+      background: var(--surface);
+      border-bottom: 1px solid var(--line);
+      padding: 18px 24px 16px;
+      display: flex;
+      gap: 18px;
+      align-items: flex-end;
+      justify-content: space-between;
+    }
+
+    .title h1 {
+      margin: 0;
+      font-size: 22px;
+      line-height: 1.25;
+      font-weight: 760;
+    }
+
+    .title p {
+      margin: 6px 0 0;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .stats {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+
+    .stat {
+      min-width: 112px;
+      padding: 9px 12px;
+      border: 1px solid var(--line);
+      background: var(--surface);
+      border-radius: var(--radius);
+    }
+
+    .stat span {
+      display: block;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.2;
+    }
+
+    .stat strong {
+      display: block;
+      margin-top: 4px;
+      font-size: 18px;
+      line-height: 1.15;
+    }
+
+    main {
+      min-height: 0;
+      overflow: hidden;
+      display: grid;
+      grid-template-columns: minmax(420px, 32vw) minmax(520px, 1fr);
+      grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
+      gap: 14px;
+      padding: 14px;
+    }
+
+    main > section[aria-label="完整树"] {
+      grid-column: 1;
+      grid-row: 1 / 3;
+    }
+
+    main > section[aria-label="逐层选择"] {
+      grid-column: 2;
+      grid-row: 1;
+    }
+
+    main > aside[aria-label="选择明细"] {
+      grid-column: 2;
+      grid-row: 2;
+    }
+
+    .panel {
+      min-height: 0;
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .panel-head {
+      padding: 14px;
+      border-bottom: 1px solid var(--line);
+      background: linear-gradient(#ffffff, #fbfcfc);
+    }
+
+    .panel-head h2 {
+      margin: 0;
+      font-size: 14px;
+      line-height: 1.25;
+    }
+
+    .panel-head p {
+      margin: 5px 0 0;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.35;
+    }
+
+    aside[aria-label="选择明细"] .panel-head {
+      padding: 8px 10px;
+    }
+
+    aside[aria-label="选择明细"] .panel-head h2 {
+      font-size: 13px;
+      line-height: 1.15;
+    }
+
+    aside[aria-label="选择明细"] .panel-head p {
+      margin-top: 2px;
+      font-size: 11px;
+      line-height: 1.2;
+    }
+
+    aside[aria-label="选择明细"] .toolbar {
+      margin-top: 6px;
+      gap: 6px;
+    }
+
+    aside[aria-label="选择明细"] .text-btn {
+      height: 28px;
+      padding: 0 9px;
+      font-size: 12px;
+    }
+
+    .toolbar {
+      display: flex;
+      gap: 8px;
+      margin-top: 10px;
+    }
+
+    .search {
+      width: 100%;
+      height: 34px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      padding: 0 10px;
+      background: #fff;
+      outline: none;
+    }
+
+    .search:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px var(--accent-soft);
+    }
+
+    .icon-btn, .text-btn {
+      border: 1px solid var(--line);
+      background: var(--surface);
+      color: var(--ink);
+      height: 34px;
+      border-radius: var(--radius);
+      cursor: pointer;
+      transition: background 140ms ease, border-color 140ms ease, transform 140ms ease;
+    }
+
+    .icon-btn {
+      width: 36px;
+      display: inline-grid;
+      place-items: center;
+      flex: 0 0 auto;
+    }
+
+    .text-btn {
+      padding: 0 11px;
+    }
+
+    .icon-btn:hover, .text-btn:hover {
+      background: var(--surface-2);
+      border-color: #b9c6ce;
+    }
+
+    .icon-btn:active, .text-btn:active {
+      transform: translateY(1px);
+    }
+
+    .tree-scroll, .drill-scroll, .detail-scroll {
+      overflow: auto;
+      min-height: 0;
+      flex: 1 1 auto;
+    }
+
+    .tree {
+      padding: 10px 8px 18px;
+    }
+
+    .tree-node {
+      margin: 2px 0;
+    }
+
+    .node-row {
+      min-height: 34px;
+      display: grid;
+      grid-template-columns: 24px 1fr auto;
+      align-items: center;
+      gap: 4px;
+      border-radius: var(--radius);
+      padding: 3px 7px 3px 2px;
+      cursor: pointer;
+      transition: background 130ms ease, color 130ms ease;
+    }
+
+    .node-row:hover {
+      background: #f1f5f6;
+    }
+
+    .node-row.selected {
+      background: var(--accent-soft);
+      color: #074d47;
+    }
+
+    .twisty {
+      width: 24px;
+      height: 24px;
+      border: 0;
+      background: transparent;
+      color: var(--muted);
+      cursor: pointer;
+      border-radius: 6px;
+    }
+
+    .twisty:hover {
+      background: rgba(15, 118, 110, 0.1);
+      color: var(--accent);
+    }
+
+    .label {
+      overflow-wrap: anywhere;
+      font-size: 13px;
+      line-height: 1.32;
+    }
+
+    .count {
+      color: var(--muted);
+      font-size: 12px;
+      background: #f2f5f6;
+      border-radius: 999px;
+      padding: 2px 7px;
+    }
+
+    .children {
+      margin-left: 18px;
+      padding-left: 9px;
+      border-left: 1px solid #e6ecef;
+      display: none;
+    }
+
+    .tree-node.open > .children {
+      display: block;
+    }
+
+    .drill {
+      min-height: 100%;
+      padding: 14px;
+      display: grid;
+      grid-auto-flow: column;
+      grid-auto-columns: minmax(240px, 310px);
+      gap: 12px;
+      align-items: start;
+      align-content: start;
+    }
+
+    .level-column {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      overflow: hidden;
+      background: #fbfcfc;
+      min-height: 160px;
+    }
+
+    .level-title {
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--line);
+      font-size: 12px;
+      color: var(--muted);
+      background: #fff;
+    }
+
+    .choice {
+      width: 100%;
+      min-height: 40px;
+      border: 0;
+      border-bottom: 1px solid #ebf0f2;
+      background: transparent;
+      padding: 9px 11px;
+      text-align: left;
+      cursor: pointer;
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 8px;
+      align-items: center;
+      color: var(--ink);
+      transition: background 130ms ease;
+    }
+
+    .choice:hover {
+      background: #eff5f4;
+    }
+
+    .choice.active {
+      background: var(--accent-soft);
+      color: #074d47;
+    }
+
+    .choice-name {
+      font-size: 13px;
+      line-height: 1.3;
+      overflow-wrap: anywhere;
+    }
+
+    .choice-meta {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .detail-scroll {
+      padding: 14px;
+    }
+
+    .path {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      margin-bottom: 14px;
+    }
+
+    .crumb {
+      padding: 8px 10px;
+      background: #f3f7f8;
+      border: 1px solid #e0e8ec;
+      border-radius: var(--radius);
+      font-size: 13px;
+      line-height: 1.35;
+      overflow-wrap: anywhere;
+    }
+
+    .empty {
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.5;
+      padding: 12px 0;
+    }
+
+    .kv {
+      display: grid;
+      grid-template-columns: 92px 1fr;
+      gap: 9px 12px;
+      padding: 13px 0;
+      border-top: 1px solid var(--line);
+      font-size: 13px;
+    }
+
+    .kv dt {
+      color: var(--muted);
+    }
+
+    .kv dd {
+      margin: 0;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
+
+    .leaf-paths {
+      border-top: 1px solid var(--line);
+      padding-top: 12px;
+      margin-top: 2px;
+    }
+
+    .leaf-paths h4 {
+      margin: 0 0 8px;
+      font-size: 13px;
+      line-height: 1.25;
+    }
+
+    .leaf-path-list {
+      margin: 0;
+      padding: 0;
+      list-style: none;
+      display: flex;
+      flex-direction: column;
+      gap: 7px;
+    }
+
+    .leaf-path-list li {
+      display: grid;
+      grid-template-columns: 34px 1fr;
+      gap: 8px;
+      align-items: start;
+      padding: 8px 9px;
+      border: 1px solid #e0e8ec;
+      background: #f8fbfb;
+      border-radius: var(--radius);
+      font-size: 12px;
+      line-height: 1.35;
+      overflow-wrap: anywhere;
+    }
+
+    .leaf-no {
+      width: 26px;
+      min-height: 22px;
+      display: inline-grid;
+      place-items: center;
+      border-radius: 999px;
+      background: var(--accent-soft);
+      color: #074d47;
+      font-weight: 700;
+      font-size: 11px;
+      line-height: 1;
+    }
+
+    .selected-title {
+      margin: 0 0 8px;
+      font-size: 18px;
+      line-height: 1.3;
+      overflow-wrap: anywhere;
+    }
+
+    .selected-link-number {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      margin: 0 0 10px;
+      padding: 7px 9px;
+      border-radius: var(--radius);
+      background: var(--accent-soft);
+      color: #074d47;
+      font-size: 13px;
+      font-weight: 700;
+      line-height: 1.25;
+      overflow-wrap: anywhere;
+    }
+
+    .selected-link-number span {
+      color: #315f59;
+      font-weight: 600;
+    }
+
+    .toast {
+      position: fixed;
+      left: 50%;
+      bottom: 22px;
+      transform: translateX(-50%) translateY(12px);
+      background: #182026;
+      color: white;
+      padding: 9px 12px;
+      border-radius: var(--radius);
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 180ms ease, transform 180ms ease;
+      font-size: 13px;
+    }
+
+    .toast.show {
+      opacity: 1;
+      transform: translateX(-50%) translateY(0);
+    }
+
+    mark {
+      background: #fff0b3;
+      color: inherit;
+      padding: 0 1px;
+      border-radius: 2px;
+    }
+
+    @media (max-width: 1100px) {
+      header {
+        align-items: flex-start;
+        flex-direction: column;
+      }
+      main {
+        grid-template-columns: 1fr;
+        grid-template-rows: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr);
+        grid-auto-rows: initial;
+        overflow: hidden;
+      }
+      main > section[aria-label="完整树"],
+      main > section[aria-label="逐层选择"],
+      main > aside[aria-label="选择明细"] {
+        grid-column: auto;
+        grid-row: auto;
+      }
+      main > section[aria-label="逐层选择"] {
+        min-height: 0;
+      }
+      .panel {
+        min-height: 0;
+      }
+      .stats {
+        justify-content: flex-start;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header>
+      <div class="title">
+        <h1>空气能热水器链路</h1>
+        <p>点击左侧树或中间层级选项逐层选择，右侧同步显示路径与汇总信息。</p>
+      </div>
+      <div class="stats" aria-label="汇总">
+        <div class="stat"><span>匹配记录</span><strong id="recordCount">0</strong></div>
+        <div class="stat"><span>当前层级</span><strong id="currentLevel">-</strong></div>
+      </div>
+    </header>
+
+    <main>
+      <section class="panel" aria-label="完整树">
+        <div class="panel-head">
+          <h2>完整树</h2>
+          <p>可展开、可搜索，点击任意节点选择。</p>
+          <div class="toolbar">
+            <input id="search" class="search" type="search" inputmode="numeric" placeholder="输入链路编号后回车搜索">
+            <button id="expandAll" class="icon-btn" type="button" title="展开全部">＋</button>
+            <button id="collapseAll" class="icon-btn" type="button" title="收起全部">－</button>
+          </div>
+        </div>
+        <div class="tree-scroll">
+          <div id="tree" class="tree"></div>
+        </div>
+      </section>
+
+      <section class="panel" aria-label="逐层选择">
+        <div class="panel-head">
+          <h2>逐层选择</h2>
+          <p>每点击一项，下一层自动出现。</p>
+        </div>
+        <div class="drill-scroll">
+          <div id="drill" class="drill"></div>
+        </div>
+      </section>
+
+      <aside class="panel" aria-label="选择明细">
+        <div class="panel-head">
+          <h2>选择明细</h2>
+          <p>显示当前节点覆盖的链路和来源行。</p>
+          <div class="toolbar">
+            <button id="copyPath" class="text-btn" type="button">复制路径</button>
+            <button id="reset" class="text-btn" type="button">回到根层</button>
+          </div>
+        </div>
+        <div id="detail" class="detail-scroll"></div>
+      </aside>
+    </main>
+  </div>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+  <script>
+    const data = {"target":"按键3-空气能热水器流程 + 按键4/超时未按","sourceFile":"/Users/gj/Downloads/空气能热水器链路明细.xlsx","recordCount":48,"totalQuantity":"474","roots":[{"id":"n1","label":"空气能热水器","level":1,"path":["空气能热水器"],"summary":{"recordCount":48,"links":"1、2、3、4、5、6、7、8、9、10、11、12、13、14、15、16、17、18、19、20、21、22、23、24、25、26、27、28、29、30、31、32、33、34、35、36、37、38、39、40、41、42、43、44、45、46、47、48","endpoint":"转人工、1-到货\n2-故障、按照更正后的品类逻辑往后走","quantity":"474","owners":"曾宪豪、素雅","sourceRows":"2、3、4、5、6、7、8、9、10、11、12、13、14、15、16、17、18、19、20、21、22、23、24、25、26、27、28、29、30、31、32、33、34、35、36、37、38、39、40、41、42、43、44、45、46、47、48、49"},"children":[{"id":"n2","label":"IVR机型自主识别：按键3-空气能热水器流程","level":2,"path":["空气能热水器","IVR机型自主识别：按键3-空气能热水器流程"],"summary":{"recordCount":37,"links":"1、2、3、4、5、6、7、8、9、10、11、12、13、14、15、16、17、18、19、20、21、22、23、24、25、26、27、28、29、30、31、32、33、34、35、36、37","endpoint":"转人工、1-到货\n2-故障、按照更正后的品类逻辑往后走","quantity":"358","owners":"曾宪豪、素雅","sourceRows":"2、3、4、6、7、8、10、11、12、14、15、16、18、19、20、22、23、24、26、27、28、30、31、32、34、35、36、38、39、40、42、43、44、46、47、48、49"},"children":[{"id":"n3","label":"品牌品类诉求确认：答非所问、说不清楚(2次）","level":3,"path":["空气能热水器","IVR机型自主识别：按键3-空气能热水器流程","品牌品类诉求确认：答非所问、说不清楚(2次）"],"summary":{"recordCount":1,"links":"1","endpoint":"转人工","quantity":"6","owners":"曾宪豪","sourceRows":"2"},"children":[{"id":"n4","label":"链路结点：转人工","level":4,"path":["空气能热水器","IVR机型自主识别：按键3-空气能热水器流程","品牌品类诉求确认：答非所问、说不清楚(2次）","链路结点：转人工"],"summary":{"recordCount":1,"links":"1","endpoint":"转人工","quantity":"6","owners":"曾宪豪","sourceRows":"2"},"children":[]}]},{"id":"n5","label":"品牌品类诉求确认：否定-更正品牌-酷风/小天鹅","level":3,"path":["空气能热水器","IVR机型自主识别：按键3-空气能热水器流程","品牌品类诉求确认：否定-更正品牌-酷风/小天鹅"],"summary":{"recordCount":1,"links":"2","endpoint":"转人工","quantity":"","owners":"","sourceRows":"3"},"children":[{"id":"n6","label":"链路结点：转人工","level":4,"path":["空气能热水器","IVR机型自主识别：按键3-空气能热水器流程","品牌品类诉求确认：否定-更正品牌-酷风/小天鹅","链路结点：转人工"],"summary":{"recordCount":1,"links":"2","endpoint":"转人工","quantity":"","owners":"","sourceRows":"3"},"children":[]}]},{"id":"n7","label":"品牌品类诉求确认：否定-更正诉求-黑名单诉求","level":3,"path":["空气能热水器","IVR机型自主识别：按键3-空气能热水器流程","品牌品类诉求确认：否定-更正诉求-黑名单诉求"],"summary":{"recordCount":1,"links":"3","endpoint":"转人工","quantity":"","owners":"","sourceRows":"4"},"children":[{"id":"n8","label":"链路结点：转人工","level":4,"path":["空气能热水器","IVR机型自主识别：按键3-空气能热水器流程","品牌品类诉求确认：否定-更正诉求-黑名单诉求","链路结点：转人工"],"summary":{"recordCount":1,"links":"3","endpoint":"转人工","quantity":"","owners":"","sourceRows":"4"},"children":[]}]},{"id":"n15","label":"品牌品类诉求确认：否定-更正品牌-品牌集合AB互换","level":3,"path":["空气能热水器","IVR机型自主识别：按键3-空气能热水器流程","品牌品类诉求确认：否定-更正品牌-品牌集合AB互换"],"summary":{"recordCount":11,"links":"4、5、6、7、8、9、10、11、12、13、14","endpoint":"转人工、1-到货\n2-故障","quantity":"116","owners":"","sourceRows":"6、10、14、18、22、26、30、34、38、42、46"},"children":[{"id":"n16","label":"录单类别确认：未确认","level":4,"path":["空气能热水器","IVR机型自主识别：按键3-空气能热水器流程","品牌品类诉求确认：否定-更正品牌-品牌集合AB互换","录单类别确认：未确认"],"summary":{"recordCount":9,"links":"4、5、6、7、8、9、10、11、12","endpoint":"转人工、1-到货\n2-故障","quantity":"106","owners":"","sourceRows":"6、10、22、26、30、34、38、42、46"},"children":[{"id":"n17","label":"系列确认：答非所问","level":5,"path":["空气能热水器","IVR机型自主识别：按键3-空气能热水器流程","品牌品类诉求确认：否定-更正品牌-品牌集合AB互换","录单类别确认：未确认","系列确认：答非所问"],"summary":{"recordCount":1,"links":"4","endpoint":"转人工","quantity":"8","owners":"","sourceRows":"6"},"children":[{"id":"n18","label":"链路结点：转人工","level":6,"path":["空气能热水器","IVR机型自主识别：按键3-空气能热水器流程","品牌品类诉求确认：否定-更正品牌-品牌集合AB互换","录单类别确认：未确认","系列确认：答非所问","链路结点：转人工"],"summary":{"recordCount":1,"links":"4","endpoint":"转人工","quantity":"8","owners":"","sourceRows":"6"},"children":[]}]},{"id":"n30","label":"系列确认：用户不清楚/用户说型号","level":5,"path":["空气能热水器","IVR机型自主识别：按键3-空气能热水器流程","品牌品类诉求确认：否定-更正品牌-品牌集合AB互换","录单类别确认：未确认","系列确认：用户不清楚/用户说型号"],"summary":{"recordCount":7,"links":"5、6、7、8、9、10、11","endpoint":"转人工、1-到货\n2-故障","quantity":"88","owners":"","sourceRows":"10、26、30、34、38、42、46"},"children":[{"id":"n31","label":"使用场所确认：答非所问","level":6,"path":["空气能热水器","IVR机型自主识别：按键3-空气能热水器流程","品牌品类诉求确认：否定-更正品牌-品牌集合AB互换","录单类别确认：未确认","系列确认：用户不清楚/用户说型号","使用场所确认：答非所问"],"summary":{"recordCount":1,"links":"5","endpoint":"转人工","quantity":"8","owners":"","sourceRows":"10"},"children":[{"id":"n32","label":"链路结点：转人工","level":7,"path":["空气能热水器","IVR机型自主识别：按键3-空气能热水器流程","品牌品类诉求确认：否定-更正品牌-品牌集合AB互换","录单类别确认：未确认","系列确认：用户不清楚/用户说型号","使用场所确认：答非所问","链路结点：转人工"],"summary":{"recordCount":1,"links":"5","endpoint":"转人工","quantity":"8","owners":"","sourceRows":"10"},"children":[]}]},{"id":"n67","label":"使用场所确认：家庭","level":6,"path":["空气能热水器","IVR机型自主识别：按键3-空气能热水器流程","品牌品类诉求确认：否定-更正品牌-品牌集合AB互换","录单类别确认：未确认","系列确认：用户不清楚/用户说型号","使用场所确认：家庭"],"summary":{"recordCount":4,"links":"6、7、8、9","endpoint":"1-到货\n2-故障","quantity":"56","owners":"","sourceRows":"26、30、34、38"},"children":[{"id":"n68","label":"历史购买信息确认：无/否定","level":7,"path":["空气能热水器","IVR机型自主识别：按键3-空气能热水器流程","品牌品类诉求确认：否定-更正品牌-品牌集合AB互换","录单类别确认：未确认","系列确认：用户不清楚/用户说型号","使用场所确认：家庭","历史购买信息确认：无/否定"],"summary":{"recordCount":3,"links":"6、7、8","endpoint":"1-到货\n2-故障","quantity":"48","owners":"","sourceRows":"26、30、34"},"children":[{"id":"n69","label":"购买情况确认：自己购买/不清楚","level":8,"path":["空气能热水器","IVR机型自主识别：按键3-空气能热水器流程","品牌品类诉求确认：否定-更正品牌-品牌集合AB互换","录单类别确认：未确认","系列确认：用户不清楚/用户说型号","使用场所确认：家庭","历史购买信息确认：无/否定","购买情况确认：自己购买/不清楚"],"summary":{"recordCount":1,"links":"6","endpoint":"1-到货\n2-故障","quantity":"16","owners":"","sourceRows":"26"},"children":[{"id":"n253","label":"链路结点：1-到货\n2-故障","level":9,"path":["空气能热水器","IVR机型自主识别：按键3-空气能热水器流程","品牌品类诉求确认：否定-更正品牌-品牌集合AB互换","录单类别确认：未确认","系列确认：用户不清楚/用户说型号","使用场所确认：家庭","历史购买信息确认：无/否定","购买情况确认：自己购买/不清楚","链路结点：1-到货\n2-故障"],"summary":{"recordCount":1,"links":"6","endpoint":"1-到货\n2-故障","quantity":"16","owners":"","sourceRows":"26"},"children":[]}]},{"id":"n82","label":"购买情况确认：否","level":8,"path":["空气能热水器","IVR机型自主识别：按键3-空气能热水器流程","品牌品类诉求确认：否定-更正品牌-品牌集合AB互换","录单类别确认：未确认","系列确认：用户不清楚/用户说型号","使用场所确认：家庭","历史购买信息确认：无/否定","购买情况确认：否"],"summary":{"recordCount":2,"links":"7、8","endpoint":"1-到货\n2-故障","quantity":"32","owners":"","sourceRows":"30、34"},"children":[{"id":"n83","label":"购房/交房时间确认：21年之前","level":9,"path":["空气能热水器","IVR机型自主识别：按键3-空气能热水器流程","品牌品类诉求确认：否定-更正品牌-品牌集合AB互换","录单类别确认：未确认","系列确认：用户不清楚/用户说型号","使用场所确认：家庭","历史购买信息确认：无/否定","购买情况确认：否","购房/交房时间确认：21年之前"],"summary":{"recordCount":1,"links":"7","endpoint":"1-到货\n2-故障","quantity":"16","owners":"","sourceRows":"30"},"children":[{"id":"n254","label":"链路结点：1-到货\n2-故障","level":10,"path":["空气能热水器","IVR机型自主识别：按键3-空气能热水器流程","品牌品类诉求确认：否定-更正品牌-品牌集合AB互换","录单类别确认：未确认","系列确认：用户不清楚/用户说型号","使用场所确认：家庭","历史购买信息确认：无/否定","购买情况确认：否","购房/交房时间确认：21年之前","链路结点：1-到货\n2-故障"],"summary":{"recordCount":1,"links":"7","endpoint":"1-到货\n2-故障","quantity":"16","owners":"","sourceRows":"30"},"children":[]}]},{"id":"n93","label":"购房/交房时间确认：21年之后/不清楚","level":9,"path":["空气能热水器","IVR机型自主识别：按键3-空气能热水器流程","品牌品类诉求确认：否定-更正品牌-品牌集合AB互换","录单类别确认：未确认","系列确认：用户不清楚/用户说型号","使用场所确认：家庭","历史购买信息确认：无/否定","购买情况确认：否","购房/交房时间确认：21年之后/不清楚"],"summary":{"recordCount":1,"links":"8","endpoint":"1-到货\n2-故障","quantity":"16","owners":"","sourceRows":"34"},"children":[{"id":"n255","label":"链路结点：1-到货\n2-故障","level":10,"path":["空气能热水器","IVR机型自主识别：按键3-空气能热水器流程","品牌品类诉求确认：否定-更正品牌-品牌集合AB互换","录单类别确认：未确认","系列确认：用户不清楚/用户说型号","使用场所确认：家庭","历史购买信息确认：无/否定","购买情况确认：否","购房/交房时间确认：21年之后/不清楚","链路结点：1-到货\n2-故障"],"summary":{"recordCount":1,"links":"8","endpoint":"1-到货\n2-故障","quantity":"16","owners":"","sourceRows":"34"},"children":[]}]}]}]},{"id":"n101","label":"历史购买信息确认：肯定","level":7,"path":["空气能热水器","IVR机型自主识别：按键3-空气能热水器流程","品牌品类诉求确认：否定-更正品牌-品牌集合AB互换","录单类别确认：未确认","系列确认：用户不清楚/用户说型号","使用场所确认：家庭","历史购买信息确认：肯定"],"summary":{"recordCount":1,"links":"9","endpoint":"1-到货\n2-故障","quantity":"8","owners":"","sourceRows":"38"},"children":[{"id":"n256","label":"链路结点：1-到货\n2-故障","level":8,"path":["空气能热水器","IVR机型自主识别：按键3-空气能热水器流程","品牌品类诉求确认：否定-更正品牌-品牌集合AB互换","录单类别确认：未确认","系列确认：用户不清楚/用户说型号","使用场所确认：家庭","历史购买信息确认：肯定","链路结点：1-到货\n2-故障"],"summary":{"recordCount":1,"links":"9","endpoint":"1-到货\n2-故障","quantity":"8","owners":"","sourceRows":"38"},"children":[]}]}]},{"id":"n109","label":"使用场所确认：其它：别墅、公寓、理发店","level":6,"path":["空气能热水器","IVR机型自主识别：按键3-空气能热水器流程","品牌品类诉求确认：否定-更正品牌-品牌集合AB互换","录单类别确认：未确认","系列确认：用户不清楚/用户说型号","使用场所确认：其它：别墅、公寓、理发店"],"summary":{"recordCount":1,"links":"10","endpoint":"1-到货\n2-故障","quantity":"16","owners":"","sourceRows":"42"},"children":[{"id":"n257","label":"链路结点：1-到货\n2-故障","level":7,"path":["空气能热水器","IVR机型自主识别：按键3-空气能热水器流程","品牌品类诉求确认：否定-更正品牌-品牌集合AB互换","录单类别确认：未确认","系列确认：用户不清楚/用户说型号","使用场所确认：其它：别墅、公寓、理发店","链路结点：1-到货\n2-故障"],"summary":{"recordCount":1,"links":"10","endpoint":"1-到货\n2-故障","quantity":"16","owners":"","sourceRows":"42"},"children":[]}]},{"id":"n117","label":"使用场所确认：否/不清楚","level":6,"path":["空气能热水器","IVR机型自主识别：按键3-空气能热水器流程","品牌品类诉求确认：否定-更正品牌-品牌集合AB互换","录单类别确认：未确认","系列确认：用户不清楚/用户说型号","使用场所确认：否/不清楚"],"summary":{"recordCount":1,"links":"11","endpoint":"1-到货\n2-故障","quantity":"8","owners":"","sourceRows":"46"},"children":[{"id":"n258","label":"链路结点：1-到货\n2-故障","level":7,"path":["空气能热水器","IVR机型自主识别：按键3-空气能热水器流程","品牌品类诉求确认：否定-更正品牌-品牌集合AB互换","录单类别确认：未确认","系列确认：用户不清楚/用户说型号","使用场所确认：否/不清楚","链路结点：1-到货\n2-故障"],"summary":{"recordCount":1,"links":"11","endpoint":"1-到货\n2-故障","quantity":"8","owners":"","sourceRows":"46"},"children":[]}]}]},{"id":"n57","label":"系列确认：烈焰、真暖、真省、雪焰、暖家、煤改电、真享","level":5,"path":["空气能热水器","IVR机型自主识别：按键3-空气能热水器流程","品牌品类诉求确认：否定-更正品牌-品牌集合AB互换","录单类别确认：未确认","系列确认：烈焰、真暖、真省、雪焰、暖家、煤改电、真享"],"summary":{"recordCount":1,"links":"12","endpoint":"1-到货\n2-故障","quantity":"10","owners":"","sourceRows":"22"},"children":[{"id":"n259","label":"链路结点：1-到货\n2-故障","level":6,"path":["空气能热水器","IVR机型自主识别：按键3-空气能热水器流程","品牌品类诉求确认：否定-更正品牌-品牌集合AB互换","录单类别确认：未确认","系列确认：烈焰、真暖、真省、雪焰、暖家、煤改电、真享","链路结点：1-到货\n2-故障"],"summary":{"recordCount":1,"links":"12","endpoint":"1-到货\n2-故障","quantity":"10","owners":"","sourceRows":"22"},"children":[]}]}]},{"id":"n41","label":"录单类别确认：酷风/小天鹅","level":4,"path":["空气能热水器","IVR机型自主识别：按键3-空气能热水器流程","品牌品类诉求确认：否定-更正品牌-品牌集合AB互换","录单类别确认：酷风/小天鹅"],"summary":{"recordCount":1,"links":"13","endpoint":"转人工","quantity":"","owners":"","sourceRows":"14"},"children":[{"id":"n42","label":"链路结点：转人工","level":5,"path":["空气能热水器","IVR机型自主识别：按键3-空气能热水器流程","品牌品类诉求确认：否定-更正品牌-品牌集合AB互换","录单类别确认：酷风/小天鹅","链路结点：转人工"],"summary":{"recordCount":1,"links":"13","endpoint":"转人工","quantity":"","owners":"","sourceRows":"14"},"children":[]}]},{"id":"n49","label":"录单类别确认：COLMO/克莱沃","level":4,"path":["空气能热水器","IVR机型自主识别：按键3-空气能热水器流程","品牌品类诉求确认：否定-更正品牌-品牌集合AB互换","录单类别确认：COLMO/克莱沃"],"summary":{"recordCount":1,"links":"14","endpoint":"1-到货\n2-故障","quantity":"10","owners":"","sourceRows":"18"},"children":[{"id":"n260","label":"链路结点：1-到货\n2-故障","level":5,"path":["空气能热水器","IVR机型自主识别：按键3-空气能热水器流程","品牌品类诉求确认：否定-更正品牌-品牌集合AB互换","录单类别确认：COLMO/克莱沃","链路结点：1-到货\n2-故障"],"summary":{"recordCount":1,"links":"14","endpoint":"1-到货\n2-故障","quantity":"10","owners":"","sourceRows":"18"},"children":[]}]}]},{"id":"n19","label":"品牌品类诉求确认：否定-更正诉求","level":3,"path":["空气能热水器","IVR机型自主识别：按键3-空气能热水器流程","品牌品类诉求确认：否定-更正诉求"],"summary":{"recordCount":11,"links":"15、16、17、18、19、20、21、22、23、24、25","endpoint":"转人工、1-到货\n2-故障","quantity":"116","owners":"","sourceRows":"7、11、15、19、23、27、31、35、39、43、47"},"children":[{"id":"n20","label":"录单类别确认：未确认","level":4,"path":["空气能热水器","IVR机型自主识别：按键3-空气能热水器流程","品牌品类诉求确认：否定-更正诉求","录单类别确认：未确认"],"summary":{"recordCount":9,"links":"15、16、17、18、19、20、21、22、23","endpoint":"转人工、1-到货\n2-故障","quantity":"106","owners":"","sourceRows":"7、11、23、27、31、35、39、43、47"},"children":[{"id":"n21","label":"系列确认：答非所问","level":5,"path":["空气能热水器","IVR机型自主识别：按键3-空气能热水器流程","品牌品类诉求确认：否定-更正诉求","录单类别确认：未确认","系列确认：答非所问"],"summary":{"recordCount":1,"links":"15","endpoint":"转人工","quantity":"8","owners":"","sourceRows":"7"},"children":[{"id":"n22","label":"链路结点：转人工","level":6,"path":["空气能热水器","IVR机型自主识别：按键3-空气能热水器流程","品牌品类诉求确认：否定-更正诉求","录单类别确认：未确认","系列确认：答非所问","链路结点：转人工"],"summary":{"recordCount":1,"links":"15","endpoint":"转人工","quantity":"8","owners":"","sourceRows":"7"},"children":[]}]},{"id":"n33","label":"系列确认：用户不清楚/用户说型号","level":5,"path":["空气能热水器","IVR机型自主识别：按键3-空气能热水器流程","品牌品类诉求确认：否定-更正诉求","录单类别确认：未确认","系列确认：用户不清楚/用户说型号"],"summary":{"recordCount":7,"links":"16、17、18、19、20、21、22","endpoint":"转人工、1-到货\n2-故障","quantity":"88","owners":"","sourceRows":"11、27、31、35、39、43、47"},"children":[{"id":"n34","label":"使用场所确认：答非所问","level":6,"path":["空气能热水器","IVR机型自主识别：按键3-空气能热水器流程","品牌品类诉求确认：否定-更正诉求","录单类别确认：未确认","系列确认：用户不清楚/用户说型号","使用场所确认：答非所问"],"summary":{"recordCount":1,"links":"16","endpoint":"转人工","quantity":"8","owners":"","sourceRows":"11"},"children":[{"id":"n35","label":"链路结点：转人工","level":7,"path":["空气能热水器","IVR机型自主识别：按键3-空气能热水器流程","品牌品类诉求确认：否定-更正诉求","录单类别确认：未确认","系列确认：用户不清楚/用户说型号","使用场所确认：答非所问","链路结点：转人工"],"summary":{"recordCount":1,"links":"16","endpoint":"转人工","quantity":"8","owners":"","sourceRows":"11"},"children":[]}]},{"id":"n71","label":"使用场所确认：家庭","level":6,"path":["空气能热水器","IVR机型自主识别：按键3-空气能热水器流程","品牌品类诉求确认：否定-更正诉求","录单类别确认：未确认","系列确认：用户不清楚/用户说型号","使用场所确认：家庭"],"summary":{"recordCount":4,"links":"17、18、19、20","endpoint":"1-到货\n2-故障","quantity":"56","owners":"","sourceRows":"27、31、35、39"},"children":[{"id":"n72","label":"历史购买信息确认：无/否定","level":7,"path":["空气能热水器","IVR机型自主识别：按键3-空气能热水器流程","品牌品类诉求确认：否定-更正诉求","录单类别确认：未确认","系列确认：用户不清楚/用户说型号","使用场所确认：家庭","历史购买信息确认：无/否定"],"summary":{"recordCount":3,"links":"17、18、19","endpoint":"1-到货\n2-故障","quantity":"48","owners":"","sourceRows":"27、31、35"},"children":[{"id":"n73","label":"购买情况确认：自己购买/不清楚","level":8,"path":["空气能热水器","IVR机型自主识别：按键3-空气能热水器流程","品牌品类诉求确认：否定-更正诉求","录单类别确认：未确认","系列确认：用户不清楚/用户说型号","使用场所确认：家庭","历史购买信息确认：无/否定","购买情况确认：自己购买/不清楚"],"summary":{"recordCount":1,"links":"17","endpoint":"1-到货\n2-故障","quantity":"16","owners":"","sourceRows":"27"},"children":[{"id":"n261","label":"链路结点：1-到货\n2-故障","level":9,"path":["空气能热水器","IVR机型自主识别：按键3-空气能热水器流程","品牌品类诉求确认：否定-更正诉求","录单类别确认：未确认","系列确认：用户不清楚/用户说型号","使用场所确认：家庭","历史购买信息确认：无/否定","购买情况确认：自己购买/不清楚","链路结点：1-到货\n2-故障"],"summary":{"recordCount":1,"links":"17","endpoint":"1-到货\n2-故障","quantity":"16","owners":"","sourceRows":"27"},"children":[]}]},{"id":"n85","label":"购买情况确认：否","level":8,"path":["空气能热水器","IVR机型自主识别：按键3-空气能热水器流程","品牌品类诉求确认：否定-更正诉求","录单类别确认：未确认","系列确认：用户不清楚/用户说型号","使用场所确认：家庭","历史购买信息确认：无/否定","购买情况确认：否"],"summary":{"recordCount":2,"links":"18、19","endpoint":"1-到货\n2-故障","quantity":"32","owners":"","sourceRows":"31、35"},"children":[{"id":"n86","label":"购房/交房时间确认：21年之前","level":9,"path":["空气能热水器","IVR机型自主识别：按键3-空气能热水器流程","品牌品类诉求确认：否定-更正诉求","录单类别确认：未确认","系列确认：用户不清楚/用户说型号","使用场所确认：家庭","历史购买信息确认：无/否定","购买情况确认：否","购房/交房时间确认：21年之前"],"summary":{"recordCount":1,"links":"18","endpoint":"1-到货\n2-故障","quantity":"16","owners":"","sourceRows":"31"},"children":[{"id":"n262","label":"链路结点：1-到货\n2-故障","level":10,"path":["空气能热水器","IVR机型自主识别：按键3-空气能热水器流程","品牌品类诉求确认：否定-更正诉求","录单类别确认：未确认","系列确认：用户不清楚/用户说型号","使用场所确认：家庭","历史购买信息确认：无/否定","购买情况确认：否","购房/交房时间确认：21年之前","链路结点：1-到货\n2-故障"],"summary":{"recordCount":1,"links":"18","endpoint":"1-到货\n2-故障","quantity":"16","owners":"","sourceRows":"31"},"children":[]}]},{"id":"n95","label":"购房/交房时间确认：21年之后/不清楚","level":9,"path":["空气能热水器","IVR机型自主识别：按键3-空气能热水器流程","品牌品类诉求确认：否定-更正诉求","录单类别确认：未确认","系列确认：用户不清楚/用户说型号","使用场所确认：家庭","历史购买信息确认：无/否定","购买情况确认：否","购房/交房时间确认：21年之后/不清楚"],"summary":{"recordCount":1,"links":"19","endpoint":"1-到货\n2-故障","quantity":"16","owners":"","sourceRows":"35"},"children":[{"id":"n263","label":"链路结点：1-到货\n2-故障","level":10,"path":["空气能热水器","IVR机型自主识别：按键3-空气能热水器流程","品牌品类诉求确认：否定-更正诉求","录单类别确认：未确认","系列确认：用户不清楚/用户说型号","使用场所确认：家庭","历史购买信息确认：无/否定","购买情况确认：否","购房/交房时间确认：21年之后/不清楚","链路结点：1-到货\n2-故障"],"summary":{"recordCount":1,"links":"19","endpoint":"1-到货\n2-故障","quantity":"16","owners":"","sourceRows":"35"},"children":[]}]}]}]},{"id":"n103","label":"历史购买信息确认：肯定","level":7,"path":["空气能热水器","IVR机型自主识别：按键3-空气能热水器流程","品牌品类诉求确认：否定-更正诉求","录单类别确认：未确认","系列确认：用户不清楚/用户说型号","使用场所确认：家庭","历史购买信息确认：肯定"],"summary":{"recordCount":1,"links":"20","endpoint":"1-到货\n2-故障","quantity":"8","owners":"","sourceRows":"39"},"children":[{"id":"n264","label":"链路结点：1-到货\n2-故障","level":8,"path":["空气能热水器","IVR机型自主识别：按键3-空气能热水器流程","品牌品类诉求确认：否定-更正诉求","录单类别确认：未确认","系列确认：用户不清楚/用户说型号","使用场所确认：家庭","历史购买信息确认：肯定","链路结点：1-到货\n2-故障"],"summary":{"recordCount":1,"links":"20","endpoint":"1-到货\n2-故障","quantity":"8","owners":"","sourceRows":"39"},"children":[]}]}]},{"id":"n111","label":"使用场所确认：其它：别墅、公寓、理发店","level":6,"path":["空气能热水器","IVR机型自主识别：按键3-空气能热水器流程","品牌品类诉求确认：否定-更正诉求","录单类别确认：未确认","系列确认：用户不清楚/用户说型号","使用场所确认：其它：别墅、公寓、理发店"],"summary":{"recordCount":1,"links":"21","endpoint":"1-到货\n2-故障","quantity":"16","owners":"","sourceRows":"43"},"children":[{"id":"n265","label":"链路结点：1-到货\n2-故障","level":7,"path":["空气能热水器","IVR机型自主识别：按键3-空气能热水器流程","品牌品类诉求确认：否定-更正诉求","录单类别确认：未确认","系列确认：用户不清楚/用户说型号","使用场所确认：其它：别墅、公寓、理发店","链路结点：1-到货\n2-故障"],"summary":{"recordCount":1,"links":"21","endpoint":"1-到货\n2-故障","quantity":"16","owners":"","sourceRows":"43"},"children":[]}]},{"id":"n119","label":"使用场所确认：否/不清楚","level":6,"path":["空气能热水器","IVR机型自主识别：按键3-空气能热水器流程","品牌品类诉求确认：否定-更正诉求","录单类别确认：未确认","系列确认：用户不清楚/用户说型号","使用场所确认：否/不清楚"],"summary":{"recordCount":1,"links":"22","endpoint":"1-到货\n2-故障","quantity":"8","owners":"","sourceRows":"47"},"children":[{"id":"n266","label":"链路结点：1-到货\n2-故障","level":7,"path":["空气能热水器","IVR机型自主识别：按键3-空气能热水器流程","品牌品类诉求确认：否定-更正诉求","录单类别确认：未确认","系列确认：用户不清楚/用户说型号","使用场所确认：否/不清楚","链路结点：1-到货\n2-故障"],"summary":{"recordCount":1,"links":"22","endpoint":"1-到货\n2-故障","quantity":"8","owners":"","sourceRows":"47"},"children":[]}]}]},{"id":"n59","label":"系列确认：烈焰、真暖、真省、雪焰、暖家、煤改电、真享","level":5,"path":["空气能热水器","IVR机型自主识别：按键3-空气能热水器流程","品牌品类诉求确认：否定-更正诉求","录单类别确认：未确认","系列确认：烈焰、真暖、真省、雪焰、暖家、煤改电、真享"],"summary":{"recordCount":1,"links":"23","endpoint":"1-到货\n2-故障","quantity":"10","owners":"","sourceRows":"23"},"children":[{"id":"n267","label":"链路结点：1-到货\n2-故障","level":6,"path":["空气能热水器","IVR机型自主识别：按键3-空气能热水器流程","品牌品类诉求确认：否定-更正诉求","录单类别确认：未确认","系列确认：烈焰、真暖、真省、雪焰、暖家、煤改电、真享","链路结点：1-到货\n2-故障"],"summary":{"recordCount":1,"links":"23","endpoint":"1-到货\n2-故障","quantity":"10","owners":"","sourceRows":"23"},"children":[]}]}]},{"id":"n43","label":"录单类别确认：酷风/小天鹅","level":4,"path":["空气能热水器","IVR机型自主识别：按键3-空气能热水器流程","品牌品类诉求确认：否定-更正诉求","录单类别确认：酷风/小天鹅"],"summary":{"recordCount":1,"links":"24","endpoint":"转人工","quantity":"","owners":"","sourceRows":"15"},"children":[{"id":"n44","label":"链路结点：转人工","level":5,"path":["空气能热水器","IVR机型自主识别：按键3-空气能热水器流程","品牌品类诉求确认：否定-更正诉求","录单类别确认：酷风/小天鹅","链路结点：转人工"],"summary":{"recordCount":1,"links":"24","endpoint":"转人工","quantity":"","owners":"","sourceRows":"15"},"children":[]}]},{"id":"n51","label":"录单类别确认：COLMO/克莱沃","level":4,"path":["空气能热水器","IVR机型自主识别：按键3-空气能热水器流程","品牌品类诉求确认：否定-更正诉求","录单类别确认：COLMO/克莱沃"],"summary":{"recordCount":1,"links":"25","endpoint":"1-到货\n2-故障","quantity":"10","owners":"","sourceRows":"19"},"children":[{"id":"n268","label":"链路结点：1-到货\n2-故障","level":5,"path":["空气能热水器","IVR机型自主识别：按键3-空气能热水器流程","品牌品类诉求确认：否定-更正诉求","录单类别确认：COLMO/克莱沃","链路结点：1-到货\n2-故障"],"summary":{"recordCount":1,"links":"25","endpoint":"1-到货\n2-故障","quantity":"10","owners":"","sourceRows":"19"},"children":[]}]}]},{"id":"n23","label":"品牌品类诉求确认：正常肯定","level":3,"path":["空气能热水器","IVR机型自主识别：按键3-空气能热水器流程","品牌品类诉求确认：正常肯定"],"summary":{"recordCount":11,"links":"26、27、28、29、30、31、32、33、34、35、36","endpoint":"转人工、1-到货\n2-故障","quantity":"116","owners":"","sourceRows":"8、12、16、20、24、28、32、36、40、44、48"},"children":[{"id":"n24","label":"录单类别确认：未确认","level":4,"path":["空气能热水器","IVR机型自主识别：按键3-空气能热水器流程","品牌品类诉求确认：正常肯定","录单类别确认：未确认"],"summary":{"recordCount":9,"links":"26、27、28、29、30、31、32、33、34","endpoint":"转人工、1-到货\n2-故障","quantity":"106","owners":"","sourceRows":"8、12、24、28、32、36、40、44、48"},"children":[{"id":"n25","label":"系列确认：答非所问","level":5,"path":["空气能热水器","IVR机型自主识别：按键3-空气能热水器流程","品牌品类诉求确认：正常肯定","录单类别确认：未确认","系列确认：答非所问"],"summary":{"recordCount":1,"links":"26","endpoint":"转人工","quantity":"8","owners":"","sourceRows":"8"},"children":[{"id":"n26","label":"链路结点：转人工","level":6,"path":["空气能热水器","IVR机型自主识别：按键3-空气能热水器流程","品牌品类诉求确认：正常肯定","录单类别确认：未确认","系列确认：答非所问","链路结点：转人工"],"summary":{"recordCount":1,"links":"26","endpoint":"转人工","quantity":"8","owners":"","sourceRows":"8"},"children":[]}]},{"id":"n36","label":"系列确认：用户不清楚/用户说型号","level":5,"path":["空气能热水器","IVR机型自主识别：按键3-空气能热水器流程","品牌品类诉求确认：正常肯定","录单类别确认：未确认","系列确认：用户不清楚/用户说型号"],"summary":{"recordCount":7,"links":"27、28、29、30、31、32、33","endpoint":"转人工、1-到货\n2-故障","quantity":"88","owners":"","sourceRows":"12、28、32、36、40、44、48"},"children":[{"id":"n37","label":"使用场所确认：答非所问","level":6,"path":["空气能热水器","IVR机型自主识别：按键3-空气能热水器流程","品牌品类诉求确认：正常肯定","录单类别确认：未确认","系列确认：用户不清楚/用户说型号","使用场所确认：答非所问"],"summary":{"recordCount":1,"links":"27","endpoint":"转人工","quantity":"8","owners":"","sourceRows":"12"},"children":[{"id":"n38","label":"链路结点：转人工","level":7,"path":["空气能热水器","IVR机型自主识别：按键3-空气能热水器流程","品牌品类诉求确认：正常肯定","录单类别确认：未确认","系列确认：用户不清楚/用户说型号","使用场所确认：答非所问","链路结点：转人工"],"summary":{"recordCount":1,"links":"27","endpoint":"转人工","quantity":"8","owners":"","sourceRows":"12"},"children":[]}]},{"id":"n75","label":"使用场所确认：家庭","level":6,"path":["空气能热水器","IVR机型自主识别：按键3-空气能热水器流程","品牌品类诉求确认：正常肯定","录单类别确认：未确认","系列确认：用户不清楚/用户说型号","使用场所确认：家庭"],"summary":{"recordCount":4,"links":"28、29、30、31","endpoint":"1-到货\n2-故障","quantity":"56","owners":"","sourceRows":"28、32、36、40"},"children":[{"id":"n76","label":"历史购买信息确认：无/否定","level":7,"path":["空气能热水器","IVR机型自主识别：按键3-空气能热水器流程","品牌品类诉求确认：正常肯定","录单类别确认：未确认","系列确认：用户不清楚/用户说型号","使用场所确认：家庭","历史购买信息确认：无/否定"],"summary":{"recordCount":3,"links":"28、29、30","endpoint":"1-到货\n2-故障","quantity":"48","owners":"","sourceRows":"28、32、36"},"children":[{"id":"n77","label":"购买情况确认：自己购买/不清楚","level":8,"path":["空气能热水器","IVR机型自主识别：按键3-空气能热水器流程","品牌品类诉求确认：正常肯定","录单类别确认：未确认","系列确认：用户不清楚/用户说型号","使用场所确认：家庭","历史购买信息确认：无/否定","购买情况确认：自己购买/不清楚"],"summary":{"recordCount":1,"links":"28","endpoint":"1-到货\n2-故障","quantity":"16","owners":"","sourceRows":"28"},"children":[{"id":"n269","label":"链路结点：1-到货\n2-故障","level":9,"path":["空气能热水器","IVR机型自主识别：按键3-空气能热水器流程","品牌品类诉求确认：正常肯定","录单类别确认：未确认","系列确认：用户不清楚/用户说型号","使用场所确认：家庭","历史购买信息确认：无/否定","购买情况确认：自己购买/不清楚","链路结点：1-到货\n2-故障"],"summary":{"recordCount":1,"links":"28","endpoint":"1-到货\n2-故障","quantity":"16","owners":"","sourceRows":"28"},"children":[]}]},{"id":"n88","label":"购买情况确认：否","level":8,"path":["空气能热水器","IVR机型自主识别：按键3-空气能热水器流程","品牌品类诉求确认：正常肯定","录单类别确认：未确认","系列确认：用户不清楚/用户说型号","使用场所确认：家庭","历史购买信息确认：无/否定","购买情况确认：否"],"summary":{"recordCount":2,"links":"29、30","endpoint":"1-到货\n2-故障","quantity":"32","owners":"","sourceRows":"32、36"},"children":[{"id":"n89","label":"购房/交房时间确认：21年之前","level":9,"path":["空气能热水器","IVR机型自主识别：按键3-空气能热水器流程","品牌品类诉求确认：正常肯定","录单类别确认：未确认","系列确认：用户不清楚/用户说型号","使用场所确认：家庭","历史购买信息确认：无/否定","购买情况确认：否","购房/交房时间确认：21年之前"],"summary":{"recordCount":1,"links":"29","endpoint":"1-到货\n2-故障","quantity":"16","owners":"","sourceRows":"32"},"children":[{"id":"n270","label":"链路结点：1-到货\n2-故障","level":10,"path":["空气能热水器","IVR机型自主识别：按键3-空气能热水器流程","品牌品类诉求确认：正常肯定","录单类别确认：未确认","系列确认：用户不清楚/用户说型号","使用场所确认：家庭","历史购买信息确认：无/否定","购买情况确认：否","购房/交房时间确认：21年之前","链路结点：1-到货\n2-故障"],"summary":{"recordCount":1,"links":"29","endpoint":"1-到货\n2-故障","quantity":"16","owners":"","sourceRows":"32"},"children":[]}]},{"id":"n97","label":"购房/交房时间确认：21年之后/不清楚","level":9,"path":["空气能热水器","IVR机型自主识别：按键3-空气能热水器流程","品牌品类诉求确认：正常肯定","录单类别确认：未确认","系列确认：用户不清楚/用户说型号","使用场所确认：家庭","历史购买信息确认：无/否定","购买情况确认：否","购房/交房时间确认：21年之后/不清楚"],"summary":{"recordCount":1,"links":"30","endpoint":"1-到货\n2-故障","quantity":"16","owners":"","sourceRows":"36"},"children":[{"id":"n271","label":"链路结点：1-到货\n2-故障","level":10,"path":["空气能热水器","IVR机型自主识别：按键3-空气能热水器流程","品牌品类诉求确认：正常肯定","录单类别确认：未确认","系列确认：用户不清楚/用户说型号","使用场所确认：家庭","历史购买信息确认：无/否定","购买情况确认：否","购房/交房时间确认：21年之后/不清楚","链路结点：1-到货\n2-故障"],"summary":{"recordCount":1,"links":"30","endpoint":"1-到货\n2-故障","quantity":"16","owners":"","sourceRows":"36"},"children":[]}]}]}]},{"id":"n105","label":"历史购买信息确认：肯定","level":7,"path":["空气能热水器","IVR机型自主识别：按键3-空气能热水器流程","品牌品类诉求确认：正常肯定","录单类别确认：未确认","系列确认：用户不清楚/用户说型号","使用场所确认：家庭","历史购买信息确认：肯定"],"summary":{"recordCount":1,"links":"31","endpoint":"1-到货\n2-故障","quantity":"8","owners":"","sourceRows":"40"},"children":[{"id":"n272","label":"链路结点：1-到货\n2-故障","level":8,"path":["空气能热水器","IVR机型自主识别：按键3-空气能热水器流程","品牌品类诉求确认：正常肯定","录单类别确认：未确认","系列确认：用户不清楚/用户说型号","使用场所确认：家庭","历史购买信息确认：肯定","链路结点：1-到货\n2-故障"],"summary":{"recordCount":1,"links":"31","endpoint":"1-到货\n2-故障","quantity":"8","owners":"","sourceRows":"40"},"children":[]}]}]},{"id":"n113","label":"使用场所确认：其它：别墅、公寓、理发店","level":6,"path":["空气能热水器","IVR机型自主识别：按键3-空气能热水器流程","品牌品类诉求确认：正常肯定","录单类别确认：未确认","系列确认：用户不清楚/用户说型号","使用场所确认：其它：别墅、公寓、理发店"],"summary":{"recordCount":1,"links":"32","endpoint":"1-到货\n2-故障","quantity":"16","owners":"","sourceRows":"44"},"children":[{"id":"n273","label":"链路结点：1-到货\n2-故障","level":7,"path":["空气能热水器","IVR机型自主识别：按键3-空气能热水器流程","品牌品类诉求确认：正常肯定","录单类别确认：未确认","系列确认：用户不清楚/用户说型号","使用场所确认：其它：别墅、公寓、理发店","链路结点：1-到货\n2-故障"],"summary":{"recordCount":1,"links":"32","endpoint":"1-到货\n2-故障","quantity":"16","owners":"","sourceRows":"44"},"children":[]}]},{"id":"n121","label":"使用场所确认：否/不清楚","level":6,"path":["空气能热水器","IVR机型自主识别：按键3-空气能热水器流程","品牌品类诉求确认：正常肯定","录单类别确认：未确认","系列确认：用户不清楚/用户说型号","使用场所确认：否/不清楚"],"summary":{"recordCount":1,"links":"33","endpoint":"1-到货\n2-故障","quantity":"8","owners":"","sourceRows":"48"},"children":[{"id":"n274","label":"链路结点：1-到货\n2-故障","level":7,"path":["空气能热水器","IVR机型自主识别：按键3-空气能热水器流程","品牌品类诉求确认：正常肯定","录单类别确认：未确认","系列确认：用户不清楚/用户说型号","使用场所确认：否/不清楚","链路结点：1-到货\n2-故障"],"summary":{"recordCount":1,"links":"33","endpoint":"1-到货\n2-故障","quantity":"8","owners":"","sourceRows":"48"},"children":[]}]}]},{"id":"n61","label":"系列确认：烈焰、真暖、真省、雪焰、暖家、煤改电、真享","level":5,"path":["空气能热水器","IVR机型自主识别：按键3-空气能热水器流程","品牌品类诉求确认：正常肯定","录单类别确认：未确认","系列确认：烈焰、真暖、真省、雪焰、暖家、煤改电、真享"],"summary":{"recordCount":1,"links":"34","endpoint":"1-到货\n2-故障","quantity":"10","owners":"","sourceRows":"24"},"children":[{"id":"n275","label":"链路结点：1-到货\n2-故障","level":6,"path":["空气能热水器","IVR机型自主识别：按键3-空气能热水器流程","品牌品类诉求确认：正常肯定","录单类别确认：未确认","系列确认：烈焰、真暖、真省、雪焰、暖家、煤改电、真享","链路结点：1-到货\n2-故障"],"summary":{"recordCount":1,"links":"34","endpoint":"1-到货\n2-故障","quantity":"10","owners":"","sourceRows":"24"},"children":[]}]}]},{"id":"n45","label":"录单类别确认：酷风/小天鹅","level":4,"path":["空气能热水器","IVR机型自主识别：按键3-空气能热水器流程","品牌品类诉求确认：正常肯定","录单类别确认：酷风/小天鹅"],"summary":{"recordCount":1,"links":"35","endpoint":"转人工","quantity":"","owners":"","sourceRows":"16"},"children":[{"id":"n46","label":"链路结点：转人工","level":5,"path":["空气能热水器","IVR机型自主识别：按键3-空气能热水器流程","品牌品类诉求确认：正常肯定","录单类别确认：酷风/小天鹅","链路结点：转人工"],"summary":{"recordCount":1,"links":"35","endpoint":"转人工","quantity":"","owners":"","sourceRows":"16"},"children":[]}]},{"id":"n53","label":"录单类别确认：COLMO/克莱沃","level":4,"path":["空气能热水器","IVR机型自主识别：按键3-空气能热水器流程","品牌品类诉求确认：正常肯定","录单类别确认：COLMO/克莱沃"],"summary":{"recordCount":1,"links":"36","endpoint":"1-到货\n2-故障","quantity":"10","owners":"","sourceRows":"20"},"children":[{"id":"n276","label":"链路结点：1-到货\n2-故障","level":5,"path":["空气能热水器","IVR机型自主识别：按键3-空气能热水器流程","品牌品类诉求确认：正常肯定","录单类别确认：COLMO/克莱沃","链路结点：1-到货\n2-故障"],"summary":{"recordCount":1,"links":"36","endpoint":"1-到货\n2-故障","quantity":"10","owners":"","sourceRows":"20"},"children":[]}]}]},{"id":"n123","label":"品牌品类诉求确认：否定-更正品类","level":3,"path":["空气能热水器","IVR机型自主识别：按键3-空气能热水器流程","品牌品类诉求确认：否定-更正品类"],"summary":{"recordCount":1,"links":"37","endpoint":"按照更正后的品类逻辑往后走","quantity":"4","owners":"素雅","sourceRows":"49"},"children":[{"id":"n124","label":"链路结点：按照更正后的品类逻辑往后走","level":4,"path":["空气能热水器","IVR机型自主识别：按键3-空气能热水器流程","品牌品类诉求确认：否定-更正品类","链路结点：按照更正后的品类逻辑往后走"],"summary":{"recordCount":1,"links":"37","endpoint":"按照更正后的品类逻辑往后走","quantity":"4","owners":"素雅","sourceRows":"49"},"children":[]}]}]},{"id":"n9","label":"IVR机型自主识别：按键4/超时未按","level":2,"path":["空气能热水器","IVR机型自主识别：按键4/超时未按"],"summary":{"recordCount":11,"links":"38、39、40、41、42、43、44、45、46、47、48","endpoint":"转人工、1-到货\n2-故障","quantity":"116","owners":"曾宪豪、素雅","sourceRows":"5、9、13、17、21、25、29、33、37、41、45"},"children":[{"id":"n10","label":"品牌品类诉求确认：遵循二期逻辑流程","level":3,"path":["空气能热水器","IVR机型自主识别：按键4/超时未按","品牌品类诉求确认：遵循二期逻辑流程"],"summary":{"recordCount":11,"links":"38、39、40、41、42、43、44、45、46、47、48","endpoint":"转人工、1-到货\n2-故障","quantity":"116","owners":"曾宪豪、素雅","sourceRows":"5、9、13、17、21、25、29、33、37、41、45"},"children":[{"id":"n11","label":"机型确认：空气能热水机","level":4,"path":["空气能热水器","IVR机型自主识别：按键4/超时未按","品牌品类诉求确认：遵循二期逻辑流程","机型确认：空气能热水机"],"summary":{"recordCount":11,"links":"38、39、40、41、42、43、44、45、46、47、48","endpoint":"转人工、1-到货\n2-故障","quantity":"116","owners":"曾宪豪、素雅","sourceRows":"5、9、13、17、21、25、29、33、37、41、45"},"children":[{"id":"n12","label":"录单类别确认：未确认","level":5,"path":["空气能热水器","IVR机型自主识别：按键4/超时未按","品牌品类诉求确认：遵循二期逻辑流程","机型确认：空气能热水机","录单类别确认：未确认"],"summary":{"recordCount":9,"links":"38、39、40、41、42、43、44、45、46","endpoint":"转人工、1-到货\n2-故障","quantity":"106","owners":"曾宪豪、素雅","sourceRows":"5、9、21、25、29、33、37、41、45"},"children":[{"id":"n13","label":"系列确认：答非所问","level":6,"path":["空气能热水器","IVR机型自主识别：按键4/超时未按","品牌品类诉求确认：遵循二期逻辑流程","机型确认：空气能热水机","录单类别确认：未确认","系列确认：答非所问"],"summary":{"recordCount":1,"links":"38","endpoint":"转人工","quantity":"8","owners":"曾宪豪","sourceRows":"5"},"children":[{"id":"n14","label":"链路结点：转人工","level":7,"path":["空气能热水器","IVR机型自主识别：按键4/超时未按","品牌品类诉求确认：遵循二期逻辑流程","机型确认：空气能热水机","录单类别确认：未确认","系列确认：答非所问","链路结点：转人工"],"summary":{"recordCount":1,"links":"38","endpoint":"转人工","quantity":"8","owners":"曾宪豪","sourceRows":"5"},"children":[]}]},{"id":"n27","label":"系列确认：用户不清楚/用户说型号","level":6,"path":["空气能热水器","IVR机型自主识别：按键4/超时未按","品牌品类诉求确认：遵循二期逻辑流程","机型确认：空气能热水机","录单类别确认：未确认","系列确认：用户不清楚/用户说型号"],"summary":{"recordCount":7,"links":"39、40、41、42、43、44、45","endpoint":"转人工、1-到货\n2-故障","quantity":"88","owners":"素雅、曾宪豪","sourceRows":"9、25、29、33、37、41、45"},"children":[{"id":"n28","label":"使用场所确认：答非所问","level":7,"path":["空气能热水器","IVR机型自主识别：按键4/超时未按","品牌品类诉求确认：遵循二期逻辑流程","机型确认：空气能热水机","录单类别确认：未确认","系列确认：用户不清楚/用户说型号","使用场所确认：答非所问"],"summary":{"recordCount":1,"links":"39","endpoint":"转人工","quantity":"8","owners":"素雅","sourceRows":"9"},"children":[{"id":"n29","label":"链路结点：转人工","level":8,"path":["空气能热水器","IVR机型自主识别：按键4/超时未按","品牌品类诉求确认：遵循二期逻辑流程","机型确认：空气能热水机","录单类别确认：未确认","系列确认：用户不清楚/用户说型号","使用场所确认：答非所问","链路结点：转人工"],"summary":{"recordCount":1,"links":"39","endpoint":"转人工","quantity":"8","owners":"素雅","sourceRows":"9"},"children":[]}]},{"id":"n63","label":"使用场所确认：家庭","level":7,"path":["空气能热水器","IVR机型自主识别：按键4/超时未按","品牌品类诉求确认：遵循二期逻辑流程","机型确认：空气能热水机","录单类别确认：未确认","系列确认：用户不清楚/用户说型号","使用场所确认：家庭"],"summary":{"recordCount":4,"links":"40、41、42、43","endpoint":"1-到货\n2-故障","quantity":"56","owners":"曾宪豪、素雅","sourceRows":"25、29、33、37"},"children":[{"id":"n64","label":"历史购买信息确认：无/否定","level":8,"path":["空气能热水器","IVR机型自主识别：按键4/超时未按","品牌品类诉求确认：遵循二期逻辑流程","机型确认：空气能热水机","录单类别确认：未确认","系列确认：用户不清楚/用户说型号","使用场所确认：家庭","历史购买信息确认：无/否定"],"summary":{"recordCount":3,"links":"40、41、42","endpoint":"1-到货\n2-故障","quantity":"48","owners":"曾宪豪、素雅","sourceRows":"25、29、33"},"children":[{"id":"n65","label":"购买情况确认：自己购买/不清楚","level":9,"path":["空气能热水器","IVR机型自主识别：按键4/超时未按","品牌品类诉求确认：遵循二期逻辑流程","机型确认：空气能热水机","录单类别确认：未确认","系列确认：用户不清楚/用户说型号","使用场所确认：家庭","历史购买信息确认：无/否定","购买情况确认：自己购买/不清楚"],"summary":{"recordCount":1,"links":"40","endpoint":"1-到货\n2-故障","quantity":"16","owners":"曾宪豪","sourceRows":"25"},"children":[{"id":"n277","label":"链路结点：1-到货\n2-故障","level":10,"path":["空气能热水器","IVR机型自主识别：按键4/超时未按","品牌品类诉求确认：遵循二期逻辑流程","机型确认：空气能热水机","录单类别确认：未确认","系列确认：用户不清楚/用户说型号","使用场所确认：家庭","历史购买信息确认：无/否定","购买情况确认：自己购买/不清楚","链路结点：1-到货\n2-故障"],"summary":{"recordCount":1,"links":"40","endpoint":"1-到货\n2-故障","quantity":"16","owners":"曾宪豪","sourceRows":"25"},"children":[]}]},{"id":"n79","label":"购买情况确认：否","level":9,"path":["空气能热水器","IVR机型自主识别：按键4/超时未按","品牌品类诉求确认：遵循二期逻辑流程","机型确认：空气能热水机","录单类别确认：未确认","系列确认：用户不清楚/用户说型号","使用场所确认：家庭","历史购买信息确认：无/否定","购买情况确认：否"],"summary":{"recordCount":2,"links":"41、42","endpoint":"1-到货\n2-故障","quantity":"32","owners":"素雅","sourceRows":"29、33"},"children":[{"id":"n80","label":"购房/交房时间确认：21年之前","level":10,"path":["空气能热水器","IVR机型自主识别：按键4/超时未按","品牌品类诉求确认：遵循二期逻辑流程","机型确认：空气能热水机","录单类别确认：未确认","系列确认：用户不清楚/用户说型号","使用场所确认：家庭","历史购买信息确认：无/否定","购买情况确认：否","购房/交房时间确认：21年之前"],"summary":{"recordCount":1,"links":"41","endpoint":"1-到货\n2-故障","quantity":"16","owners":"素雅","sourceRows":"29"},"children":[{"id":"n278","label":"链路结点：1-到货\n2-故障","level":11,"path":["空气能热水器","IVR机型自主识别：按键4/超时未按","品牌品类诉求确认：遵循二期逻辑流程","机型确认：空气能热水机","录单类别确认：未确认","系列确认：用户不清楚/用户说型号","使用场所确认：家庭","历史购买信息确认：无/否定","购买情况确认：否","购房/交房时间确认：21年之前","链路结点：1-到货\n2-故障"],"summary":{"recordCount":1,"links":"41","endpoint":"1-到货\n2-故障","quantity":"16","owners":"素雅","sourceRows":"29"},"children":[]}]},{"id":"n91","label":"购房/交房时间确认：21年之后/不清楚","level":10,"path":["空气能热水器","IVR机型自主识别：按键4/超时未按","品牌品类诉求确认：遵循二期逻辑流程","机型确认：空气能热水机","录单类别确认：未确认","系列确认：用户不清楚/用户说型号","使用场所确认：家庭","历史购买信息确认：无/否定","购买情况确认：否","购房/交房时间确认：21年之后/不清楚"],"summary":{"recordCount":1,"links":"42","endpoint":"1-到货\n2-故障","quantity":"16","owners":"素雅","sourceRows":"33"},"children":[{"id":"n279","label":"链路结点：1-到货\n2-故障","level":11,"path":["空气能热水器","IVR机型自主识别：按键4/超时未按","品牌品类诉求确认：遵循二期逻辑流程","机型确认：空气能热水机","录单类别确认：未确认","系列确认：用户不清楚/用户说型号","使用场所确认：家庭","历史购买信息确认：无/否定","购买情况确认：否","购房/交房时间确认：21年之后/不清楚","链路结点：1-到货\n2-故障"],"summary":{"recordCount":1,"links":"42","endpoint":"1-到货\n2-故障","quantity":"16","owners":"素雅","sourceRows":"33"},"children":[]}]}]}]},{"id":"n99","label":"历史购买信息确认：肯定","level":8,"path":["空气能热水器","IVR机型自主识别：按键4/超时未按","品牌品类诉求确认：遵循二期逻辑流程","机型确认：空气能热水机","录单类别确认：未确认","系列确认：用户不清楚/用户说型号","使用场所确认：家庭","历史购买信息确认：肯定"],"summary":{"recordCount":1,"links":"43","endpoint":"1-到货\n2-故障","quantity":"8","owners":"素雅","sourceRows":"37"},"children":[{"id":"n280","label":"链路结点：1-到货\n2-故障","level":9,"path":["空气能热水器","IVR机型自主识别：按键4/超时未按","品牌品类诉求确认：遵循二期逻辑流程","机型确认：空气能热水机","录单类别确认：未确认","系列确认：用户不清楚/用户说型号","使用场所确认：家庭","历史购买信息确认：肯定","链路结点：1-到货\n2-故障"],"summary":{"recordCount":1,"links":"43","endpoint":"1-到货\n2-故障","quantity":"8","owners":"素雅","sourceRows":"37"},"children":[]}]}]},{"id":"n107","label":"使用场所确认：其它：别墅、公寓、理发店","level":7,"path":["空气能热水器","IVR机型自主识别：按键4/超时未按","品牌品类诉求确认：遵循二期逻辑流程","机型确认：空气能热水机","录单类别确认：未确认","系列确认：用户不清楚/用户说型号","使用场所确认：其它：别墅、公寓、理发店"],"summary":{"recordCount":1,"links":"44","endpoint":"1-到货\n2-故障","quantity":"16","owners":"素雅","sourceRows":"41"},"children":[{"id":"n281","label":"链路结点：1-到货\n2-故障","level":8,"path":["空气能热水器","IVR机型自主识别：按键4/超时未按","品牌品类诉求确认：遵循二期逻辑流程","机型确认：空气能热水机","录单类别确认：未确认","系列确认：用户不清楚/用户说型号","使用场所确认：其它：别墅、公寓、理发店","链路结点：1-到货\n2-故障"],"summary":{"recordCount":1,"links":"44","endpoint":"1-到货\n2-故障","quantity":"16","owners":"素雅","sourceRows":"41"},"children":[]}]},{"id":"n115","label":"使用场所确认：否/不清楚","level":7,"path":["空气能热水器","IVR机型自主识别：按键4/超时未按","品牌品类诉求确认：遵循二期逻辑流程","机型确认：空气能热水机","录单类别确认：未确认","系列确认：用户不清楚/用户说型号","使用场所确认：否/不清楚"],"summary":{"recordCount":1,"links":"45","endpoint":"1-到货\n2-故障","quantity":"8","owners":"素雅","sourceRows":"45"},"children":[{"id":"n282","label":"链路结点：1-到货\n2-故障","level":8,"path":["空气能热水器","IVR机型自主识别：按键4/超时未按","品牌品类诉求确认：遵循二期逻辑流程","机型确认：空气能热水机","录单类别确认：未确认","系列确认：用户不清楚/用户说型号","使用场所确认：否/不清楚","链路结点：1-到货\n2-故障"],"summary":{"recordCount":1,"links":"45","endpoint":"1-到货\n2-故障","quantity":"8","owners":"素雅","sourceRows":"45"},"children":[]}]}]},{"id":"n55","label":"系列确认：烈焰、真暖、真省、雪焰、暖家、煤改电、真享","level":6,"path":["空气能热水器","IVR机型自主识别：按键4/超时未按","品牌品类诉求确认：遵循二期逻辑流程","机型确认：空气能热水机","录单类别确认：未确认","系列确认：烈焰、真暖、真省、雪焰、暖家、煤改电、真享"],"summary":{"recordCount":1,"links":"46","endpoint":"1-到货\n2-故障","quantity":"10","owners":"曾宪豪","sourceRows":"21"},"children":[{"id":"n283","label":"链路结点：1-到货\n2-故障","level":7,"path":["空气能热水器","IVR机型自主识别：按键4/超时未按","品牌品类诉求确认：遵循二期逻辑流程","机型确认：空气能热水机","录单类别确认：未确认","系列确认：烈焰、真暖、真省、雪焰、暖家、煤改电、真享","链路结点：1-到货\n2-故障"],"summary":{"recordCount":1,"links":"46","endpoint":"1-到货\n2-故障","quantity":"10","owners":"曾宪豪","sourceRows":"21"},"children":[]}]}]},{"id":"n39","label":"录单类别确认：酷风/小天鹅","level":5,"path":["空气能热水器","IVR机型自主识别：按键4/超时未按","品牌品类诉求确认：遵循二期逻辑流程","机型确认：空气能热水机","录单类别确认：酷风/小天鹅"],"summary":{"recordCount":1,"links":"47","endpoint":"转人工","quantity":"","owners":"","sourceRows":"13"},"children":[{"id":"n40","label":"链路结点：转人工","level":6,"path":["空气能热水器","IVR机型自主识别：按键4/超时未按","品牌品类诉求确认：遵循二期逻辑流程","机型确认：空气能热水机","录单类别确认：酷风/小天鹅","链路结点：转人工"],"summary":{"recordCount":1,"links":"47","endpoint":"转人工","quantity":"","owners":"","sourceRows":"13"},"children":[]}]},{"id":"n47","label":"录单类别确认：COLMO/克莱沃","level":5,"path":["空气能热水器","IVR机型自主识别：按键4/超时未按","品牌品类诉求确认：遵循二期逻辑流程","机型确认：空气能热水机","录单类别确认：COLMO/克莱沃"],"summary":{"recordCount":1,"links":"48","endpoint":"1-到货\n2-故障","quantity":"10","owners":"曾宪豪","sourceRows":"17"},"children":[{"id":"n284","label":"链路结点：1-到货\n2-故障","level":6,"path":["空气能热水器","IVR机型自主识别：按键4/超时未按","品牌品类诉求确认：遵循二期逻辑流程","机型确认：空气能热水机","录单类别确认：COLMO/克莱沃","链路结点：1-到货\n2-故障"],"summary":{"recordCount":1,"links":"48","endpoint":"1-到货\n2-故障","quantity":"10","owners":"曾宪豪","sourceRows":"17"},"children":[]}]}]}]}]}]}]};
+    const byId = new Map();
+    let selectedPath = [];
+    let selectedNode = null;
+    let searchTerm = "";
+    let focusedLinkPath = null;
+    let collapsedNodeIds = new Set();
+
+    function walk(nodes, fn) {
+      nodes.forEach((node) => {
+        byId.set(node.id, node);
+        fn(node);
+        walk(node.children, fn);
+      });
+    }
+    walk(data.roots, () => null);
+
+    const recordCount = document.getElementById("recordCount");
+    const currentLevel = document.getElementById("currentLevel");
+    const treeEl = document.getElementById("tree");
+    const drillEl = document.getElementById("drill");
+    const detailEl = document.getElementById("detail");
+    const searchEl = document.getElementById("search");
+    const toastEl = document.getElementById("toast");
+
+    recordCount.textContent = data.recordCount;
+
+    function stripPrefix(label) {
+      const idx = label.indexOf("：");
+      return idx >= 0 ? label.slice(idx + 1) : label;
+    }
+
+    function escapeHtml(text) {
+      return String(text ?? "")
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#039;");
+    }
+
+    function highlight(text) {
+      const safe = escapeHtml(text);
+      if (!searchTerm) return safe;
+      const escapedTerm = searchTerm.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      return safe.replace(new RegExp(escapedTerm, "gi"), (match) => `<mark>${match}</mark>`);
+    }
+
+    function nodeMatches(node) {
+      if (focusedLinkPath) return true;
+      if (!searchTerm) return true;
+      const haystack = [
+        node.label,
+        node.path.join(" "),
+        node.summary.links,
+        node.summary.endpoint,
+        node.summary.sourceRows,
+      ].join(" ").toLowerCase();
+      return haystack.includes(searchTerm.toLowerCase()) || node.children.some(nodeMatches);
+    }
+
+    function normalizeLinkNumber(value) {
+      return String(value ?? "")
+        .trim()
+        .replace(/[０-９]/g, (char) => String(char.charCodeAt(0) - 65296));
+    }
+
+    function linkNumbersFor(node) {
+      return String(node.summary.links || "")
+        .split(/[、,，\s]+/)
+        .map(normalizeLinkNumber)
+        .filter(Boolean);
+    }
+
+    function findLeafPathByLinkNumber(linkNumber, nodes = data.roots, path = []) {
+      for (const node of nodes) {
+        const nextPath = [...path, node];
+        if (!node.children.length && linkNumbersFor(node).includes(linkNumber)) return nextPath;
+        const found = findLeafPathByLinkNumber(linkNumber, node.children, nextPath);
+        if (found) return found;
+      }
+      return null;
+    }
+
+    function renderTree(nodes, root = false) {
+      return nodes
+        .filter(nodeMatches)
+        .map((node) => {
+          const hasChildren = node.children.length > 0;
+          const isSelected = selectedNode?.id === node.id;
+          const openPath = focusedLinkPath || selectedPath;
+          const shouldOpen = hasChildren && !collapsedNodeIds.has(node.id) && (
+            openPath.some((item) => item.id === node.id) || (!focusedLinkPath && Boolean(searchTerm))
+          );
+          return `
+            <div class="tree-node ${shouldOpen ? "open" : ""}" data-node-id="${node.id}">
+              <div class="node-row ${isSelected ? "selected" : ""}" style="padding-left:${root ? 2 : 0}px" data-select-id="${node.id}">
+                <button class="twisty" type="button" data-toggle-id="${node.id}" title="${hasChildren ? "展开/收起" : "末级节点"}">${hasChildren ? (shouldOpen ? "⌄" : "›") : "·"}</button>
+                <div class="label">${highlight(node.label)}</div>
+                <span class="count">${node.summary.recordCount}</span>
+              </div>
+              ${hasChildren ? `<div class="children">${renderTree(node.children)}</div>` : ""}
+            </div>
+          `;
+        })
+        .join("");
+    }
+
+    function selectNode(node, path, options = {}) {
+      selectedNode = node;
+      selectedPath = path;
+      if (!options.keepFocusedLinkPath) focusedLinkPath = null;
+      if (!options.preserveCollapsed) collapsedNodeIds.clear();
+      currentLevel.textContent = node ? String(node.level) : "-";
+      renderAll();
+    }
+
+    function findPath(targetId, nodes = data.roots, path = []) {
+      for (const node of nodes) {
+        const nextPath = [...path, node];
+        if (node.id === targetId) return nextPath;
+        const found = findPath(targetId, node.children, nextPath);
+        if (found) return found;
+      }
+      return null;
+    }
+
+    function levelsForPath() {
+      const columns = [];
+      let nodes = data.roots;
+      let level = 1;
+      columns.push({ level, nodes, activeId: selectedPath[0]?.id });
+      for (const node of selectedPath) {
+        if (!node.children.length) break;
+        level += 1;
+        columns.push({ level, nodes: node.children, activeId: selectedPath[level - 1]?.id });
+      }
+      return columns;
+    }
+
+    function renderDrill() {
+      drillEl.innerHTML = levelsForPath()
+        .map((column) => `
+          <div class="level-column">
+            <div class="level-title">第 ${column.level} 层</div>
+            ${column.nodes.map((node) => `
+              <button class="choice ${column.activeId === node.id ? "active" : ""}" type="button" data-choice-id="${node.id}">
+                <span class="choice-name">${escapeHtml(stripPrefix(node.label))}</span>
+                <span class="choice-meta">${node.summary.recordCount} 条</span>
+              </button>
+            `).join("")}
+          </div>
+        `)
+        .join("");
+    }
+
+    function collectLeafPaths(node, prefix = []) {
+      const current = [...prefix, node];
+      if (!node.children.length) {
+        return [current];
+      }
+      return node.children.flatMap((child) => collectLeafPaths(child, current));
+    }
+
+    function renderLeafPathList(node) {
+      if (!node.children.length) return "";
+      const leafPaths = collectLeafPaths(node).map((path) => path.slice(1));
+      if (!leafPaths.length) return "";
+      return `
+        <div class="leaf-paths">
+          <h4>当前节点到叶子节点路径（${leafPaths.length} 条）</h4>
+          <ol class="leaf-path-list">
+            ${leafPaths.map((path) => `
+              <li><span class="leaf-no">${escapeHtml(path[path.length - 1].summary.links)}</span><span>${path.map((item) => escapeHtml(item.label)).join(" > ")}</span></li>
+            `).join("")}
+          </ol>
+        </div>
+      `;
+    }
+
+    function renderDetail() {
+      if (!selectedNode) {
+        detailEl.innerHTML = `
+          <div class="empty">请选择任意节点。你可以从“完整树”直接点，也可以在“逐层选择”里从第 1 层开始逐步进入。</div>
+        `;
+        return;
+      }
+      const s = selectedNode.summary;
+      detailEl.innerHTML = `
+        <h3 class="selected-title">${escapeHtml(selectedNode.label)}</h3>
+        <div class="selected-link-number"><span>当前链路编号</span>${escapeHtml(s.links || "-")}</div>
+        <div class="path">
+          ${selectedPath.map((node) => `<div class="crumb">${escapeHtml(node.label)}</div>`).join("")}
+        </div>
+        <dl class="kv">
+          <dt>记录数</dt><dd>${escapeHtml(s.recordCount)}</dd>
+          <dt>覆盖编号</dt><dd>${escapeHtml(s.links || "-")}</dd>
+          <dt>链路结点</dt><dd>${escapeHtml(s.endpoint || "-")}</dd>
+        </dl>
+        ${renderLeafPathList(selectedNode)}
+      `;
+    }
+
+    function renderAll() {
+      treeEl.innerHTML = renderTree(data.roots, true);
+      renderDrill();
+      renderDetail();
+    }
+
+    function showToast(text) {
+      toastEl.textContent = text;
+      toastEl.classList.add("show");
+      window.setTimeout(() => toastEl.classList.remove("show"), 1400);
+    }
+
+    treeEl.addEventListener("click", (event) => {
+      const toggle = event.target.closest("[data-toggle-id]");
+      const row = toggle?.closest("[data-select-id]") || event.target.closest("[data-select-id]");
+      if (!row) return;
+      const targetId = toggle?.dataset.toggleId || row.dataset.selectId;
+      const path = findPath(targetId);
+      const nodeWrap = toggle?.closest(".tree-node");
+      const hasChildren = Boolean(nodeWrap?.querySelector(":scope > .children"));
+      if (toggle && hasChildren) {
+        event.stopPropagation();
+        focusedLinkPath = null;
+        searchTerm = "";
+        if (nodeWrap.classList.contains("open")) {
+          collapsedNodeIds.add(targetId);
+        } else {
+          collapsedNodeIds.delete(targetId);
+        }
+        if (path) selectNode(path[path.length - 1], path, { preserveCollapsed: true });
+        return;
+      }
+      if (path) selectNode(path[path.length - 1], path);
+    });
+
+    drillEl.addEventListener("click", (event) => {
+      const choice = event.target.closest("[data-choice-id]");
+      if (!choice) return;
+      const path = findPath(choice.dataset.choiceId);
+      if (path) selectNode(path[path.length - 1], path);
+    });
+
+    searchEl.addEventListener("input", () => {
+      focusedLinkPath = null;
+      collapsedNodeIds.clear();
+      searchTerm = "";
+      renderAll();
+    });
+
+    searchEl.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter") return;
+      event.preventDefault();
+      const linkNumber = normalizeLinkNumber(searchEl.value);
+      if (!linkNumber) return;
+      const path = findLeafPathByLinkNumber(linkNumber);
+      if (!path) {
+        showToast(`未找到链路编号 ${linkNumber}`);
+        return;
+      }
+      searchTerm = "";
+      collapsedNodeIds.clear();
+      focusedLinkPath = path;
+      searchEl.value = linkNumber;
+      selectNode(path[path.length - 1], path, { keepFocusedLinkPath: true });
+    });
+
+    document.getElementById("expandAll").addEventListener("click", () => {
+      focusedLinkPath = null;
+      collapsedNodeIds.clear();
+      searchTerm = " ";
+      renderAll();
+      searchTerm = "";
+      document.querySelectorAll(".tree-node").forEach((node) => node.classList.add("open"));
+      document.querySelectorAll(".twisty").forEach((btn) => {
+        if (btn.textContent !== "·") btn.textContent = "⌄";
+      });
+    });
+
+    document.getElementById("collapseAll").addEventListener("click", () => {
+      document.querySelectorAll(".tree-node").forEach((node) => node.classList.remove("open"));
+      document.querySelectorAll(".twisty").forEach((btn) => {
+        if (btn.textContent !== "·") btn.textContent = "›";
+      });
+    });
+
+    document.getElementById("reset").addEventListener("click", () => {
+      selectedNode = null;
+      selectedPath = [];
+      focusedLinkPath = null;
+      collapsedNodeIds.clear();
+      currentLevel.textContent = "-";
+      renderAll();
+    });
+
+    document.getElementById("copyPath").addEventListener("click", async () => {
+      if (!selectedPath.length) {
+        showToast("还没有选择路径");
+        return;
+      }
+      const text = selectedPath.map((node) => node.label).join(" > ");
+      try {
+        await navigator.clipboard.writeText(text);
+        showToast("路径已复制");
+      } catch {
+        showToast("浏览器未允许复制");
+      }
+    });
+
+    renderAll();
+  </script>
+</body>
+</html>

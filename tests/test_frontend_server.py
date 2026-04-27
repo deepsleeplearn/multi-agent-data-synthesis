@@ -1776,10 +1776,26 @@ class FrontendServerTests(unittest.TestCase):
         self.assertEqual(index_response.status_code, 200)
         self.assertIn('id="review-close-btn"', index_response.text)
         self.assertIn('id="review-toggle-btn"', index_response.text)
+        self.assertIn('id="rewrite-air-link-btn"', index_response.text)
+        self.assertIn('id="rewrite-link-modal"', index_response.text)
+        self.assertIn("选择该条数据所属链路", index_response.text)
         self.assertIn("点击任意用户行可删除该行及其下方所有内容", index_response.text)
 
         app_response = self.client.get("/static/app.js")
         self.assertEqual(app_response.status_code, 200)
+        self.assertIn("/rewrite/air-energy-water-heater-link", app_response.text)
+        self.assertIn("/api/rewrite/air-energy-water-heater-links", app_response.text)
+        self.assertIn("air_energy_water_heater_link", app_response.text)
+        self.assertIn("arrival_fault_type", app_response.text)
+        self.assertIn("exportRecord.rewrite_status", app_response.text)
+        self.assertIn("prepareRewriteRecordForExport(currentRecord, status)", app_response.text)
+        self.assertIn("exportRecord.annotator", app_response.text)
+        self.assertIn("delete exportRecord.air_energy_water_heater_link.source_rows", app_response.text)
+        self.assertIn("delete exportRecord.air_energy_water_heater_link.endpoint", app_response.text)
+        self.assertIn("delete exportRecord.air_energy_water_heater_link.path", app_response.text)
+        self.assertNotIn("source_rows: String(option.source_rows", app_response.text)
+        self.assertNotIn("endpoint: String(option.endpoint", app_response.text)
+        self.assertNotIn("path: Array.isArray(option.path", app_response.text)
         self.assertIn("打开评审", app_response.text)
         self.assertIn("/api/session/rewind", app_response.text)
         self.assertIn("/api/chat/state", app_response.text)
@@ -1791,6 +1807,25 @@ class FrontendServerTests(unittest.TestCase):
         self.assertIn('id="chat-window"', index_response.text)
         self.assertIn('id="chat-launcher"', index_response.text)
         self.assertIn('id="chat-admin-controls"', index_response.text)
+
+    def test_air_energy_water_heater_link_page_is_served(self):
+        response = self.client.get("/rewrite/air-energy-water-heater-link")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("空气能热水器链路", response.text)
+        self.assertIn("<!doctype html>", response.text.lower())
+
+    def test_air_energy_water_heater_link_options_api(self):
+        self._login()
+        response = self.client.get("/api/rewrite/air-energy-water-heater-links")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["count"], 48)
+        option_by_link = {item["link_number"]: item for item in payload["options"]}
+        self.assertEqual(option_by_link["1"]["endpoint"], "转人工")
+        self.assertEqual(option_by_link["6"]["endpoint"], "1-到货\n2-故障")
+        self.assertTrue(option_by_link["6"]["requires_arrival_fault"])
 
     def test_user_requested_human_handoff_closes_session_and_keeps_review_flow(self):
         self._login()

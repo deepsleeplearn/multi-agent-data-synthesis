@@ -583,7 +583,7 @@ def _history_device_confirmation_prompt(hidden_context: dict[str, Any] | None) -
             year = match.group(1)
             month = str(int(match.group(2)))
     if brand and category and year and month:
-        return f"这边看到您{year}年{month}月有购买一台{brand}{category}，请问是这台吗？"
+        return f"请问本次报单是您在{year}年{month}月有购买一台{brand}{category}，是吗？"
     return PROMPT_HISTORY_DEVICE_CONFIRMATION
 
 

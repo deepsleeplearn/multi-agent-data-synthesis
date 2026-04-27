@@ -24,7 +24,6 @@ from css_data_synthesis_test.address_utils import (
 from css_data_synthesis_test.product_routing import (
     ROUTING_RESULT_HUMAN,
     allowed_product_routing_answer_keys,
-    default_unknown_product_routing_answer_key,
     get_product_routing_steps,
     infer_product_routing_answer_key,
     next_product_routing_steps_from_observed_trace,
@@ -81,6 +80,9 @@ class ServiceRuntimeState:
     product_routing_step_index: int = 0
     product_routing_completed: bool = False
     product_routing_observed_trace: list[str] = field(default_factory=list)
+    product_routing_off_topic_prompt_key: str = ""
+    product_routing_off_topic_count: int = 0
+    sms_fill_origin: str = ""
     awaiting_closing_ack: bool = False
     awaiting_satisfaction_rating: bool = False
 
@@ -722,6 +724,7 @@ class ServiceDialoguePolicy:
             if runtime_state.phone_input_attempts >= 3:
                 runtime_state.awaiting_phone_keypad_input = False
                 runtime_state.expected_phone_sms_fill_confirmation = True
+                runtime_state.sms_fill_origin = "phone"
                 return ServicePolicyResult(
                     reply=self._phone_sms_fill_prompt(),
                     slot_updates={
@@ -760,6 +763,8 @@ class ServiceDialoguePolicy:
             user_round_index=user_round_index,
         )
         runtime_state.expected_phone_sms_fill_confirmation = False
+        sms_fill_origin = runtime_state.sms_fill_origin
+        runtime_state.sms_fill_origin = ""
         if intent == "yes":
             return ServicePolicyResult(
                 reply=self._phone_sms_sent_prompt(),
@@ -770,7 +775,7 @@ class ServiceDialoguePolicy:
             scenario=scenario,
             runtime_state=runtime_state,
             slot_updates=slot_updates,
-            reason="phone_collection_failed",
+            reason="product_routing_sms_declined" if sms_fill_origin == "product_routing" else "phone_collection_failed",
         )
 
     def _handle_address_confirmation(
@@ -950,6 +955,7 @@ class ServiceDialoguePolicy:
         if runtime_state.phone_input_attempts >= 3:
             runtime_state.awaiting_phone_keypad_input = False
             runtime_state.expected_phone_sms_fill_confirmation = True
+            runtime_state.sms_fill_origin = "phone"
             return ServicePolicyResult(
                 reply=self._phone_sms_fill_prompt(),
                 slot_updates=slot_updates,
@@ -1208,8 +1214,24 @@ class ServiceDialoguePolicy:
                 user_round_index=user_round_index,
             )
             if not observed_answer_key and self.product_routing_intent_inference_callback is None:
-                observed_answer_key = default_unknown_product_routing_answer_key(prompt_key)
+                observed_answer_key = ""
             if not observed_answer_key:
+                if runtime_state.product_routing_off_topic_prompt_key == prompt_key:
+                    runtime_state.product_routing_off_topic_count += 1
+                else:
+                    runtime_state.product_routing_off_topic_prompt_key = prompt_key
+                    runtime_state.product_routing_off_topic_count = 1
+                if runtime_state.product_routing_off_topic_count >= 2:
+                    runtime_state.expected_product_routing_response = False
+                    runtime_state.product_routing_off_topic_prompt_key = ""
+                    runtime_state.product_routing_off_topic_count = 0
+                    runtime_state.expected_phone_sms_fill_confirmation = True
+                    runtime_state.sms_fill_origin = "product_routing"
+                    return ServicePolicyResult(
+                        reply=self._phone_sms_fill_prompt(),
+                        slot_updates=slot_updates,
+                        is_ready_to_close=False,
+                    )
                 runtime_state.expected_product_routing_response = True
                 return ServicePolicyResult(
                     reply=str(current_step.get("prompt", "")).strip(),
@@ -1218,6 +1240,8 @@ class ServiceDialoguePolicy:
                 )
 
         if observed_answer_key:
+            runtime_state.product_routing_off_topic_prompt_key = ""
+            runtime_state.product_routing_off_topic_count = 0
             post_answer_trace: list[str] = []
             if current_step:
                 expected_answer_key = str(current_step.get("answer_key", "")).strip()
@@ -2006,6 +2030,12 @@ class ServiceDialoguePolicy:
                     and answer_key in allowed_product_routing_answer_keys(prompt_key)
                     and (not inferred_prompt_key or inferred_prompt_key == prompt_key)
                 ):
+                    if self._is_obvious_product_routing_off_topic_model_answer(
+                        prompt_key=prompt_key,
+                        user_text=user_text,
+                        answer_key=answer_key,
+                    ):
+                        return ""
                     self.last_used_model_intent_inference = True
                     return answer_key
             return ""
@@ -2015,6 +2045,36 @@ class ServiceDialoguePolicy:
             return heuristic
 
         return ""
+
+    @staticmethod
+    def _is_obvious_product_routing_off_topic_model_answer(
+        *,
+        prompt_key: str,
+        user_text: str,
+        answer_key: str,
+    ) -> bool:
+        if infer_product_routing_answer_key(prompt_key, user_text):
+            return False
+        normalized = re.sub(r"\s+", "", str(user_text or "").strip())
+        if not normalized:
+            return True
+        off_topic_tokens = (
+            "我爱你",
+            "爱你",
+            "喜欢你",
+            "你真好",
+            "谢谢",
+            "辛苦了",
+            "再见",
+            "拜拜",
+            "费用",
+            "多少钱",
+            "什么时候上门",
+            "多久上门",
+        )
+        if any(token in normalized for token in off_topic_tokens):
+            return True
+        return answer_key in {"scene.other_unknown", "purchase.unknown", "property_year.unknown"} and len(normalized) <= 3
 
     def _classify_opening_intent(
         self,
@@ -5338,7 +5398,10 @@ class ServiceDialoguePolicy:
             result="",
         )
         runtime_state.expected_product_routing_response = True
-        reply = steps[runtime_state.product_routing_step_index]["prompt"]
+        current_step = steps[runtime_state.product_routing_step_index]
+        reply = current_step["prompt"]
+        if str(current_step.get("prompt_key", "")).strip() == "history_device_confirmation":
+            reply = self._with_optional_ok_prefix(reply)
         if prepend_fault_ack and runtime_state.product_routing_step_index == 0:
             reply = self._prepend_fault_acknowledgement(reply)
         return ServicePolicyResult(
@@ -5402,6 +5465,9 @@ class ServiceDialoguePolicy:
         runtime_state.last_address_followup_prompt = ""
         runtime_state.expected_product_routing_response = False
         runtime_state.product_routing_completed = True
+        runtime_state.product_routing_off_topic_prompt_key = ""
+        runtime_state.product_routing_off_topic_count = 0
+        runtime_state.sms_fill_origin = ""
         runtime_state.awaiting_closing_ack = False
         runtime_state.awaiting_satisfaction_rating = False
 

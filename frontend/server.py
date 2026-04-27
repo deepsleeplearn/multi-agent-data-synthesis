@@ -144,6 +144,9 @@ _SESSION_REVIEW_DB_NORMALIZED = False
 REWRITE_REVIEW_DB_PATH = PROJECT_ROOT / "outputs" / "frontend_rewrite_review.sqlite3"
 REWRITE_REVIEW_DB_LOCK = threading.RLock()
 _REWRITE_REVIEW_DB_SCHEMA_READY = False
+AIR_ENERGY_WATER_HEATER_LINK_PAGE = PROJECT_ROOT / "adds" / "空气能热水器链路.html"
+AIR_ENERGY_WATER_HEATER_LINK_OPTIONS_CACHE: list[dict[str, Any]] | None = None
+AIR_ENERGY_WATER_HEATER_LINK_OPTIONS_MTIME: float | None = None
 SESSION_REDIS_URL = os.getenv("FRONTEND_SESSION_REDIS_URL", "").strip()
 SESSION_REDIS_TTL_SECONDS = int(os.getenv("FRONTEND_SESSION_REDIS_TTL_SECONDS", "43200") or "43200")
 CHAT_STORAGE_PATH = PROJECT_ROOT / "outputs" / "frontend_chat_messages.json"
@@ -238,6 +241,70 @@ def _disable_unavailable_model_callbacks(agent: ServiceAgent, active_config: Any
     # original deterministic routing fallback instead of forcing a failed model call.
     agent.policy.product_routing_intent_inference_callback = None
     return agent
+
+
+def _split_air_energy_link_numbers(value: Any) -> list[str]:
+    return [
+        item.strip()
+        for item in re.split(r"[、,，\s]+", str(value or "").strip())
+        if item.strip()
+    ]
+
+
+def _load_air_energy_water_heater_link_options() -> list[dict[str, Any]]:
+    global AIR_ENERGY_WATER_HEATER_LINK_OPTIONS_CACHE, AIR_ENERGY_WATER_HEATER_LINK_OPTIONS_MTIME
+    if not AIR_ENERGY_WATER_HEATER_LINK_PAGE.exists():
+        AIR_ENERGY_WATER_HEATER_LINK_OPTIONS_CACHE = []
+        AIR_ENERGY_WATER_HEATER_LINK_OPTIONS_MTIME = None
+        return AIR_ENERGY_WATER_HEATER_LINK_OPTIONS_CACHE
+    current_mtime = AIR_ENERGY_WATER_HEATER_LINK_PAGE.stat().st_mtime
+    if (
+        AIR_ENERGY_WATER_HEATER_LINK_OPTIONS_CACHE is not None
+        and AIR_ENERGY_WATER_HEATER_LINK_OPTIONS_MTIME == current_mtime
+    ):
+        return AIR_ENERGY_WATER_HEATER_LINK_OPTIONS_CACHE
+
+    html = AIR_ENERGY_WATER_HEATER_LINK_PAGE.read_text(encoding="utf-8")
+    match = re.search(r"const\s+data\s*=\s*(\{.*?\});\s*const\s+byId\s*=", html, re.DOTALL)
+    if not match:
+        raise RuntimeError("无法从空气能热水器链路页面读取链路数据。")
+    data = json.loads(match.group(1))
+    options_by_number: dict[str, dict[str, Any]] = {}
+
+    def visit(node: dict[str, Any]) -> None:
+        label = str(node.get("label") or "")
+        summary = dict(node.get("summary") or {})
+        children = node.get("children") or []
+        link_numbers = _split_air_energy_link_numbers(summary.get("links"))
+        if label.startswith("链路结点：") and len(link_numbers) == 1:
+            link_number = link_numbers[0]
+            endpoint = str(summary.get("endpoint") or label.removeprefix("链路结点：")).strip()
+            path = [str(item).strip() for item in (node.get("path") or []) if str(item).strip()]
+            normalized_endpoint = re.sub(r"\s+", "", endpoint)
+            options_by_number[link_number] = {
+                "link_number": link_number,
+                "endpoint": endpoint,
+                "label": label,
+                "path": path,
+                "quantity": str(summary.get("quantity") or ""),
+                "owners": str(summary.get("owners") or ""),
+                "source_rows": str(summary.get("sourceRows") or ""),
+                "requires_arrival_fault": normalized_endpoint == "1-到货2-故障",
+            }
+        for child in children:
+            if isinstance(child, dict):
+                visit(child)
+
+    for root in data.get("roots") or []:
+        if isinstance(root, dict):
+            visit(root)
+
+    AIR_ENERGY_WATER_HEATER_LINK_OPTIONS_CACHE = sorted(
+        options_by_number.values(),
+        key=lambda item: int(item["link_number"]) if str(item["link_number"]).isdigit() else str(item["link_number"]),
+    )
+    AIR_ENERGY_WATER_HEATER_LINK_OPTIONS_MTIME = current_mtime
+    return AIR_ENERGY_WATER_HEATER_LINK_OPTIONS_CACHE
 
 
 def _build_service_policy(model_name: str = ""):
@@ -4607,6 +4674,20 @@ def build_rewrite_ie_observation(
     return {"observation": observation}
 
 
+@app.get("/api/rewrite/air-energy-water-heater-links")
+def list_air_energy_water_heater_links(
+    current_user: dict[str, str] = Depends(_require_authenticated_user),
+):
+    try:
+        options = _load_air_energy_water_heater_link_options()
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"读取空气能热水器链路失败: {exc}") from exc
+    return {
+        "options": options,
+        "count": len(options),
+    }
+
+
 @app.post("/api/rewrite/review")
 def review_rewrite_record(
     req: RewriteReviewRequest,
@@ -4692,6 +4773,12 @@ if static_dir.exists():
     @app.get("/")
     def serve_frontend_index():
         return FileResponse(static_dir / "index.html")
+
+    @app.get("/rewrite/air-energy-water-heater-link")
+    def serve_air_energy_water_heater_link():
+        if not AIR_ENERGY_WATER_HEATER_LINK_PAGE.exists():
+            raise HTTPException(status_code=404, detail="空气能热水器链路页面不存在。")
+        return FileResponse(AIR_ENERGY_WATER_HEATER_LINK_PAGE, media_type="text/html")
 
     app.mount("/static", StaticFiles(directory=str(static_dir), html=False), name="static")
 else:  # pragma: no cover

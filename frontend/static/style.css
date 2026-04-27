@@ -3510,6 +3510,72 @@ select:focus {
     width: min(100%, 28rem);
 }
 
+.rewrite-link-modal-card {
+    width: min(100%, 38rem);
+}
+
+.rewrite-link-picker-btn {
+    width: 100%;
+    min-height: 2.75rem;
+    border: 1px solid rgba(15, 118, 110, 0.24);
+    border-radius: 12px;
+    padding: 0.72rem 0.9rem;
+    background: rgba(255, 255, 255, 0.86);
+    color: var(--text);
+    text-align: left;
+    cursor: pointer;
+}
+
+.rewrite-link-picker-btn::after {
+    content: "⌄";
+    float: right;
+    color: var(--muted);
+}
+
+.rewrite-link-picker-btn:focus-visible {
+    outline: none;
+    border-color: rgba(15, 118, 110, 0.5);
+    box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.12);
+}
+
+.rewrite-link-picker-btn:disabled {
+    cursor: wait;
+    opacity: 0.68;
+}
+
+.rewrite-link-options {
+    height: 15rem;
+    margin: -0.35rem 0 0.85rem;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    border: 1px solid rgba(15, 118, 110, 0.22);
+    border-radius: 12px;
+    background: rgba(255, 255, 255, 0.96);
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.55);
+}
+
+.rewrite-link-option {
+    display: block;
+    width: 100%;
+    border: 0;
+    border-bottom: 1px solid rgba(89, 72, 51, 0.1);
+    padding: 0.62rem 0.8rem;
+    background: transparent;
+    color: var(--text);
+    text-align: left;
+    cursor: pointer;
+}
+
+.rewrite-link-option:hover,
+.rewrite-link-option[aria-selected="true"] {
+    background: rgba(15, 118, 110, 0.12);
+}
+
+.rewrite-link-modal-card .data-list {
+    max-height: 13rem;
+    overflow: auto;
+}
+
 .rewrite-export-scope-choices {
     display: grid;
     grid-template-columns: repeat(3, minmax(0, 1fr));

@@ -430,6 +430,7 @@
                 </div>
                 <div class="status-group">
                     <span id="rewrite-record-indicator" class="round-indicator">记录: -</span>
+                    <button id="rewrite-air-link-btn" class="secondary-btn" type="button" title="打开空气能热水器链路页面">空气能链路</button>
                     <button id="rewrite-submit-btn" class="primary-btn" type="button" disabled>提交该条数据</button>
                     <button id="rewrite-reset-btn" class="secondary-btn" type="button" disabled>恢复初始</button>
                     <button id="rewrite-undo-btn" class="secondary-btn" type="button" disabled>回退</button>
@@ -710,6 +711,42 @@
             <div class="modal-actions">
                 <button id="rewrite-key-cancel-btn" class="secondary-btn" type="button">取消</button>
                 <button id="rewrite-key-confirm-btn" class="primary-btn" type="button">确认</button>
+            </div>
+        </section>
+    </div>
+    <div id="rewrite-link-modal" class="modal-shell hidden" hidden aria-hidden="true">
+        <div class="modal-backdrop"></div>
+        <section class="modal-card rewrite-link-modal-card" role="dialog" aria-modal="true" aria-labelledby="rewrite-link-title">
+            <div class="modal-header">
+                <div class="section-heading compact">
+                    <p class="eyebrow">Route Required</p>
+                    <h2 id="rewrite-link-title">选择该条数据所属链路</h2>
+                </div>
+                <button id="rewrite-link-close-btn" class="modal-close-btn" type="button" aria-label="取消并关闭链路选择窗口">×</button>
+            </div>
+            <p id="rewrite-link-summary" class="section-copy">提交前必须选择链路编号。若链路节点为“1-到货 2-故障”，还需要选择到货或故障。</p>
+            <label class="field">
+                <span>链路编号</span>
+                <button id="rewrite-link-select" class="rewrite-link-picker-btn" type="button" aria-expanded="false" aria-controls="rewrite-link-options">
+                    加载链路中...
+                </button>
+            </label>
+            <div id="rewrite-link-options" class="rewrite-link-options hidden" role="listbox" aria-label="链路编号列表"></div>
+            <div id="rewrite-link-detail" class="data-list">
+                <p class="terminal-hint">选择链路编号后显示链路节点和路径。</p>
+            </div>
+            <label id="rewrite-link-arrival-fault-field" class="field hidden">
+                <span>到货/故障</span>
+                <select id="rewrite-link-arrival-fault-select">
+                    <option value="">请选择</option>
+                    <option value="到货">到货</option>
+                    <option value="故障">故障</option>
+                </select>
+            </label>
+            <p id="rewrite-link-error" class="field-error hidden" role="alert">请选择有效链路。</p>
+            <div class="modal-actions">
+                <button id="rewrite-link-cancel-btn" class="secondary-btn" type="button">取消</button>
+                <button id="rewrite-link-confirm-btn" class="primary-btn" type="button">确认并提交</button>
             </div>
         </section>
     </div>

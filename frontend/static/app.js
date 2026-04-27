@@ -105,6 +105,9 @@ const rewriteObservationLoadingLineIds = new Set();
 let rewritePendingExportAction = null;
 let rewritePendingExportScope = 'all';
 let rewriteKeyPromptState = null;
+let rewriteLinkSubmitAfterConfirm = false;
+let rewriteAirLinkOptions = [];
+let rewriteAirLinkOptionsPromise = null;
 let rewriteTransferNoticeTimer = null;
 let blockingActionNoticeTimer = null;
 let manualShellLeftHidden = false;
@@ -113,6 +116,7 @@ let manualShellLeftWidth = 360;
 let manualShellRightWidth = 340;
 let manualShellResizeState = null;
 let selectedModelName = 'gpt-4o';
+const REWRITE_AIR_ENERGY_LINK_URL = '/rewrite/air-energy-water-heater-link';
 
 const authGate = document.getElementById('auth-gate');
 const appShell = document.getElementById('app-shell');
@@ -165,6 +169,7 @@ const modeSwitchButton = document.getElementById('mode-switch-btn');
 const reviewModal = document.getElementById('review-modal');
 const rewriteExportModal = document.getElementById('rewrite-export-modal');
 const rewriteKeyModal = document.getElementById('rewrite-key-modal');
+const rewriteLinkModal = document.getElementById('rewrite-link-modal');
 const reviewChoiceGroup = document.querySelector('.review-choice-group');
 const reviewCloseButton = document.getElementById('review-close-btn');
 const reviewToggleButton = document.getElementById('review-toggle-btn');
@@ -249,6 +254,7 @@ const rewriteUploadStatus = document.getElementById('rewrite-upload-status');
 const rewriteRecordList = document.getElementById('rewrite-record-list');
 const rewriteTitle = document.getElementById('rewrite-title');
 const rewriteRecordIndicator = document.getElementById('rewrite-record-indicator');
+const rewriteAirLinkButton = document.getElementById('rewrite-air-link-btn');
 const rewriteSubmitButton = document.getElementById('rewrite-submit-btn');
 const rewriteResetButton = document.getElementById('rewrite-reset-btn');
 const rewriteUndoButton = document.getElementById('rewrite-undo-btn');
@@ -284,6 +290,15 @@ const rewriteKeyError = document.getElementById('rewrite-key-error');
 const rewriteKeyCloseButton = document.getElementById('rewrite-key-close-btn');
 const rewriteKeyCancelButton = document.getElementById('rewrite-key-cancel-btn');
 const rewriteKeyConfirmButton = document.getElementById('rewrite-key-confirm-btn');
+const rewriteLinkSelect = document.getElementById('rewrite-link-select');
+const rewriteLinkOptionsList = document.getElementById('rewrite-link-options');
+const rewriteLinkDetail = document.getElementById('rewrite-link-detail');
+const rewriteLinkArrivalFaultField = document.getElementById('rewrite-link-arrival-fault-field');
+const rewriteLinkArrivalFaultSelect = document.getElementById('rewrite-link-arrival-fault-select');
+const rewriteLinkError = document.getElementById('rewrite-link-error');
+const rewriteLinkCloseButton = document.getElementById('rewrite-link-close-btn');
+const rewriteLinkCancelButton = document.getElementById('rewrite-link-cancel-btn');
+const rewriteLinkConfirmButton = document.getElementById('rewrite-link-confirm-btn');
 const PERSONA_HIDDEN_CONTEXT_FIELDS = [
     ['emotion', '当前情绪'],
     ['urgency', '紧急程度'],
@@ -417,6 +432,7 @@ const AUTHENTICATED_ONLY_ROOTS = [
     reviewModal,
     rewriteExportModal,
     rewriteKeyModal,
+    rewriteLinkModal,
     issueReferencePopover,
     textMagnifier,
 ].filter(Boolean);
@@ -3029,6 +3045,44 @@ function openRewriteExportModal(statusSummary, scope = 'all') {
     rewriteExportModal.setAttribute('aria-hidden', 'false');
 }
 
+function getCurrentRewriteAnnotator() {
+    return String(authenticatedUser?.username || authenticatedUser?.display_name || '').trim();
+}
+
+function prepareRewriteRecordForExport(record, rewriteStatus = '') {
+    const exportRecord = cloneRewriteRecordData(record) || {};
+    exportRecord.rewrite_status = String(rewriteStatus || '').trim();
+    const annotator = String(exportRecord.annotator || getCurrentRewriteAnnotator()).trim();
+    if (annotator) {
+        exportRecord.annotator = annotator;
+    }
+    if (exportRecord.air_energy_water_heater_link && typeof exportRecord.air_energy_water_heater_link === 'object') {
+        delete exportRecord.air_energy_water_heater_link.quantity;
+        delete exportRecord.air_energy_water_heater_link.owners;
+        delete exportRecord.air_energy_water_heater_link.source_rows;
+        delete exportRecord.air_energy_water_heater_link.endpoint;
+        delete exportRecord.air_energy_water_heater_link.path;
+    }
+    return exportRecord;
+}
+
+function stripRewriteAirLinkExportOnlyFields(record) {
+    if (!record?.air_energy_water_heater_link || typeof record.air_energy_water_heater_link !== 'object') return;
+    delete record.air_energy_water_heater_link.quantity;
+    delete record.air_energy_water_heater_link.owners;
+    delete record.air_energy_water_heater_link.source_rows;
+    delete record.air_energy_water_heater_link.endpoint;
+    delete record.air_energy_water_heater_link.path;
+}
+
+function setRewriteRecordAnnotator(record) {
+    if (!record || typeof record !== 'object') return;
+    const annotator = getCurrentRewriteAnnotator();
+    if (annotator) {
+        record.annotator = annotator;
+    }
+}
+
 function buildRewriteExportRecords(scope = 'all') {
     return getRewriteExportIndexes(scope).map((index) => {
         const record = rewriteRecords[index];
@@ -3036,13 +3090,13 @@ function buildRewriteExportRecords(scope = 'all') {
         const currentRecord = cloneRewriteRecordData(record);
         const importedRecord = cloneRewriteRecordData(rewriteImportedRecords[index]);
         if (status === '已提交') {
-            return currentRecord;
+            return prepareRewriteRecordForExport(currentRecord, status);
         }
-        return importedRecord ?? currentRecord;
+        return prepareRewriteRecordForExport(importedRecord ?? currentRecord, status);
     });
 }
 
-function submitCurrentRewriteRecord() {
+function finalizeCurrentRewriteRecord() {
     if (!Number.isInteger(rewriteSelectedIndex) || rewriteSelectedIndex < 0) return;
     const record = rewriteRecords[rewriteSelectedIndex];
     if (!record || typeof record !== 'object') return;
@@ -3058,9 +3112,275 @@ function submitCurrentRewriteRecord() {
     }
     const rewrited = buildRewriteSubmissionPayloadFromLines(lines);
     record.rewrited = rewrited;
+    setRewriteRecordAnnotator(record);
+    stripRewriteAirLinkExportOnlyFields(record);
     renderRewriteRecordState(rewriteSelectedIndex);
     if (rewriteUploadStatus) {
         rewriteUploadStatus.textContent = `${recordId} 已提交，共 ${lines.length} 行对话。`;
+    }
+}
+
+async function submitCurrentRewriteRecord() {
+    if (!Number.isInteger(rewriteSelectedIndex) || rewriteSelectedIndex < 0) return;
+    const record = rewriteRecords[rewriteSelectedIndex];
+    if (!record || typeof record !== 'object') return;
+    const lines = getRewriteEditableLines(record, rewriteSelectedIndex);
+    const validation = evaluateRewriteRoleAlternation(lines);
+    if (validation.state !== 'good') {
+        const details = Array.isArray(validation.conflictMessages) && validation.conflictMessages.length
+            ? `\n\n${validation.conflictMessages.join('\n')}`
+            : '';
+        window.alert(`当前数据未通过提交校验：${validation.text}${details}`);
+        return;
+    }
+    let hasLinkSelection = false;
+    try {
+        hasLinkSelection = await ensureCurrentRewriteAirLinkSelection();
+    } catch (error) {
+        window.alert(error.message || '链路列表加载失败，不能提交该条数据。');
+        return;
+    }
+    if (!hasLinkSelection) return;
+    finalizeCurrentRewriteRecord();
+}
+
+async function openRewriteAirEnergyLinkPage() {
+    const popup = window.open('about:blank', '_blank');
+    if (popup) {
+        popup.document.open();
+        popup.document.write('<!doctype html><meta charset="utf-8"><title>空气能热水器链路</title><p style="font:14px system-ui;padding:24px;">正在加载空气能热水器链路...</p>');
+        popup.document.close();
+        popup.opener = null;
+    }
+    try {
+        const response = await fetch(REWRITE_AIR_ENERGY_LINK_URL, {
+            credentials: 'same-origin',
+            cache: 'no-store',
+        });
+        if (!response.ok) {
+            throw new Error(`链路页面加载失败：${response.status}`);
+        }
+        const html = await response.text();
+        if (popup) {
+            popup.document.open();
+            popup.document.write(html);
+            popup.document.close();
+        } else {
+            window.open(REWRITE_AIR_ENERGY_LINK_URL, '_blank', 'noopener');
+        }
+    } catch (error) {
+        if (popup) {
+            popup.document.open();
+            popup.document.write(`<!doctype html><meta charset="utf-8"><title>链路页面加载失败</title><div style="font:14px system-ui;padding:24px;"><p>链路页面加载失败。</p><p><a href="${REWRITE_AIR_ENERGY_LINK_URL}">打开原始链路页面</a></p></div>`);
+            popup.document.close();
+        } else {
+            window.open(REWRITE_AIR_ENERGY_LINK_URL, '_blank', 'noopener');
+        }
+        console.warn(error);
+    }
+}
+
+function normalizeAirLinkEndpoint(endpoint = '') {
+    return String(endpoint || '').replace(/\s+/g, '');
+}
+
+function getRewriteAirLinkSelection(record) {
+    const selection = record?.air_energy_water_heater_link;
+    return selection && typeof selection === 'object' ? selection : null;
+}
+
+function isAirLinkArrivalFaultOption(option) {
+    return Boolean(option?.requires_arrival_fault)
+        || normalizeAirLinkEndpoint(option?.endpoint) === '1-到货2-故障';
+}
+
+function findRewriteAirLinkOption(linkNumber) {
+    const normalized = String(linkNumber || '').trim();
+    if (!normalized) return null;
+    return rewriteAirLinkOptions.find((option) => String(option.link_number || '').trim() === normalized) || null;
+}
+
+async function loadRewriteAirLinkOptions() {
+    if (rewriteAirLinkOptions.length) return rewriteAirLinkOptions;
+    if (!rewriteAirLinkOptionsPromise) {
+        rewriteAirLinkOptionsPromise = apiFetch('/api/rewrite/air-energy-water-heater-links')
+            .then((data) => {
+                rewriteAirLinkOptions = Array.isArray(data?.options) ? data.options : [];
+                return rewriteAirLinkOptions;
+            })
+            .finally(() => {
+                rewriteAirLinkOptionsPromise = null;
+            });
+    }
+    return rewriteAirLinkOptionsPromise;
+}
+
+function renderRewriteAirLinkSelect(selectedLinkNumber = '') {
+    if (!rewriteLinkSelect) return;
+    if (rewriteLinkOptionsList) clearElement(rewriteLinkOptionsList);
+    const selectedOption = findRewriteAirLinkOption(selectedLinkNumber);
+    rewriteLinkSelect.dataset.value = selectedOption ? String(selectedOption.link_number || '') : '';
+    rewriteLinkSelect.textContent = selectedOption
+        ? `${selectedOption.link_number} - ${String(selectedOption.endpoint || '').replace(/\s+/g, ' ')}`
+        : rewriteAirLinkOptions.length ? '请选择链路编号' : '暂无可选链路';
+    rewriteLinkSelect.setAttribute('aria-expanded', 'false');
+    rewriteLinkOptionsList?.classList.add('hidden');
+    rewriteAirLinkOptions.forEach((option) => {
+        if (!rewriteLinkOptionsList) return;
+        const item = document.createElement('button');
+        item.type = 'button';
+        item.className = 'rewrite-link-option';
+        item.dataset.linkNumber = String(option.link_number || '');
+        item.setAttribute('role', 'option');
+        item.setAttribute(
+            'aria-selected',
+            String(option.link_number || '') === String(selectedLinkNumber || '') ? 'true' : 'false',
+        );
+        item.textContent = `${option.link_number} - ${String(option.endpoint || '').replace(/\s+/g, ' ')}`;
+        rewriteLinkOptionsList.appendChild(item);
+    });
+}
+
+function renderRewriteAirLinkDetail(option) {
+    if (!rewriteLinkDetail) return;
+    clearElement(rewriteLinkDetail);
+    if (!option) {
+        rewriteLinkDetail.innerHTML = '<p class="terminal-hint">选择链路编号后显示链路节点和路径。</p>';
+        return;
+    }
+    appendDataItem(rewriteLinkDetail, '链路编号', String(option.link_number || '-'));
+    appendDataItem(rewriteLinkDetail, '链路节点', String(option.endpoint || '-'));
+    appendDataItem(rewriteLinkDetail, '路径', Array.isArray(option.path) ? option.path.join(' > ') : '-');
+}
+
+function syncRewriteArrivalFaultRequirement(option) {
+    if (!rewriteLinkArrivalFaultField || !rewriteLinkArrivalFaultSelect) return;
+    const required = isAirLinkArrivalFaultOption(option);
+    rewriteLinkArrivalFaultField.classList.toggle('hidden', !required);
+    if (!required) {
+        rewriteLinkArrivalFaultSelect.value = '';
+    }
+}
+
+function updateRewriteLinkModalSelection() {
+    const option = findRewriteAirLinkOption(rewriteLinkSelect?.dataset.value);
+    renderRewriteAirLinkDetail(option);
+    syncRewriteArrivalFaultRequirement(option);
+    if (rewriteLinkError) rewriteLinkError.classList.add('hidden');
+}
+
+function toggleRewriteLinkOptions(forceOpen = null) {
+    if (!rewriteLinkSelect || !rewriteLinkOptionsList || rewriteLinkSelect.disabled) return;
+    const shouldOpen = forceOpen === null
+        ? rewriteLinkOptionsList.classList.contains('hidden')
+        : Boolean(forceOpen);
+    rewriteLinkOptionsList.classList.toggle('hidden', !shouldOpen);
+    rewriteLinkSelect.setAttribute('aria-expanded', shouldOpen ? 'true' : 'false');
+}
+
+function chooseRewriteLinkOption(linkNumber) {
+    const option = findRewriteAirLinkOption(linkNumber);
+    if (!option || !rewriteLinkSelect) return;
+    rewriteLinkSelect.dataset.value = String(option.link_number || '');
+    rewriteLinkSelect.textContent = `${option.link_number} - ${String(option.endpoint || '').replace(/\s+/g, ' ')}`;
+    if (rewriteLinkOptionsList) {
+        rewriteLinkOptionsList.querySelectorAll('.rewrite-link-option').forEach((node) => {
+            node.setAttribute('aria-selected', node.dataset.linkNumber === rewriteLinkSelect.dataset.value ? 'true' : 'false');
+        });
+    }
+    toggleRewriteLinkOptions(false);
+    updateRewriteLinkModalSelection();
+}
+
+function closeRewriteLinkModal() {
+    if (!rewriteLinkModal) return;
+    rewriteLinkModal.classList.add('hidden');
+    rewriteLinkModal.setAttribute('aria-hidden', 'true');
+    rewriteLinkSubmitAfterConfirm = false;
+    toggleRewriteLinkOptions(false);
+    if (rewriteLinkError) rewriteLinkError.classList.add('hidden');
+}
+
+async function openRewriteLinkModal({ submitAfterConfirm = false } = {}) {
+    if (!rewriteLinkModal || !rewriteLinkSelect) {
+        window.alert('当前页面缺少链路选择弹框，不能提交该条数据。');
+        return;
+    }
+    rewriteLinkSubmitAfterConfirm = Boolean(submitAfterConfirm);
+    rewriteLinkModal.classList.remove('hidden');
+    rewriteLinkModal.setAttribute('aria-hidden', 'false');
+    renderRewriteAirLinkDetail(null);
+    syncRewriteArrivalFaultRequirement(null);
+    if (rewriteLinkError) rewriteLinkError.classList.add('hidden');
+    rewriteLinkSelect.disabled = true;
+    rewriteLinkSelect.dataset.value = '';
+    renderRewriteAirLinkSelect('');
+    const record = rewriteRecords[rewriteSelectedIndex];
+    const currentSelection = getRewriteAirLinkSelection(record);
+    try {
+        await loadRewriteAirLinkOptions();
+        renderRewriteAirLinkSelect(currentSelection?.link_number || '');
+        if (rewriteLinkArrivalFaultSelect) {
+            rewriteLinkArrivalFaultSelect.value = String(currentSelection?.arrival_fault_type || '');
+        }
+        updateRewriteLinkModalSelection();
+    } catch (error) {
+        if (rewriteLinkError) {
+            rewriteLinkError.textContent = error.message || '链路列表加载失败。';
+            rewriteLinkError.classList.remove('hidden');
+        }
+    } finally {
+        rewriteLinkSelect.disabled = false;
+        window.requestAnimationFrame(() => rewriteLinkSelect.focus());
+    }
+}
+
+function validateRewriteAirLinkSelection(record, option) {
+    const selection = getRewriteAirLinkSelection(record);
+    if (!selection || !option) return false;
+    if (String(selection.link_number || '') !== String(option.link_number || '')) return false;
+    if (isAirLinkArrivalFaultOption(option) && !String(selection.arrival_fault_type || '').trim()) return false;
+    return true;
+}
+
+async function ensureCurrentRewriteAirLinkSelection() {
+    const record = rewriteRecords[rewriteSelectedIndex];
+    await loadRewriteAirLinkOptions();
+    const selection = getRewriteAirLinkSelection(record);
+    const option = findRewriteAirLinkOption(selection?.link_number);
+    if (validateRewriteAirLinkSelection(record, option)) return true;
+    await openRewriteLinkModal({ submitAfterConfirm: true });
+    return false;
+}
+
+function confirmRewriteLinkSelection() {
+    if (!Number.isInteger(rewriteSelectedIndex) || rewriteSelectedIndex < 0) return;
+    const record = rewriteRecords[rewriteSelectedIndex];
+    const option = findRewriteAirLinkOption(rewriteLinkSelect?.dataset.value);
+    const arrivalFaultType = String(rewriteLinkArrivalFaultSelect?.value || '').trim();
+    if (!record || !option) {
+        if (rewriteLinkError) {
+            rewriteLinkError.textContent = '请选择有效链路编号。';
+            rewriteLinkError.classList.remove('hidden');
+        }
+        return;
+    }
+    if (isAirLinkArrivalFaultOption(option) && !arrivalFaultType) {
+        if (rewriteLinkError) {
+            rewriteLinkError.textContent = '该链路节点需要选择到货或故障。';
+            rewriteLinkError.classList.remove('hidden');
+        }
+        return;
+    }
+    record.air_energy_water_heater_link = {
+        link_number: String(option.link_number || ''),
+        arrival_fault_type: isAirLinkArrivalFaultOption(option) ? arrivalFaultType : '',
+    };
+    const shouldSubmit = rewriteLinkSubmitAfterConfirm;
+    closeRewriteLinkModal();
+    renderRewriteRecordState(rewriteSelectedIndex);
+    if (shouldSubmit) {
+        finalizeCurrentRewriteRecord();
     }
 }
 
@@ -3965,6 +4285,16 @@ function renderRewriteRecordInfo(record) {
     const meta = buildRewriteRecordMeta(record);
     appendDataItem(rewriteRecordInfo, '轮次/行数', String(meta.turns));
     appendDataItem(rewriteRecordInfo, '状态', meta.status);
+    const airLinkSelection = getRewriteAirLinkSelection(record);
+    if (airLinkSelection) {
+        appendDataItem(rewriteRecordInfo, '空气能链路编号', airLinkSelection.link_number || '-');
+        appendDataItem(rewriteRecordInfo, '空气能链路节点', airLinkSelection.endpoint || '-');
+        if (airLinkSelection.arrival_fault_type) {
+            appendDataItem(rewriteRecordInfo, '到货/故障', airLinkSelection.arrival_fault_type);
+        }
+    } else {
+        appendDataItem(rewriteRecordInfo, '空气能链路', '未选择');
+    }
 
     if (record && typeof record === 'object') {
         [
@@ -7356,6 +7686,46 @@ rewriteRedoButton.addEventListener('click', () => {
 if (rewriteSubmitButton) {
     rewriteSubmitButton.addEventListener('click', () => {
         submitCurrentRewriteRecord();
+    });
+}
+if (rewriteAirLinkButton) {
+    rewriteAirLinkButton.addEventListener('click', () => {
+        openRewriteAirEnergyLinkPage();
+    });
+}
+if (rewriteLinkSelect) {
+    rewriteLinkSelect.addEventListener('click', () => {
+        toggleRewriteLinkOptions();
+    });
+}
+if (rewriteLinkOptionsList) {
+    rewriteLinkOptionsList.addEventListener('click', (event) => {
+        const optionButton = event.target.closest('.rewrite-link-option');
+        if (!optionButton) return;
+        chooseRewriteLinkOption(optionButton.dataset.linkNumber);
+    });
+    rewriteLinkOptionsList.addEventListener('wheel', (event) => {
+        event.stopPropagation();
+    });
+}
+if (rewriteLinkArrivalFaultSelect) {
+    rewriteLinkArrivalFaultSelect.addEventListener('change', () => {
+        if (rewriteLinkError) rewriteLinkError.classList.add('hidden');
+    });
+}
+if (rewriteLinkConfirmButton) {
+    rewriteLinkConfirmButton.addEventListener('click', () => {
+        confirmRewriteLinkSelection();
+    });
+}
+if (rewriteLinkCloseButton) {
+    rewriteLinkCloseButton.addEventListener('click', () => {
+        closeRewriteLinkModal();
+    });
+}
+if (rewriteLinkCancelButton) {
+    rewriteLinkCancelButton.addEventListener('click', () => {
+        closeRewriteLinkModal();
     });
 }
 if (rewriteExportButton) {

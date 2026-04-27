@@ -119,7 +119,7 @@ class ProductRoutingPlanTests(unittest.TestCase):
         )
 
         prompts = [step["prompt"] for step in plan["steps"]]
-        self.assertIn("这边看到您2024年5月有购买一台COLMO家用空气能热水机，请问是这台吗？", prompts)
+        self.assertIn("请问本次报单是您在2024年5月有购买一台COLMO家用空气能热水机，是吗？", prompts)
 
     def test_next_steps_preserve_initial_preview_plan_after_runtime_truncation(self):
         plan = {
@@ -153,7 +153,7 @@ class ProductRoutingPlanTests(unittest.TestCase):
                 },
                 {
                     "prompt_key": "history_device_confirmation",
-                    "prompt": "这边看到您2024年5月有购买一台COLMO家用空气能热水机，请问是这台吗？",
+                    "prompt": "请问本次报单是您在2024年5月有购买一台COLMO家用空气能热水机，是吗？",
                     "answer_key": "history_device.no_unknown",
                     "answer_value": "不是或不清楚查询到的设备",
                     "answer_instruction": "自然表达不是查询到的那台设备。",
@@ -949,7 +949,7 @@ class ProductRoutingServicePolicyTests(unittest.TestCase):
                 },
                 {
                     "prompt_key": "history_device_confirmation",
-                    "prompt": "这边看到您2025年5月有购买一台煤改电家用空气能热水机，请问是这台吗？",
+                    "prompt": "请问本次报单是您在2025年5月有购买一台煤改电家用空气能热水机，是吗？",
                     "answer_key": "history_device.no_unknown",
                     "answer_value": "不是或不清楚查询到的设备",
                     "answer_instruction": "自然表达不是查询到的那台设备。",
@@ -984,7 +984,7 @@ class ProductRoutingServicePolicyTests(unittest.TestCase):
             transcript=[
                 DialogueTurn(
                     speaker="service",
-                    text="这边看到您2025年5月有购买一台煤改电家用空气能热水机，请问是这台吗？",
+                    text="请问本次报单是您在2025年5月有购买一台煤改电家用空气能热水机，是吗？",
                     round_index=5,
                 ),
                 DialogueTurn(speaker="user", text="呃，不是这台。", round_index=6),
@@ -1052,7 +1052,7 @@ class ProductRoutingServicePolicyTests(unittest.TestCase):
                 },
                 {
                     "prompt_key": "history_device_confirmation",
-                    "prompt": "这边看到您2025年5月有购买一台煤改电家用空气能热水机，请问是这台吗？",
+                    "prompt": "请问本次报单是您在2025年5月有购买一台煤改电家用空气能热水机，是吗？",
                     "answer_key": "history_device.no_unknown",
                     "answer_value": "不是或不清楚查询到的设备",
                     "answer_instruction": "自然表达不是查询到的那台设备。",
@@ -1090,7 +1090,7 @@ class ProductRoutingServicePolicyTests(unittest.TestCase):
             transcript=[
                 DialogueTurn(
                     speaker="service",
-                    text="这边看到您2025年5月有购买一台煤改电家用空气能热水机，请问是这台吗？",
+                    text="请问本次报单是您在2025年5月有购买一台煤改电家用空气能热水机，是吗？",
                     round_index=5,
                 ),
                 DialogueTurn(speaker="user", text="呃，不是这台。", round_index=6),
@@ -1133,7 +1133,7 @@ class ProductRoutingServicePolicyTests(unittest.TestCase):
             "steps": [
                 {
                     "prompt_key": "history_device_confirmation",
-                    "prompt": "这边看到您2019年4月有购买一台美的家用空气能热水机，请问是这台吗？",
+                    "prompt": "请问本次报单是您在2019年4月有购买一台美的家用空气能热水机，是吗？",
                     "answer_key": "history_device.yes",
                     "answer_value": "是查询到的这台设备",
                     "answer_instruction": "自然确认就是查询到的历史设备。",
@@ -1164,7 +1164,7 @@ class ProductRoutingServicePolicyTests(unittest.TestCase):
             transcript=[
                 DialogueTurn(
                     speaker="service",
-                    text="这边看到您2019年4月有购买一台美的家用空气能热水机，请问是这台吗？",
+                    text="请问本次报单是您在2019年4月有购买一台美的家用空气能热水机，是吗？",
                     round_index=5,
                 ),
                 DialogueTurn(speaker="user", text="啊，对对对，买了五六年了。", round_index=6),
@@ -1190,6 +1190,226 @@ class ProductRoutingServicePolicyTests(unittest.TestCase):
             state.product_routing_observed_trace,
             ["entry.unknown", "scene.family", "history_device.yes"],
         )
+
+    def test_service_policy_history_device_prompt_can_use_query_prefix(self):
+        plan = {
+            "enabled": True,
+            "result": ROUTING_RESULT_HOME,
+            "trace": ["entry.unknown", "scene.family", "history_device.yes"],
+            "summary": "entry.unknown -> scene.family -> history_device.yes -> 家用 + 可直接确认机型",
+            "steps": [
+                {
+                    "prompt_key": "history_device_confirmation",
+                    "prompt": "请问本次报单是您在2019年4月有购买一台美的家用空气能热水机，是吗？",
+                    "answer_key": "history_device.yes",
+                    "answer_value": "是查询到的这台设备",
+                    "answer_instruction": "自然确认就是查询到的历史设备。",
+                },
+            ],
+        }
+        policy = ServiceDialoguePolicy(query_prefix_weights={"好的": 1.0})
+        result = policy._start_product_routing_step(
+            scenario=build_scenario_with_routing(plan),
+            runtime_state=ServiceRuntimeState(),
+            slot_updates={},
+        )
+
+        self.assertEqual(
+            result.reply,
+            "好的，请问本次报单是您在2019年4月有购买一台美的家用空气能热水机，是吗？",
+        )
+
+    def test_service_policy_product_routing_two_model_unmatched_replies_enters_sms_fill_confirmation(self):
+        model_calls = []
+
+        def fake_routing_inference(*, prompt_key: str, user_text: str, user_round_index: int):
+            model_calls.append((prompt_key, user_text, user_round_index))
+            return {
+                "prompt_key": prompt_key,
+                "answer_key": "",
+            }
+
+        plan = {
+            "enabled": True,
+            "result": ROUTING_RESULT_BUILDING,
+            "trace": ["entry.unknown", "scene.other_unknown"],
+            "summary": "entry.unknown -> scene.other_unknown -> 楼宇 + 可直接确认机型",
+            "steps": [
+                {
+                    "prompt_key": "brand_or_series",
+                    "prompt": PROMPT_BRAND_OR_SERIES,
+                    "answer_key": "entry.unknown",
+                    "answer_value": "不知道品牌或系列",
+                    "answer_instruction": "自然表达自己不知道品牌或系列。",
+                },
+            ],
+        }
+        policy = ServiceDialoguePolicy(
+            ok_prefix_probability=0.0,
+            product_routing_intent_inference_callback=fake_routing_inference,
+        )
+        state = ServiceRuntimeState(expected_product_routing_response=True)
+        slots = {
+            "issue_description": "",
+            "surname": "",
+            "phone": "",
+            "address": "",
+            "request_type": "",
+            "phone_contactable": "",
+            "phone_contact_owner": "",
+            "phone_collection_attempts": "",
+            "product_arrived": "",
+        }
+
+        first = policy.respond(
+            scenario=build_scenario_with_routing(plan),
+            transcript=[
+                DialogueTurn(speaker="service", text=PROMPT_BRAND_OR_SERIES, round_index=2),
+                DialogueTurn(speaker="user", text="你们什么时候上门啊", round_index=3),
+            ],
+            collected_slots=slots,
+            runtime_state=state,
+        )
+        second = policy.respond(
+            scenario=build_scenario_with_routing(plan),
+            transcript=[
+                DialogueTurn(speaker="service", text=PROMPT_BRAND_OR_SERIES, round_index=2),
+                DialogueTurn(speaker="user", text="你们什么时候上门啊", round_index=3),
+                DialogueTurn(speaker="service", text=first.reply, round_index=4),
+                DialogueTurn(speaker="user", text="费用怎么算", round_index=5),
+            ],
+            collected_slots=slots,
+            runtime_state=state,
+        )
+
+        self.assertEqual(first.reply, PROMPT_BRAND_OR_SERIES)
+        self.assertEqual(
+            second.reply,
+            "很抱歉，我们将为您下发短信，您可点击短信链接，补充信息并提交，您看是否可以？",
+        )
+        self.assertEqual(len(model_calls), 2)
+        self.assertFalse(state.expected_product_routing_response)
+        self.assertTrue(state.expected_phone_sms_fill_confirmation)
+        self.assertEqual(state.sms_fill_origin, "product_routing")
+
+    def test_service_policy_reasks_usage_scene_when_model_misclassifies_chitchat_as_unknown(self):
+        def fake_routing_inference(*, prompt_key: str, user_text: str, user_round_index: int):
+            self.assertEqual(prompt_key, "usage_scene")
+            self.assertEqual(user_text, "我爱你。")
+            return {
+                "prompt_key": "usage_scene",
+                "answer_key": "scene.other_unknown",
+            }
+
+        plan = {
+            "enabled": True,
+            "result": ROUTING_RESULT_BUILDING,
+            "trace": ["entry.unknown", "scene.other_unknown"],
+            "summary": "entry.unknown -> scene.other_unknown -> 楼宇 + 可直接确认机型",
+            "steps": [
+                {
+                    "prompt_key": "brand_or_series",
+                    "prompt": PROMPT_BRAND_OR_SERIES,
+                    "answer_key": "entry.unknown",
+                    "answer_value": "不知道品牌或系列",
+                    "answer_instruction": "自然表达自己不知道品牌或系列。",
+                },
+                {
+                    "prompt_key": "usage_scene",
+                    "prompt": PROMPT_USAGE_SCENE,
+                    "answer_key": "scene.other_unknown",
+                    "answer_value": "不清楚具体使用场所",
+                    "answer_instruction": "自然表达空气能是在其他地方使用，或者自己不清楚具体场所。",
+                },
+            ],
+        }
+        policy = ServiceDialoguePolicy(
+            ok_prefix_probability=0.0,
+            product_routing_intent_inference_callback=fake_routing_inference,
+        )
+        state = ServiceRuntimeState(
+            expected_product_routing_response=True,
+            product_routing_step_index=1,
+            product_routing_observed_trace=["entry.unknown"],
+        )
+
+        result = policy.respond(
+            scenario=build_scenario_with_routing(plan),
+            transcript=[
+                DialogueTurn(speaker="service", text=PROMPT_BRAND_OR_SERIES, round_index=3),
+                DialogueTurn(speaker="user", text="美的的。", round_index=4),
+                DialogueTurn(speaker="service", text=PROMPT_USAGE_SCENE, round_index=4),
+                DialogueTurn(speaker="user", text="我爱你。", round_index=5),
+            ],
+            collected_slots={
+                "issue_description": "",
+                "surname": "",
+                "phone": "",
+                "address": "",
+                "request_type": "",
+                "phone_contactable": "",
+                "phone_contact_owner": "",
+                "phone_collection_attempts": "",
+                "product_arrived": "",
+            },
+            runtime_state=state,
+        )
+
+        self.assertEqual(result.reply, PROMPT_USAGE_SCENE)
+        self.assertTrue(state.expected_product_routing_response)
+        self.assertEqual(state.product_routing_off_topic_count, 1)
+        self.assertEqual(state.product_routing_observed_trace, ["entry.unknown"])
+
+    def test_service_policy_product_routing_sms_confirmation_decline_transfers_to_human(self):
+        policy = ServiceDialoguePolicy(ok_prefix_probability=0.0)
+        state = ServiceRuntimeState(
+            expected_phone_sms_fill_confirmation=True,
+            sms_fill_origin="product_routing",
+        )
+
+        result = policy.respond(
+            scenario=build_scenario_with_routing(),
+            transcript=[
+                DialogueTurn(
+                    speaker="service",
+                    text="很抱歉，我们将为您下发短信，您可点击短信链接，补充信息并提交，您看是否可以？",
+                    round_index=6,
+                ),
+                DialogueTurn(speaker="user", text="我不想填短信", round_index=7),
+            ],
+            collected_slots={},
+            runtime_state=state,
+        )
+
+        self.assertEqual(result.reply, "请稍等，正在为您转接人工服务。")
+        self.assertTrue(result.is_ready_to_close)
+        self.assertEqual(result.close_reason, "product_routing_sms_declined")
+        self.assertEqual(result.slot_updates["product_routing_result"], "转人工")
+
+    def test_service_policy_product_routing_sms_confirmation_yes_closes_with_sms_sent(self):
+        policy = ServiceDialoguePolicy(ok_prefix_probability=0.0)
+        state = ServiceRuntimeState(
+            expected_phone_sms_fill_confirmation=True,
+            sms_fill_origin="product_routing",
+        )
+
+        result = policy.respond(
+            scenario=build_scenario_with_routing(),
+            transcript=[
+                DialogueTurn(
+                    speaker="service",
+                    text="很抱歉，我们将为您下发短信，您可点击短信链接，补充信息并提交，您看是否可以？",
+                    round_index=6,
+                ),
+                DialogueTurn(speaker="user", text="可以", round_index=7),
+            ],
+            collected_slots={},
+            runtime_state=state,
+        )
+
+        self.assertEqual(result.reply, "短信已发送，请稍后留意查看，感谢您的来电，再见！")
+        self.assertTrue(result.is_ready_to_close)
+        self.assertFalse(state.expected_phone_sms_fill_confirmation)
 
     def test_service_policy_treats_generic_midea_brand_as_unknown_entry(self):
         plan = {
