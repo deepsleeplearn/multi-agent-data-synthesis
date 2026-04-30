@@ -293,6 +293,13 @@ class ProductRoutingPlanTests(unittest.TestCase):
 
                 self.assertEqual(answer_key, "brand_series.colmo")
 
+    def test_infer_product_routing_answer_key_maps_clever_to_colmo_branch(self):
+        for user_text in ("克莱沃的", "克来沃的", "科莱沃", "克莱我这个牌子", "克来我系列"):
+            with self.subTest(user_text=user_text):
+                answer_key = infer_product_routing_answer_key("brand_or_series", user_text)
+
+                self.assertEqual(answer_key, "brand_series.colmo")
+
     def test_infer_product_routing_answer_key_maps_lieyan_homophones(self):
         for user_text in ("莲叶的", "莲炎的", "列焰的", "连叶的", "连夜的好像", "莲夜系列"):
             with self.subTest(user_text=user_text):
@@ -834,7 +841,7 @@ class ProductRoutingServicePolicyTests(unittest.TestCase):
             collected_slots=collected_slots,
             runtime_state=state,
         )
-        self.assertEqual(post_routing.reply, "请问热水器现在是出现了什么问题？")
+        self.assertEqual(post_routing.reply, "请问空气能现在是出现了什么问题？")
         self.assertEqual(post_routing.slot_updates["product_routing_result"], ROUTING_RESULT_BUILDING)
         self.assertTrue(state.product_routing_completed)
 
@@ -1184,7 +1191,7 @@ class ProductRoutingServicePolicyTests(unittest.TestCase):
         )
 
         self.assertNotEqual(result.reply, PROMPT_PURCHASE_OR_PROPERTY)
-        self.assertEqual(result.reply, "请问热水器现在是出现了什么问题？")
+        self.assertEqual(result.reply, "请问空气能现在是出现了什么问题？")
         self.assertTrue(policy.last_used_model_intent_inference)
         self.assertEqual(
             state.product_routing_observed_trace,
@@ -1219,7 +1226,7 @@ class ProductRoutingServicePolicyTests(unittest.TestCase):
             "好的，请问本次报单是您在2019年4月有购买一台美的家用空气能热水机，是吗？",
         )
 
-    def test_service_policy_product_routing_two_model_unmatched_replies_enters_sms_fill_confirmation(self):
+    def test_service_policy_product_routing_two_model_unmatched_replies_transfers_to_human(self):
         model_calls = []
 
         def fake_routing_inference(*, prompt_key: str, user_text: str, user_round_index: int):
@@ -1283,14 +1290,77 @@ class ProductRoutingServicePolicyTests(unittest.TestCase):
         )
 
         self.assertEqual(first.reply, PROMPT_BRAND_OR_SERIES)
-        self.assertEqual(
-            second.reply,
-            "很抱歉，我们将为您下发短信，您可点击短信链接，补充信息并提交，您看是否可以？",
-        )
+        self.assertEqual(second.reply, "请稍等，正在为您转接人工服务。")
         self.assertEqual(len(model_calls), 2)
         self.assertFalse(state.expected_product_routing_response)
-        self.assertTrue(state.expected_phone_sms_fill_confirmation)
-        self.assertEqual(state.sms_fill_origin, "product_routing")
+        self.assertFalse(state.expected_phone_sms_fill_confirmation)
+        self.assertEqual(second.close_status, "transferred")
+        self.assertEqual(second.close_reason, "product_routing_off_topic")
+
+    def test_service_policy_product_routing_model_empty_unknown_reply_advances(self):
+        model_calls = []
+
+        def fake_routing_inference(*, prompt_key: str, user_text: str, user_round_index: int):
+            model_calls.append((prompt_key, user_text, user_round_index))
+            return {
+                "prompt_key": prompt_key,
+                "answer_key": "",
+            }
+
+        plan = {
+            "enabled": True,
+            "result": "",
+            "trace": [],
+            "summary": "",
+            "steps": [
+                {
+                    "prompt_key": "brand_or_series",
+                    "prompt": PROMPT_BRAND_OR_SERIES,
+                    "answer_key": "entry.unknown",
+                    "answer_value": "不知道品牌或系列",
+                    "answer_instruction": "自然表达自己不知道品牌或系列。",
+                },
+                {
+                    "prompt_key": "usage_scene",
+                    "prompt": PROMPT_USAGE_SCENE,
+                    "answer_key": "scene.family",
+                    "answer_value": "家庭使用",
+                    "answer_instruction": "自然表达空气能在家庭使用。",
+                },
+            ],
+        }
+        policy = ServiceDialoguePolicy(
+            ok_prefix_probability=0.0,
+            product_routing_intent_inference_callback=fake_routing_inference,
+        )
+        state = ServiceRuntimeState(expected_product_routing_response=True)
+
+        result = policy.respond(
+            scenario=build_scenario_with_routing(plan),
+            transcript=[
+                DialogueTurn(speaker="service", text=PROMPT_BRAND_OR_SERIES, round_index=2),
+                DialogueTurn(speaker="user", text="我不知道啊。", round_index=3),
+            ],
+            collected_slots={
+                "issue_description": "",
+                "surname": "",
+                "phone": "",
+                "address": "",
+                "request_type": "",
+                "phone_contactable": "",
+                "phone_contact_owner": "",
+                "phone_collection_attempts": "",
+                "product_arrived": "",
+            },
+            runtime_state=state,
+        )
+
+        self.assertEqual(result.reply, PROMPT_USAGE_SCENE)
+        self.assertEqual(model_calls, [("brand_or_series", "我不知道啊。", 3)])
+        self.assertTrue(state.expected_product_routing_response)
+        self.assertEqual(state.product_routing_off_topic_count, 0)
+        self.assertEqual(state.product_routing_observed_trace, ["entry.unknown"])
+        self.assertEqual(result.close_status, "")
 
     def test_service_policy_reasks_usage_scene_when_model_misclassifies_chitchat_as_unknown(self):
         def fake_routing_inference(*, prompt_key: str, user_text: str, user_round_index: int):
@@ -1567,7 +1637,7 @@ class ProductRoutingServicePolicyTests(unittest.TestCase):
             runtime_state=state,
         )
 
-        self.assertEqual(result.reply, "请问热水器现在是出现了什么问题？")
+        self.assertEqual(result.reply, "请问空气能现在是出现了什么问题？")
         self.assertEqual(state.product_routing_observed_trace, ["entry.unknown", "scene.other_unknown"])
         self.assertEqual(
             scenario.hidden_context["product_routing_trace"],
@@ -1618,7 +1688,7 @@ class ProductRoutingServicePolicyTests(unittest.TestCase):
             runtime_state=state,
         )
 
-        self.assertEqual(result.reply, "请问热水器现在是出现了什么问题？")
+        self.assertEqual(result.reply, "请问空气能现在是出现了什么问题？")
         self.assertEqual(result.slot_updates["product_routing_result"], ROUTING_RESULT_BUILDING)
         self.assertEqual(
             state.product_routing_observed_trace,
@@ -1670,7 +1740,7 @@ class ProductRoutingServicePolicyTests(unittest.TestCase):
             runtime_state=state,
         )
 
-        self.assertEqual(result.reply, "请问热水器现在是出现了什么问题？")
+        self.assertEqual(result.reply, "请问空气能现在是出现了什么问题？")
         self.assertEqual(result.slot_updates["product_routing_result"], ROUTING_RESULT_BUILDING)
         self.assertEqual(
             state.product_routing_observed_trace,

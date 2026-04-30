@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import random
 import unittest
+from datetime import datetime, timedelta
 
 from css_data_synthesis_test.scenario_factory import ScenarioFactory
 from css_data_synthesis_test.schemas import Scenario
+from css_data_synthesis_test.static_utterances import appointment_utterance
 
 
 def build_scenarios() -> list[Scenario]:
@@ -72,11 +74,44 @@ class ScenarioFactoryTests(unittest.TestCase):
         hydrated = factory.expand_to_count(scenarios, 2)
 
         self.assertEqual(len(hydrated), 2)
-        self.assertRegex(hydrated[0].call_start_time, r"^\d{2}:\d{2}:\d{2}$")
-        self.assertRegex(hydrated[1].call_start_time, r"^\d{2}:\d{2}:\d{2}$")
+        self.assertRegex(hydrated[0].call_start_time, r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$")
+        self.assertRegex(hydrated[1].call_start_time, r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$")
         self.assertNotEqual(hydrated[0].call_start_time, "")
         self.assertNotEqual(hydrated[1].call_start_time, "")
         self.assertNotEqual(hydrated[0].call_start_time, hydrated[1].call_start_time)
+
+    def test_hydrates_call_start_time_across_recent_years(self):
+        factory = ScenarioFactory(rng=random.Random(3))
+        scenarios = factory.expand_to_count(build_scenarios(), 200)
+        parsed_times = [
+            datetime.strptime(scenario.call_start_time, "%Y-%m-%d %H:%M:%S")
+            for scenario in scenarios
+        ]
+
+        latest_allowed = datetime.now() + timedelta(days=1)
+        earliest_allowed = datetime.now() - timedelta(days=(3 * 366) + 1)
+        self.assertTrue(all(earliest_allowed <= parsed <= latest_allowed for parsed in parsed_times))
+        self.assertGreaterEqual(len({parsed.year for parsed in parsed_times}), 3)
+
+    def test_appointment_utterance_uses_time_of_day_from_full_call_start_time(self):
+        self.assertEqual(
+            appointment_utterance(
+                brand="美的",
+                category="空气能热水器",
+                request_type="fault",
+                call_start_time="2023-02-01 07:59:59",
+            ),
+            "好的，您的工单已受理成功，上午10点前会有专人与您确认服务时间。",
+        )
+        self.assertEqual(
+            appointment_utterance(
+                brand="美的",
+                category="空气能热水器",
+                request_type="fault",
+                call_start_time="2021-11-20 18:30:00",
+            ),
+            "好的，您的工单已受理成功，明天上午10点前会有专人与您确认服务时间。",
+        )
 
     def test_preserves_explicit_call_start_time(self):
         factory = ScenarioFactory(rng=random.Random(0))

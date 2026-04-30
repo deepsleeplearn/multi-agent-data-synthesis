@@ -15,9 +15,13 @@ from css_data_synthesis_test.dialogue_plans import decide_second_round_reply_str
 from css_data_synthesis_test.hidden_settings_tool import (
     COHERENT_ADDRESS_ADMIN_OPTIONS,
     COHERENT_MUNICIPALITY_CITY_DISTRICT_MAP,
+    COHERENT_MUNICIPALITY_DISTRICT_TOWN_MAP,
     COHERENT_MUNICIPALITY_OPTIONS,
     COHERENT_REGION_CITY_DISTRICT_MAP,
+    COHERENT_REGION_CITY_DISTRICT_TOWN_MAP,
     COHERENT_REGION_OPTIONS,
+    ADDRESS_COMMUNITY_OPTIONS,
+    ADDRESS_VILLAGE_OPTIONS,
     HiddenSettingsRepository,
     HiddenSettingsTool,
     SURNAME_OPTIONS,
@@ -2815,14 +2819,30 @@ class UserPromptTests(unittest.TestCase):
 
         self.assertEqual(set(COHERENT_REGION_CITY_DISTRICT_MAP.keys()), expected_non_municipal_regions)
         self.assertEqual(set(COHERENT_MUNICIPALITY_CITY_DISTRICT_MAP.keys()), expected_municipalities)
-        self.assertGreaterEqual(len(COHERENT_REGION_OPTIONS), len(expected_non_municipal_regions) * 2)
+        self.assertGreaterEqual(len(COHERENT_REGION_OPTIONS), 280)
         self.assertEqual(len(COHERENT_MUNICIPALITY_OPTIONS), len(expected_municipalities))
-        self.assertGreaterEqual(len(COHERENT_ADDRESS_ADMIN_OPTIONS), 150)
+        self.assertGreaterEqual(len(COHERENT_ADDRESS_ADMIN_OPTIONS), 25000)
 
         for province, cities in COHERENT_REGION_CITY_DISTRICT_MAP.items():
-            self.assertGreaterEqual(len(cities), 2, province)
+            self.assertGreaterEqual(len(cities), 1, province)
             for city, districts in cities.items():
-                self.assertGreaterEqual(len(districts), 3, city)
+                self.assertGreaterEqual(len(districts), 1, city)
+                for district in districts:
+                    self.assertIn(
+                        district,
+                        COHERENT_REGION_CITY_DISTRICT_TOWN_MAP[province][city],
+                        f"{province}{city}{district}",
+                    )
+                    self.assertGreaterEqual(
+                        len(COHERENT_REGION_CITY_DISTRICT_TOWN_MAP[province][city][district]),
+                        1,
+                        f"{province}{city}{district}",
+                    )
+        for city, districts in COHERENT_MUNICIPALITY_CITY_DISTRICT_MAP.items():
+            self.assertGreaterEqual(len(districts), 10, city)
+            for district in districts:
+                self.assertIn(district, COHERENT_MUNICIPALITY_DISTRICT_TOWN_MAP[city], f"{city}{district}")
+                self.assertGreaterEqual(len(COHERENT_MUNICIPALITY_DISTRICT_TOWN_MAP[city][district]), 1)
 
     def test_generate_local_customer_address_uses_real_admin_division_prefix(self):
         valid_prefixes = {
@@ -2833,6 +2853,47 @@ class UserPromptTests(unittest.TestCase):
         for seed in range(30):
             address = generate_local_customer_address(f"seed-{seed}")
             self.assertTrue(any(address.startswith(prefix) for prefix in valid_prefixes), address)
+
+    def test_generate_local_customer_address_samples_broad_region_pool(self):
+        admin_prefixes = [
+            (
+                f"{option['province']}{option['city']}{option['district']}{option['town']}",
+                option,
+            )
+            for option in COHERENT_ADDRESS_ADMIN_OPTIONS
+        ]
+        sampled_provinces: set[str] = set()
+        sampled_cities: set[str] = set()
+        sampled_districts: set[tuple[str, str]] = set()
+        sampled_towns: set[tuple[str, str]] = set()
+
+        for seed in range(300):
+            address = generate_local_customer_address(f"diversity-{seed}")
+            matched_option = next(
+                option for prefix, option in admin_prefixes if address.startswith(prefix)
+            )
+            sampled_provinces.add(matched_option["province"] or matched_option["city"])
+            sampled_cities.add(matched_option["city"])
+            sampled_districts.add((matched_option["city"], matched_option["district"]))
+            sampled_towns.add((matched_option["district"], matched_option["town"]))
+
+        self.assertGreaterEqual(len(sampled_provinces), 25)
+        self.assertGreaterEqual(len(sampled_cities), 120)
+        self.assertGreaterEqual(len(sampled_districts), 200)
+        self.assertGreaterEqual(len(sampled_towns), 280)
+
+    def test_local_address_name_pools_are_broad_and_deduplicated(self):
+        self.assertGreaterEqual(len(ADDRESS_COMMUNITY_OPTIONS), 300)
+        self.assertGreaterEqual(len(ADDRESS_VILLAGE_OPTIONS), 250)
+        self.assertEqual(len(ADDRESS_COMMUNITY_OPTIONS), len(set(ADDRESS_COMMUNITY_OPTIONS)))
+        self.assertEqual(len(ADDRESS_VILLAGE_OPTIONS), len(set(ADDRESS_VILLAGE_OPTIONS)))
+        self.assertTrue(
+            all(
+                name.endswith(("小区", "社区", "花园", "家园", "新村", "苑", "园", "府", "庭", "城", "公馆", "绿洲", "国际"))
+                for name in ADDRESS_COMMUNITY_OPTIONS
+            )
+        )
+        self.assertTrue(all(name.endswith("村") for name in ADDRESS_VILLAGE_OPTIONS))
 
     def test_generate_local_customer_address_uses_multiple_detail_templates(self):
         detail_styles: set[str] = set()
@@ -2855,6 +2916,39 @@ class UserPromptTests(unittest.TestCase):
                 detail_styles.add("building-room")
 
         self.assertGreaterEqual(len(detail_styles), 3)
+
+    def test_generate_local_customer_address_uses_rich_detail_expressions(self):
+        detail_styles: set[str] = set()
+
+        for style in (
+            "standard_residential",
+            "house_number_only",
+            "rural_group_number",
+            "landmark_poi",
+        ):
+            for seed in range(400):
+                address = generate_local_customer_address(f"rich-detail-seed-{style}-{seed}", style)
+                HiddenSettingsTool._validate_address_completeness(address)
+                if re.search(r"(?:路|街)\d+号", address):
+                    detail_styles.add("road-house-number")
+                if re.search(r"(?:巷|胡同)\d+号", address):
+                    detail_styles.add("lane-house-number")
+                if "号院" in address:
+                    detail_styles.add("compound-number")
+                if "附" in address and "号" in address:
+                    detail_styles.add("attached-number")
+                if "号房" in address:
+                    detail_styles.add("room-label")
+                if re.search(r"(?:[一二三四]期|[东西南北]区|[AB]区)", address):
+                    detail_styles.add("community-section")
+                if "排" in address:
+                    detail_styles.add("row-number")
+                if re.search(r"(?:组|队)\d+号", address):
+                    detail_styles.add("rural-team-number")
+                if any(marker in address for marker in ("东侧", "后面", "附近")):
+                    detail_styles.add("landmark-direction")
+
+        self.assertGreaterEqual(len(detail_styles), 8)
 
     def test_generate_region_stale_address_keeps_valid_province_city_pairing(self):
         stale_address = HiddenSettingsTool._generate_region_stale_address(

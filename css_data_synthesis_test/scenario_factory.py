@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import random
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from css_data_synthesis_test.schemas import Scenario
@@ -76,7 +77,9 @@ class ScenarioFactory:
         return scenario.with_call_start_time(self._generate_call_start_time())
 
     def _generate_call_start_time(self) -> str:
+        today = datetime.now().date()
+        call_date = today - timedelta(days=self.rng.randint(0, 3 * 366))
         seconds = self.rng.randint(0, 86399)
         hour, remainder = divmod(seconds, 3600)
         minute, second = divmod(remainder, 60)
-        return f"{hour:02d}:{minute:02d}:{second:02d}"
+        return f"{call_date:%Y-%m-%d} {hour:02d}:{minute:02d}:{second:02d}"

@@ -380,7 +380,125 @@ class ServicePolicyTests(unittest.TestCase):
         )
 
         self.assertNotIn("issue_description", result.slot_updates)
-        self.assertEqual(result.reply, "请问热水器现在是出现了什么问题？")
+        self.assertEqual(result.reply, "请问空气能现在是出现了什么问题？")
+
+    def test_air_energy_opening_request_changed_to_fault_asks_issue(self):
+        policy = ServiceDialoguePolicy(ok_prefix_probability=0.0)
+        scenario = build_installation_scenario(category="空气能热水机")
+        state = ServiceRuntimeState()
+        collected_slots = {
+            "issue_description": "",
+            "surname": "",
+            "phone": "",
+            "address": "",
+            "product_model": "",
+            "request_type": "",
+            "availability": "",
+            "phone_contactable": "",
+            "phone_contact_owner": "",
+            "phone_collection_attempts": "",
+        }
+
+        result = policy.respond(
+            scenario=scenario,
+            transcript=[
+                DialogueTurn(speaker="service", text="您好，很高兴为您服务，请问是美的空气能热水机需要安装吗？", round_index=1),
+                DialogueTurn(speaker="user", text="不是，是维修。", round_index=2),
+            ],
+            collected_slots=collected_slots,
+            runtime_state=state,
+        )
+
+        self.assertEqual(scenario.request.request_type, "fault")
+        self.assertEqual(result.slot_updates["request_type"], "fault")
+        self.assertNotIn("issue_description", result.slot_updates)
+        self.assertEqual(result.reply, "请问空气能现在是出现了什么问题？")
+        self.assertFalse(state.expected_product_arrival_confirmation)
+
+    def test_air_energy_opening_request_changed_to_installation_asks_arrival(self):
+        policy = ServiceDialoguePolicy(ok_prefix_probability=0.0)
+        scenario = build_scenario()
+        state = ServiceRuntimeState()
+        collected_slots = {
+            "issue_description": "",
+            "surname": "",
+            "phone": "",
+            "address": "",
+            "product_model": "",
+            "request_type": "",
+            "availability": "",
+            "phone_contactable": "",
+            "phone_contact_owner": "",
+            "phone_collection_attempts": "",
+            "product_arrived": "",
+        }
+
+        result = policy.respond(
+            scenario=scenario,
+            transcript=[
+                DialogueTurn(speaker="service", text="您好，很高兴为您服务，请问是美的空气能热水器需要维修吗？", round_index=1),
+                DialogueTurn(speaker="user", text="不是维修，是安装。", round_index=2),
+            ],
+            collected_slots=collected_slots,
+            runtime_state=state,
+        )
+
+        self.assertEqual(scenario.request.request_type, "installation")
+        self.assertEqual(result.slot_updates["request_type"], "installation")
+        self.assertEqual(result.slot_updates["issue_description"], "美的空气能热水器需要安装。")
+        self.assertEqual(result.reply, "请问您的热水器已经送到了吗？")
+        self.assertTrue(state.expected_product_arrival_confirmation)
+
+    def test_air_energy_opening_request_phrase_is_not_captured_as_surname(self):
+        policy = ServiceDialoguePolicy(ok_prefix_probability=0.0)
+        scenario = build_scenario()
+        state = ServiceRuntimeState()
+        collected_slots = {
+            "issue_description": "",
+            "surname": "",
+            "phone": "",
+            "address": "",
+            "product_model": "",
+            "request_type": "",
+            "availability": "",
+            "phone_contactable": "",
+            "phone_contact_owner": "",
+            "phone_collection_attempts": "",
+            "product_arrived": "",
+        }
+
+        opening_result = policy.respond(
+            scenario=scenario,
+            transcript=[
+                DialogueTurn(speaker="service", text="您好，很高兴为您服务，请问是美的空气能热水器需要维修吗？", round_index=1),
+                DialogueTurn(speaker="user", text="要安装", round_index=2),
+            ],
+            collected_slots=collected_slots,
+            runtime_state=state,
+        )
+        collected_slots.update(opening_result.slot_updates)
+
+        self.assertEqual(opening_result.slot_updates["request_type"], "installation")
+        self.assertNotIn("surname", opening_result.slot_updates)
+        self.assertEqual(opening_result.reply, "请问您的热水器已经送到了吗？")
+
+        arrival_result = policy.respond(
+            scenario=scenario,
+            transcript=[
+                DialogueTurn(speaker="service", text=opening_result.reply, round_index=3),
+                DialogueTurn(speaker="user", text="送到了。", round_index=4),
+            ],
+            collected_slots=collected_slots,
+            runtime_state=state,
+        )
+
+        self.assertEqual(arrival_result.reply, "请问您贵姓？")
+
+    def test_product_brand_series_phrase_is_not_captured_as_surname(self):
+        self.assertEqual(ServiceDialoguePolicy._extract_freeform_surname("科目的。"), "")
+        self.assertEqual(ServiceDialoguePolicy._extract_freeform_surname("美的的。"), "")
+        self.assertEqual(ServiceDialoguePolicy._extract_freeform_surname("克莱沃"), "")
+        self.assertEqual(ServiceDialoguePolicy._extract_freeform_surname("免贵姓王。"), "王")
 
     def test_opening_intent_forces_model_fallback_when_rule_cannot_match(self):
         def fake_opening_inference(*, user_text: str, user_round_index: int):
@@ -418,7 +536,7 @@ class ServicePolicyTests(unittest.TestCase):
             runtime_state=state,
         )
 
-        self.assertEqual(result.reply, "请问热水器现在是出现了什么问题？")
+        self.assertEqual(result.reply, "请问空气能现在是出现了什么问题？")
         self.assertTrue(policy.last_used_model_intent_inference)
 
     def test_initial_user_utterance_is_config_driven(self):
@@ -720,7 +838,7 @@ class ServicePolicyTests(unittest.TestCase):
             runtime_state=state,
         )
 
-        self.assertEqual(second_result.reply, "请问热水器现在是出现了什么问题？")
+        self.assertEqual(second_result.reply, "请问空气能现在是出现了什么问题？")
         self.assertEqual(state.product_routing_observed_trace, ["brand_series.colmo"])
         self.assertFalse(state.expected_product_routing_response)
         self.assertTrue(state.product_routing_completed)
@@ -805,7 +923,7 @@ class ServicePolicyTests(unittest.TestCase):
             runtime_state=state,
         )
 
-        self.assertEqual(second_result.reply, "请问热水器现在是出现了什么问题？")
+        self.assertEqual(second_result.reply, "请问空气能现在是出现了什么问题？")
         self.assertEqual(routing_calls, [("brand_or_series", "口木")])
         self.assertEqual(state.product_routing_observed_trace, ["brand_series.colmo"])
         self.assertTrue(policy.last_used_model_intent_inference)
@@ -1870,7 +1988,7 @@ class ServicePolicyTests(unittest.TestCase):
 
         self.assertNotIn("issue_description", result.slot_updates)
         self.assertEqual(result.slot_updates["request_type"], "fault")
-        self.assertEqual(result.reply, "好的，请问热水器现在是出现了什么问题？")
+        self.assertEqual(result.reply, "好的，请问空气能现在是出现了什么问题？")
 
     def test_fault_opening_greeting_only_does_not_fill_issue_description(self):
         policy = ServiceDialoguePolicy()
@@ -1901,7 +2019,7 @@ class ServicePolicyTests(unittest.TestCase):
         )
 
         self.assertNotIn("issue_description", result.slot_updates)
-        self.assertEqual(result.reply, "好的，请问热水器现在是出现了什么问题？")
+        self.assertEqual(result.reply, "好的，请问空气能现在是出现了什么问题？")
 
     def test_initial_freeform_user_turn_does_not_fill_issue_description(self):
         policy = ServiceDialoguePolicy(ok_prefix_probability=0.0)
@@ -2362,7 +2480,7 @@ class ServicePolicyTests(unittest.TestCase):
         )
 
         self.assertNotIn("issue_description", result.slot_updates)
-        self.assertEqual(result.reply, "请问热水器现在是出现了什么问题？")
+        self.assertEqual(result.reply, "请问空气能现在是出现了什么问题？")
 
     def test_fault_issue_prompt_uses_model_extraction_and_then_prepends_apology(self):
         def fake_issue_extraction(*, user_text: str, user_round_index: int):
@@ -2377,7 +2495,7 @@ class ServicePolicyTests(unittest.TestCase):
         state = ServiceRuntimeState(product_routing_completed=True)
         scenario = build_freeform_cli_scenario(request_type="fault")
         transcript = [
-            DialogueTurn(speaker="service", text="请问热水器现在是出现了什么问题？", round_index=5),
+            DialogueTurn(speaker="service", text="请问空气能现在是出现了什么问题？", round_index=5),
             DialogueTurn(speaker="user", text="出水不热，开到 80 度烧了两小时都才只要 40 度", round_index=5),
         ]
         collected_slots = {
@@ -2411,7 +2529,7 @@ class ServicePolicyTests(unittest.TestCase):
         state = ServiceRuntimeState()
         scenario = build_scenario()
         transcript = [
-            DialogueTurn(speaker="service", text="请问热水器现在是出现了什么问题？", round_index=2),
+            DialogueTurn(speaker="service", text="请问空气能现在是出现了什么问题？", round_index=2),
             DialogueTurn(speaker="user", text="就是东西坏了", round_index=2),
         ]
         collected_slots = {
@@ -2435,14 +2553,14 @@ class ServicePolicyTests(unittest.TestCase):
         )
 
         self.assertNotIn("issue_description", result.slot_updates)
-        self.assertEqual(result.reply, "请问热水器现在是出现了什么问题？")
+        self.assertEqual(result.reply, "请问空气能现在是出现了什么问题？")
 
     def test_fault_issue_prompt_accepts_component_broken_description(self):
         policy = ServiceDialoguePolicy(ok_prefix_probability=0.0)
         state = ServiceRuntimeState()
         scenario = build_scenario()
         transcript = [
-            DialogueTurn(speaker="service", text="请问热水器现在是出现了什么问题？", round_index=5),
+            DialogueTurn(speaker="service", text="请问空气能现在是出现了什么问题？", round_index=5),
             DialogueTurn(speaker="user", text="面板坏了", round_index=6),
         ]
         collected_slots = {
@@ -2466,7 +2584,8 @@ class ServicePolicyTests(unittest.TestCase):
         )
 
         self.assertEqual(result.slot_updates["issue_description"], "面板坏了")
-        self.assertEqual(result.reply, "非常抱歉，给您添麻烦了，我帮您安排售后处理，请问您当前这个来电号码能联系到您吗？")
+        self.assertNotIn("surname", result.slot_updates)
+        self.assertEqual(result.reply, "非常抱歉，给您添麻烦了，我帮您安排售后处理，请问您贵姓？")
 
     def test_cli_freeform_fault_opening_forces_model_judgement_before_routing(self):
         callback_calls: list[tuple[str, int]] = []
@@ -2933,6 +3052,30 @@ class ServicePolicyTests(unittest.TestCase):
         self.assertTrue(
             policy.should_insert_address_ie_function_call(
                 user_text="江苏省扬州市宝应县安宜镇阳光锦城",
+                transcript=transcript,
+                runtime_state=state,
+            )
+        )
+
+    def test_current_address_collection_triggers_ie_for_city_district_community_candidate(self):
+        policy = ServiceDialoguePolicy(ok_prefix_probability=0.0)
+        state = ServiceRuntimeState(awaiting_full_address=True)
+        transcript = [
+            DialogueTurn(
+                speaker="service",
+                text="需要登记下您的地址，麻烦您完整的说下省、市、区、乡镇，精确到门牌号。",
+                round_index=5,
+            ),
+            DialogueTurn(
+                speaker="user",
+                text="广州市珠海区金穗雅园小区。",
+                round_index=6,
+            ),
+        ]
+
+        self.assertTrue(
+            policy.should_insert_address_ie_function_call(
+                user_text="广州市珠海区金穗雅园小区。",
                 transcript=transcript,
                 runtime_state=state,
             )
@@ -3661,12 +3804,63 @@ class ServicePolicyTests(unittest.TestCase):
         self.assertTrue(state.awaiting_phone_keypad_input)
         self.assertTrue(policy.last_used_model_intent_inference)
 
+    def test_contactable_two_off_topic_replies_enters_sms_fill_confirmation(self):
+        calls: list[str] = []
+
+        def fake_contact_inference(*, user_text: str, user_round_index: int):
+            calls.append(user_text)
+            return {"intent": "unknown"}
+
+        policy = ServiceDialoguePolicy(
+            ok_prefix_probability=0.0,
+            contact_intent_inference_callback=fake_contact_inference,
+        )
+        state = ServiceRuntimeState(expected_contactable_confirmation=True)
+        scenario = build_installation_scenario()
+        slots = {
+            "issue_description": "美的空气能热水机需要安装。",
+            "surname": "王",
+            "phone": "",
+            "address": "",
+            "request_type": "installation",
+            "phone_contactable": "",
+            "phone_contact_owner": "",
+            "phone_collection_attempts": "",
+            "product_arrived": "no",
+        }
+
+        first = policy.respond(
+            scenario=scenario,
+            transcript=[
+                DialogueTurn(speaker="service", text="请问您当前这个来电号码能联系到您吗？", round_index=5),
+                DialogueTurn(speaker="user", text="天气真好。", round_index=6),
+            ],
+            collected_slots=slots,
+            runtime_state=state,
+        )
+        second = policy.respond(
+            scenario=scenario,
+            transcript=[
+                DialogueTurn(speaker="service", text=first.reply, round_index=6),
+                DialogueTurn(speaker="user", text="咔咔，咔。", round_index=7),
+            ],
+            collected_slots=slots,
+            runtime_state=state,
+        )
+
+        self.assertEqual(first.reply, "请问您当前这个来电号码能联系到您吗？")
+        self.assertEqual(second.reply, "很抱歉，我们将为您下发短信，您可点击短信链接，补充信息并提交，您看是否可以？")
+        self.assertEqual(calls, ["天气真好。", "咔咔，咔。"])
+        self.assertFalse(state.expected_contactable_confirmation)
+        self.assertTrue(state.expected_phone_sms_fill_confirmation)
+        self.assertEqual(state.sms_fill_origin, "contactable")
+
     def test_fault_issue_followup_response_adds_apology_before_next_collection(self):
         policy = ServiceDialoguePolicy()
         state = ServiceRuntimeState()
         scenario = build_scenario()
         transcript = [
-            DialogueTurn(speaker="service", text="好的，很高兴为您服务，请问热水器现在是出现了什么问题？", round_index=2),
+            DialogueTurn(speaker="service", text="好的，很高兴为您服务，请问空气能现在是出现了什么问题？", round_index=2),
             DialogueTurn(speaker="user", text="就是最近加热特别慢，洗澡的时候水还忽冷忽热。", round_index=2),
         ]
         collected_slots = {
@@ -3704,7 +3898,7 @@ class ServicePolicyTests(unittest.TestCase):
         state = ServiceRuntimeState()
         scenario = build_freeform_cli_scenario(request_type="fault")
         transcript = [
-            DialogueTurn(speaker="service", text="好的，请问热水器现在是出现了什么问题？", round_index=2),
+            DialogueTurn(speaker="service", text="好的，请问空气能现在是出现了什么问题？", round_index=2),
             DialogueTurn(speaker="user", text="是滴是滴，出水太少，洗的不爽", round_index=2),
         ]
         collected_slots = {
@@ -5483,6 +5677,145 @@ class ServicePolicyTests(unittest.TestCase):
         )
 
         self.assertEqual(candidate, "")
+
+    def test_address_confirmation_negative_location_denial_does_not_become_address_candidate(self):
+        address_inference_called = False
+
+        def fake_address_inference(**_: str):
+            nonlocal address_inference_called
+            address_inference_called = True
+            return {
+                "address_candidate": "不在浙江了",
+                "merged_address_candidate": "不在浙江了",
+                "granularity": "locality",
+            }
+
+        policy = ServiceDialoguePolicy(
+            ok_prefix_probability=0.0,
+            address_inference_callback=fake_address_inference,
+        )
+        confirmation_address = "浙江省杭州市桐庐县富春江镇龙泉路147号滨海社区13栋3单元2104室"
+
+        candidate, _ = policy._resolve_confirmation_denial_address_candidate(
+            transcript=[],
+            user_text="不在浙江了。",
+            confirmation_address=confirmation_address,
+        )
+
+        self.assertEqual(candidate, "")
+        self.assertFalse(address_inference_called)
+
+    def test_address_confirmation_negative_location_then_province_keeps_only_new_province(self):
+        policy = ServiceDialoguePolicy(ok_prefix_probability=0.0)
+        confirmation_address = "浙江省杭州市桐庐县富春江镇龙泉路147号滨海社区13栋3单元2104室"
+        scenario_data = build_scenario(
+            service_known_address=True,
+            service_known_address_value=confirmation_address,
+        ).to_dict()
+        scenario_data["customer"]["address"] = confirmation_address
+        scenario_data["request"]["request_type"] = "installation"
+        scenario = Scenario.from_dict(scenario_data)
+        collected_slots = {
+            "issue_description": "要安装",
+            "surname": "王",
+            "phone": "13800138001",
+            "address": "",
+            "product_model": "",
+            "request_type": "installation",
+            "availability": "",
+            "phone_contactable": "yes",
+            "phone_contact_owner": "本人当前来电",
+            "phone_collection_attempts": "0",
+            "product_arrived": "yes",
+        }
+        state = ServiceRuntimeState(
+            expected_address_confirmation=True,
+            address_confirmation_started_from_known_address=True,
+            pending_address_confirmation=confirmation_address,
+        )
+
+        first_result = policy.respond(
+            scenario=scenario,
+            transcript=[
+                DialogueTurn(
+                    speaker="service",
+                    text=f"您的地址是{confirmation_address}，对吗？",
+                    round_index=6,
+                ),
+                DialogueTurn(speaker="user", text="不在浙江了。", round_index=7),
+            ],
+            collected_slots=collected_slots,
+            runtime_state=state,
+        )
+        second_result = policy.respond(
+            scenario=scenario,
+            transcript=[
+                DialogueTurn(speaker="service", text=first_result.reply, round_index=7),
+                DialogueTurn(speaker="user", text="江苏省。", round_index=8),
+            ],
+            collected_slots=collected_slots,
+            runtime_state=state,
+        )
+
+        self.assertEqual(state.partial_address_candidate, "江苏省")
+        self.assertEqual(second_result.reply, "好的，请问是江苏省哪个城市的哪个区和街道呢？")
+        self.assertNotIn("不在浙江了", second_result.reply)
+
+    def test_address_confirmation_subject_negative_location_then_province_keeps_only_new_province(self):
+        policy = ServiceDialoguePolicy(ok_prefix_probability=0.0)
+        confirmation_address = "湖北省荆州市公安县章庄铺镇学府小区10号楼1门201室"
+        scenario_data = build_scenario(
+            service_known_address=True,
+            service_known_address_value=confirmation_address,
+        ).to_dict()
+        scenario_data["customer"]["address"] = confirmation_address
+        scenario_data["request"]["request_type"] = "fault"
+        scenario = Scenario.from_dict(scenario_data)
+        collected_slots = {
+            "issue_description": "需要维修",
+            "surname": "王",
+            "phone": "13800138001",
+            "address": "",
+            "product_model": "",
+            "request_type": "fault",
+            "availability": "",
+            "phone_contactable": "yes",
+            "phone_contact_owner": "本人当前来电",
+            "phone_collection_attempts": "0",
+        }
+        state = ServiceRuntimeState(
+            expected_address_confirmation=True,
+            address_confirmation_started_from_known_address=True,
+            pending_address_confirmation=confirmation_address,
+        )
+
+        first_result = policy.respond(
+            scenario=scenario,
+            transcript=[
+                DialogueTurn(
+                    speaker="service",
+                    text=f"您的地址是{confirmation_address}，对吗？",
+                    round_index=9,
+                ),
+                DialogueTurn(speaker="user", text="我现在不在湖北啊？", round_index=10),
+            ],
+            collected_slots=collected_slots,
+            runtime_state=state,
+        )
+        second_result = policy.respond(
+            scenario=scenario,
+            transcript=[
+                DialogueTurn(speaker="service", text=first_result.reply, round_index=10),
+                DialogueTurn(speaker="user", text="江苏省。", round_index=11),
+            ],
+            collected_slots=collected_slots,
+            runtime_state=state,
+        )
+
+        self.assertEqual(first_result.reply, "了解了，麻烦您重新提供一下地址，包括省、市、区、乡镇。")
+        self.assertEqual(state.partial_address_candidate, "江苏省")
+        self.assertEqual(second_result.reply, "好的，请问是江苏省哪个城市的哪个区和街道呢？")
+        self.assertNotIn("我现在不在湖北", second_result.reply)
 
     def legacy_address_extract_strong_address_candidate_from_denial_rejects_province_only_correction(self):
         candidate = ServiceDialoguePolicy._extract_strong_address_candidate_from_denial(
@@ -7522,6 +7855,47 @@ class ServicePolicyTests(unittest.TestCase):
         self.assertEqual(result.reply, "请问是几栋几单元几楼几号呢？")
         self.assertEqual(state.partial_address_candidate, "浙江省台州市三门县江南壹号")
 
+    def test_address_collection_keeps_district_and_ignores_unknown_street_chatter(self):
+        policy = ServiceDialoguePolicy(ok_prefix_probability=0.0)
+        state = ServiceRuntimeState(
+            awaiting_full_address=True,
+            partial_address_candidate="广东省广州市金穗雅园小区",
+            last_address_followup_prompt="好的，您是在广州市的哪个区和哪个街道呢？",
+        )
+        scenario_data = build_scenario().to_dict()
+        scenario_data["customer"]["address"] = "广东省广州市珠海区金穗雅园小区1号楼101室"
+        scenario = Scenario.from_dict(scenario_data)
+
+        result = policy.respond(
+            scenario=scenario,
+            transcript=[
+                DialogueTurn(
+                    speaker="service",
+                    text="好的，您是在广州市的哪个区和哪个街道呢？",
+                    round_index=6,
+                ),
+                DialogueTurn(speaker="user", text="珠海区啊街道，我不知道。", round_index=7),
+            ],
+            collected_slots={
+                "issue_description": "漏水。",
+                "surname": "张",
+                "phone": "13800138001",
+                "address": "",
+                "product_model": "",
+                "request_type": "fault",
+                "availability": "",
+                "phone_contactable": "yes",
+                "phone_contact_owner": "本人当前来电",
+                "phone_collection_attempts": "0",
+            },
+            runtime_state=state,
+        )
+
+        self.assertNotIn("address", result.slot_updates)
+        self.assertEqual(state.partial_address_candidate, "广东省广州市珠海区金穗雅园小区")
+        self.assertNotIn("不知道", state.partial_address_candidate)
+        self.assertNotIn("啊街道", state.partial_address_candidate)
+
     def test_district_plus_community_without_city_reasks_for_region_street(self):
         policy = ServiceDialoguePolicy()
         state = ServiceRuntimeState(awaiting_full_address=True, address_input_attempts=1)
@@ -8124,6 +8498,139 @@ class ServicePolicyTests(unittest.TestCase):
         self.assertTrue(state.product_arrival_checked)
         self.assertFalse(state.expected_product_arrival_confirmation)
 
+    def test_installation_arrival_in_transit_counts_as_not_arrived_and_starts_surname_collection(self):
+        calls: list[dict[str, str]] = []
+
+        def fake_confirmation_inference(**kwargs):
+            calls.append(dict(kwargs))
+            self.assertEqual(kwargs["prompt_kind"], "product_arrival_confirmation")
+            self.assertEqual(kwargs["user_text"], "在路上。")
+            return {"intent": "no"}
+
+        policy = ServiceDialoguePolicy(
+            ok_prefix_probability=0.0,
+            confirmation_intent_inference_callback=fake_confirmation_inference,
+        )
+        state = ServiceRuntimeState(expected_product_arrival_confirmation=True)
+        scenario = build_installation_scenario(product_arrived="no")
+        scenario.customer.surname = "未知"
+        transcript = [
+            DialogueTurn(speaker="service", text="好的，请问空气能热水机到货了没？", round_index=7),
+            DialogueTurn(speaker="user", text="在路上。", round_index=8),
+        ]
+        collected_slots = {
+            "issue_description": "美的空气能热水机需要安装。",
+            "surname": "",
+            "phone": "",
+            "address": "",
+            "request_type": "installation",
+            "phone_contactable": "",
+            "phone_contact_owner": "",
+            "phone_collection_attempts": "",
+            "product_arrived": "",
+        }
+
+        result = policy.respond(
+            scenario=scenario,
+            transcript=transcript,
+            collected_slots=collected_slots,
+            runtime_state=state,
+        )
+
+        self.assertEqual(result.slot_updates["product_arrived"], "no")
+        self.assertEqual(result.reply, "请问您贵姓？")
+        self.assertEqual(len(calls), 1)
+        self.assertTrue(state.product_arrival_checked)
+        self.assertFalse(state.expected_product_arrival_confirmation)
+
+    def test_fault_issue_two_off_topic_replies_enters_sms_fill_confirmation(self):
+        policy = ServiceDialoguePolicy(ok_prefix_probability=0.0)
+        state = ServiceRuntimeState()
+        scenario = build_scenario()
+        slots = {
+            "issue_description": "",
+            "surname": "",
+            "phone": "",
+            "address": "",
+            "product_model": "",
+            "request_type": "fault",
+            "availability": "",
+            "phone_contactable": "",
+            "phone_contact_owner": "",
+            "phone_collection_attempts": "",
+        }
+
+        first = policy.respond(
+            scenario=scenario,
+            transcript=[
+                DialogueTurn(speaker="service", text="请问空气能现在是出现了什么问题？", round_index=2),
+                DialogueTurn(speaker="user", text="你们什么时候上门啊", round_index=3),
+            ],
+            collected_slots=slots,
+            runtime_state=state,
+        )
+        second = policy.respond(
+            scenario=scenario,
+            transcript=[
+                DialogueTurn(speaker="service", text="请问空气能现在是出现了什么问题？", round_index=2),
+                DialogueTurn(speaker="user", text="你们什么时候上门啊", round_index=3),
+                DialogueTurn(speaker="service", text=first.reply, round_index=4),
+                DialogueTurn(speaker="user", text="费用怎么算", round_index=5),
+            ],
+            collected_slots=slots,
+            runtime_state=state,
+        )
+
+        self.assertEqual(first.reply, "请问空气能现在是出现了什么问题？")
+        self.assertEqual(second.reply, "很抱歉，我们将为您下发短信，您可点击短信链接，补充信息并提交，您看是否可以？")
+        self.assertTrue(state.expected_phone_sms_fill_confirmation)
+        self.assertEqual(state.sms_fill_origin, "issue_description")
+
+    def test_installation_arrival_two_off_topic_replies_enters_sms_fill_confirmation(self):
+        policy = ServiceDialoguePolicy(ok_prefix_probability=0.0)
+        state = ServiceRuntimeState(expected_product_arrival_confirmation=True)
+        scenario = build_installation_scenario(product_arrived="yes")
+        slots = {
+            "issue_description": "我这边想报装空气能热水机。",
+            "surname": "",
+            "phone": "",
+            "address": "",
+            "product_model": "",
+            "request_type": "installation",
+            "availability": "",
+            "phone_contactable": "",
+            "phone_contact_owner": "",
+            "phone_collection_attempts": "",
+            "product_arrived": "",
+        }
+
+        first = policy.respond(
+            scenario=scenario,
+            transcript=[
+                DialogueTurn(speaker="service", text="好的，请问空气能热水机到货了没？", round_index=7),
+                DialogueTurn(speaker="user", text="你们什么时候上门啊", round_index=7),
+            ],
+            collected_slots=slots,
+            runtime_state=state,
+        )
+        second = policy.respond(
+            scenario=scenario,
+            transcript=[
+                DialogueTurn(speaker="service", text="好的，请问空气能热水机到货了没？", round_index=7),
+                DialogueTurn(speaker="user", text="你们什么时候上门啊", round_index=7),
+                DialogueTurn(speaker="service", text=first.reply, round_index=8),
+                DialogueTurn(speaker="user", text="费用怎么算", round_index=8),
+            ],
+            collected_slots=slots,
+            runtime_state=state,
+        )
+
+        self.assertEqual(first.reply, "请问您的热水器已经送到了吗？")
+        self.assertEqual(second.reply, "很抱歉，我们将为您下发短信，您可点击短信链接，补充信息并提交，您看是否可以？")
+        self.assertFalse(state.expected_product_arrival_confirmation)
+        self.assertTrue(state.expected_phone_sms_fill_confirmation)
+        self.assertEqual(state.sms_fill_origin, "product_arrival")
+
     def test_fault_closing_flow_requires_ack_then_rating_then_end(self):
         policy = ServiceDialoguePolicy()
         state = ServiceRuntimeState()
@@ -8623,7 +9130,7 @@ class ServicePolicyTests(unittest.TestCase):
         self.assertEqual(result.reply, "请问您当前这个来电号码能联系到您吗？")
         self.assertFalse(policy.last_used_model_intent_inference)
 
-    def test_explicit_surname_self_report_updates_slot_even_when_prompt_signature_misses(self):
+    def test_explicit_surname_self_report_waits_for_surname_prompt(self):
         policy = ServiceDialoguePolicy(ok_prefix_probability=0.0)
         state = ServiceRuntimeState(product_arrival_checked=True)
         scenario = build_installation_scenario()
@@ -8650,8 +9157,8 @@ class ServicePolicyTests(unittest.TestCase):
             runtime_state=state,
         )
 
-        self.assertEqual(result.slot_updates["surname"], "王")
-        self.assertEqual(result.reply, "请问您当前这个来电号码能联系到您吗？")
+        self.assertNotIn("surname", result.slot_updates)
+        self.assertEqual(result.reply, "请问您贵姓？")
 
     def legacy_address_unknown_actual_address_town_only_reply_keeps_locality_followup(self):
         policy = ServiceDialoguePolicy(ok_prefix_probability=0.0)

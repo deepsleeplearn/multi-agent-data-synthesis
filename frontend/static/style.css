@@ -3510,6 +3510,11 @@ select:focus {
     width: min(100%, 28rem);
 }
 
+.rewrite-export-file-name-field {
+    margin-top: 0.9rem;
+    margin-bottom: 0.35rem;
+}
+
 .rewrite-link-modal-card {
     width: min(100%, 38rem);
 }

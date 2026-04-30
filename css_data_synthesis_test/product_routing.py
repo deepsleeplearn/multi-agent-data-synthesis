@@ -83,7 +83,23 @@ BRAND_SERIES_WEIGHTS = {
     "home_series": 0.40,
     "lieyan": 0.22,
 }
-COLMO_HOMOPHONE_TOKENS = ("COLMO", "科目", "科慕", "可么", "可木", "可慕", "扣摸", "扣慕")
+COLMO_HOMOPHONE_TOKENS = (
+    "COLMO",
+    "克莱沃",
+    "克来沃",
+    "科莱沃",
+    "克莱我",
+    "克来我",
+    "科来沃",
+    "科莱我",
+    "科目",
+    "科慕",
+    "可么",
+    "可木",
+    "可慕",
+    "扣摸",
+    "扣慕",
+)
 LIEYAN_HOMOPHONE_TOKENS = (
     "烈焰",
     "烈炎",
@@ -467,7 +483,7 @@ def _answer_value(rng: random.Random, answer_key: str, *, model_hint: str = "") 
 
 def _answer_instruction(answer_key: str, *, answer_value: str) -> str:
     instructions = {
-        "brand_series.colmo": "自然表达品牌或系列是 COLMO。",
+        "brand_series.colmo": "自然表达品牌或系列是 COLMO 或克莱沃。",
         "brand_series.cooling_or_little_swan": "自然表达品牌或系列是酷风或小天鹅中的一个。",
         "brand_series.home_series": "自然表达副品牌/系列是真暖、真省、雪焰、暖家、煤改电、真享中的一个。",
         "brand_series.lieyan": "自然表达系列是烈焰。",

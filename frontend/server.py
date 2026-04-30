@@ -37,6 +37,8 @@ except ImportError:  # pragma: no cover
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
+UNUSED_KNOWN_ADDRESSES_PATH = PROJECT_ROOT / "css_data_synthesis_test" / "unused_addresses.txt"
+_known_address_candidates_cache: tuple[str, ...] | None = None
 
 try:
     from css_data_synthesis_test.address_utils import extract_address_components
@@ -67,7 +69,6 @@ try:
     )
     from css_data_synthesis_test.hidden_settings_tool import (
         HiddenSettingsTool,
-        generate_local_customer_address,
     )
     from css_data_synthesis_test.llm import OpenAIChatClient
     from css_data_synthesis_test.manual_test import (
@@ -2800,7 +2801,7 @@ def _append_address_ie_display_lines(
                     user_text=turn.text,
                     confirmation_address=confirmation_address,
                 )
-            if denial_address:
+            if denial_address and policy._is_confirmable_address_candidate(denial_address):
                 observation = build_address_model_observation(
                     transcript,
                     client=resolved_client,
@@ -2833,6 +2834,8 @@ def _append_address_ie_display_lines(
         client=resolved_client,
         model=resolved_model,
     )
+    if policy._contains_negative_location_denial_fragment(str(observation.get("address") or "")):
+        return None
     turn.post_display_lines.append(policy.ADDRESS_IE_FUNCTION_CALL_DISPLAY)
     turn.post_display_lines.append(f"observation: {json.dumps(observation, ensure_ascii=False)}")
     return observation
@@ -2875,7 +2878,7 @@ def _predict_address_ie_entity_type(
                 user_text=turn.text,
                 confirmation_address=confirmation_address,
             )
-            if denial_address:
+            if denial_address and policy._is_confirmable_address_candidate(denial_address):
                 return "addressInfo"
 
     if policy.should_insert_address_ie_function_call(
@@ -3108,6 +3111,10 @@ def _build_auto_address_confirmation_result(
         normalized_error_code = 1
     confirmed_address = str(observation.get("address") or "").strip()
     error_msg = str(observation.get("error_msg") or "").strip()
+    if policy._contains_negative_location_denial_fragment(confirmed_address):
+        return None
+    if normalized_error_code != 0 and confirmed_address == "无法判断":
+        return None
 
     if normalized_error_code == 0:
         if not confirmed_address:
@@ -4033,6 +4040,27 @@ def list_scenarios(current_user: dict[str, str] = Depends(_require_authenticated
         raise HTTPException(status_code=500, detail=f"加载场景列表失败: {exc}") from exc
 
 
+def _load_known_address_candidates() -> tuple[str, ...]:
+    global _known_address_candidates_cache
+    if _known_address_candidates_cache is None:
+        if not UNUSED_KNOWN_ADDRESSES_PATH.exists():
+            _known_address_candidates_cache = ()
+        else:
+            _known_address_candidates_cache = tuple(
+                line.strip()
+                for line in UNUSED_KNOWN_ADDRESSES_PATH.read_text(encoding="utf-8").splitlines()
+                if line.strip()
+            )
+    return _known_address_candidates_cache
+
+
+def _choose_known_address_candidate() -> str:
+    candidates = _load_known_address_candidates()
+    if not candidates:
+        raise HTTPException(status_code=500, detail="已知地址候选库为空。")
+    return random.choice(candidates)
+
+
 @app.get("/api/mock-known-address")
 def get_mock_known_address(
     scenario_id: str = "",
@@ -4042,12 +4070,8 @@ def get_mock_known_address(
     _ = current_user
     if auto_mode and random.random() >= max(0.0, min(1.0, float(config.service_known_address_probability))):
         return {"known_address": ""}
-    seed = scenario_id or "manual-test"
-    address = generate_local_customer_address(
-        f"{seed}:frontend-known-address:{secrets.token_hex(8)}",
-        "standard_residential",
-    )
-    return {"known_address": address}
+    _ = scenario_id
+    return {"known_address": _choose_known_address_candidate()}
 
 
 @app.get("/api/reference/fault-issue-categories")

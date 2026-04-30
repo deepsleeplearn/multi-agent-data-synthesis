@@ -665,7 +665,7 @@ class ServiceAgentTests(unittest.TestCase):
             runtime_state=state,
         )
 
-        self.assertEqual(result["reply"], "请问热水器现在是出现了什么问题？")
+        self.assertEqual(result["reply"], "请问空气能现在是出现了什么问题？")
         self.assertTrue(result["used_model_intent_inference"])
         self.assertEqual(len(client.calls), 1)
 
@@ -725,7 +725,7 @@ class ServiceAgentTests(unittest.TestCase):
             runtime_state=state,
         )
 
-        self.assertEqual(result["reply"], "请问热水器现在是出现了什么问题？")
+        self.assertEqual(result["reply"], "请问空气能现在是出现了什么问题？")
         self.assertTrue(result["used_model_intent_inference"])
         self.assertEqual(len(client.calls), 1)
 
@@ -785,7 +785,7 @@ class ServiceAgentTests(unittest.TestCase):
             runtime_state=state,
         )
 
-        self.assertEqual(result["reply"], "请问热水器现在是出现了什么问题？")
+        self.assertEqual(result["reply"], "请问空气能现在是出现了什么问题？")
         self.assertTrue(result["used_model_intent_inference"])
         self.assertEqual(len(client.calls), 1)
 
@@ -865,7 +865,7 @@ class ServiceAgentTests(unittest.TestCase):
 
         self.assertEqual(result["reply"], "请问您的空气能具体是什么品牌或系列的呢？")
         self.assertTrue(result["used_model_intent_inference"])
-        self.assertEqual(len(client.calls), 2)
+        self.assertEqual(len(client.calls), 3)
 
     def test_service_agent_uses_model_fallback_for_confirmation_intent(self):
         client = RecordingConfirmationClient()

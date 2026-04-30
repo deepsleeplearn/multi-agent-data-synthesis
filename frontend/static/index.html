@@ -154,6 +154,7 @@
                                 <option value="" selected>未知</option>
                                 <option value="美的">美的</option>
                                 <option value="COLMO">COLMO</option>
+                                <option value="克莱沃">克莱沃</option>
                                 <option value="真暖">真暖</option>
                                 <option value="真省">真省</option>
                                 <option value="雪焰">雪焰</option>
@@ -545,6 +546,7 @@
         <button id="chat-recall-btn" class="chat-message-menu-btn chat-message-menu-btn-danger" type="button">撤回</button>
     </div>
     <div id="rewrite-record-menu" class="chat-message-menu hidden" hidden aria-hidden="true">
+        <button id="rewrite-record-view-btn" class="chat-message-menu-btn" type="button">查看</button>
         <button id="rewrite-record-copy-btn" class="chat-message-menu-btn" type="button">复制</button>
         <button id="rewrite-record-review-btn" class="chat-message-menu-btn" type="button">提交评审</button>
         <button id="rewrite-record-delete-btn" class="chat-message-menu-btn chat-message-menu-btn-danger" type="button">删除</button>
@@ -680,6 +682,11 @@
             </div>
             <p id="rewrite-export-summary" class="section-copy">当前文件包含未完成数据，请确认是否继续导出。</p>
             <div id="rewrite-export-stats" class="data-list"></div>
+            <label class="field rewrite-export-file-name-field" for="rewrite-export-file-name-input">
+                <span>导出文件名</span>
+                <input id="rewrite-export-file-name-input" type="text" autocomplete="off" placeholder="留空则使用默认文件名">
+            </label>
+            <p id="rewrite-export-file-name-error" class="field-error hidden" role="alert">请输入有效文件名。</p>
             <div id="rewrite-export-scope-choices" class="rewrite-export-scope-choices hidden">
                 <button class="secondary-btn" type="button" data-rewrite-export-scope="file">仅导出文件</button>
                 <button class="secondary-btn" type="button" data-rewrite-export-scope="test">仅导出测试转改写</button>
@@ -747,6 +754,23 @@
             <div class="modal-actions">
                 <button id="rewrite-link-cancel-btn" class="secondary-btn" type="button">取消</button>
                 <button id="rewrite-link-confirm-btn" class="primary-btn" type="button">确认并提交</button>
+            </div>
+        </section>
+    </div>
+    <div id="rewrite-context-modal" class="modal-shell hidden" hidden aria-hidden="true">
+        <div class="modal-backdrop"></div>
+        <section class="modal-card rewrite-export-modal-card" role="dialog" aria-modal="true" aria-labelledby="rewrite-context-title">
+            <div class="modal-header">
+                <div class="section-heading compact">
+                    <p class="eyebrow">Test Context</p>
+                    <h2 id="rewrite-context-title">测试配套信息</h2>
+                </div>
+                <button id="rewrite-context-close-btn" class="modal-close-btn" type="button" aria-label="关闭测试配套信息窗口">×</button>
+            </div>
+            <p id="rewrite-context-summary" class="section-copy">展示该条测试转改写数据携带的测试模式配套信息。</p>
+            <div id="rewrite-context-stats" class="data-list"></div>
+            <div class="modal-actions">
+                <button id="rewrite-context-ok-btn" class="primary-btn" type="button">关闭</button>
             </div>
         </section>
     </div>

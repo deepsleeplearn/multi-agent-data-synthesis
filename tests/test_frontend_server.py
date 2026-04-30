@@ -54,6 +54,7 @@ class FrontendServerTests(unittest.TestCase):
 
         frontend_server.sessions.clear()
         frontend_server.auth_sessions.clear()
+        frontend_server._known_address_candidates_cache = None
         frontend_server.SESSION_REVIEW_DB_PATH = self.db_path
         frontend_server.CHAT_STORAGE_PATH = Path(self.temp_dir.name) / "frontend_chat_messages.json"
         frontend_server.CHAT_RECALL_STORAGE_PATH = Path(self.temp_dir.name) / "frontend_chat_message_recalls.json"
@@ -152,7 +153,7 @@ class FrontendServerTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         payload = response.json()
         self.assertIn("known_address", payload)
-        self.assertRegex(payload["known_address"], r"(省|市).*(区|县|市|镇).*(街道|镇).*(幢|号|栋|座|楼)")
+        self.assertIn(payload["known_address"], frontend_server._load_known_address_candidates())
 
     def test_mock_known_address_auto_mode_can_return_empty_by_env_probability(self):
         self._login()
@@ -173,7 +174,7 @@ class FrontendServerTests(unittest.TestCase):
         response = self.client.get("/api/mock-known-address", params={"scenario_id": "frontend_case"})
 
         self.assertEqual(response.status_code, 200)
-        self.assertRegex(response.json()["known_address"], r"(省|市).*(区|县|市|镇).*(街道|镇).*(幢|号|栋|座|楼)")
+        self.assertIn(response.json()["known_address"], frontend_server._load_known_address_candidates())
 
     def test_fault_issue_categories_endpoint_returns_repair_reference_keys(self):
         self._login()
@@ -859,6 +860,38 @@ class FrontendServerTests(unittest.TestCase):
         self.assertIn(policy.ADDRESS_IE_FUNCTION_CALL_DISPLAY, user_turn.post_display_lines)
         self.assertTrue(any(line.startswith("observation:") for line in user_turn.post_display_lines))
 
+    def test_address_collection_city_district_community_inserts_address_ie_display_lines(self):
+        policy = frontend_server.ServiceDialoguePolicy()
+        runtime_state = frontend_server.ServiceRuntimeState(awaiting_full_address=True)
+        service_turn = frontend_server.DialogueTurn(
+            speaker=frontend_server.SERVICE_SPEAKER,
+            text="了解了，需要登记下您的地址，麻烦您完整的说下省、市、区、乡镇，精确到门牌号。",
+            round_index=5,
+        )
+        user_turn = frontend_server.DialogueTurn(
+            speaker=frontend_server.USER_SPEAKER,
+            text="广州市珠海区金穗雅园小区。",
+            round_index=6,
+        )
+        observation = {
+            "address": "广东省广州市珠海区金穗雅园小区",
+            "error_code": 1,
+            "error_msg": "未成功获取有效地址",
+        }
+
+        with patch("frontend.server.build_address_model_observation", return_value=observation) as mocked_observation:
+            result = frontend_server._append_address_ie_display_lines(
+                policy=policy,
+                turn=user_turn,
+                transcript=[service_turn, user_turn],
+                runtime_state=runtime_state,
+            )
+
+        self.assertEqual(result, observation)
+        mocked_observation.assert_called_once()
+        self.assertIn(policy.ADDRESS_IE_FUNCTION_CALL_DISPLAY, user_turn.post_display_lines)
+        self.assertTrue(any(line.startswith("observation:") for line in user_turn.post_display_lines))
+
     def test_observation_error_code_zero_starts_address_confirmation(self):
         policy = frontend_server.ServiceDialoguePolicy(ok_prefix_probability=0.0)
         runtime_state = frontend_server.ServiceRuntimeState(awaiting_full_address=True)
@@ -900,6 +933,49 @@ class FrontendServerTests(unittest.TestCase):
         self.assertEqual(runtime_state.partial_address_candidate, "上海市浦东新区")
         self.assertEqual(runtime_state.last_address_followup_prompt, result.reply)
 
+    def test_observation_unable_to_judge_does_not_override_policy_address_merge(self):
+        policy = frontend_server.ServiceDialoguePolicy(ok_prefix_probability=0.0)
+        runtime_state = frontend_server.ServiceRuntimeState(
+            awaiting_full_address=True,
+            partial_address_candidate="广东省广州市金穗雅园小区",
+            last_address_followup_prompt="好的，您是在广州市的哪个区和哪个街道呢？",
+        )
+
+        result = frontend_server._build_auto_address_confirmation_result(
+            policy=policy,
+            runtime_state=runtime_state,
+            observation={
+                "address": "无法判断",
+                "error_code": 1,
+                "error_msg": "未成功获取有效地址",
+            },
+        )
+
+        self.assertIsNone(result)
+        self.assertTrue(runtime_state.awaiting_full_address)
+        self.assertEqual(runtime_state.partial_address_candidate, "广东省广州市金穗雅园小区")
+
+    def test_observation_with_negative_location_denial_does_not_pollute_address_candidate(self):
+        policy = frontend_server.ServiceDialoguePolicy(ok_prefix_probability=0.0)
+        runtime_state = frontend_server.ServiceRuntimeState(
+            awaiting_full_address=True,
+            partial_address_candidate="江苏省",
+        )
+
+        result = frontend_server._build_auto_address_confirmation_result(
+            policy=policy,
+            runtime_state=runtime_state,
+            observation={
+                "address": "江苏省我现在不在湖北啊市",
+                "error_code": 1,
+                "error_msg": "缺少区县、乡镇或街道以及详细地址",
+            },
+        )
+
+        self.assertIsNone(result)
+        self.assertTrue(runtime_state.awaiting_full_address)
+        self.assertEqual(runtime_state.partial_address_candidate, "江苏省")
+
     def test_pending_ie_prediction_uses_current_policy_for_known_address_confirmation(self):
         policy = frontend_server.ServiceDialoguePolicy()
         runtime_state = frontend_server.ServiceRuntimeState(
@@ -926,6 +1002,56 @@ class FrontendServerTests(unittest.TestCase):
         )
 
         self.assertEqual(entity_type, "addressInfo")
+
+    def test_known_address_denial_with_partial_region_skips_address_ie(self):
+        policy = frontend_server.ServiceDialoguePolicy(ok_prefix_probability=0.0)
+        known_address = "江苏省苏州市工业园区唯亭街道金地花园10号楼15层1504室"
+        runtime_state = frontend_server.ServiceRuntimeState(
+            expected_address_confirmation=True,
+            address_confirmation_started_from_known_address=True,
+            pending_address_confirmation=known_address,
+        )
+        service_turn = frontend_server.DialogueTurn(
+            speaker=frontend_server.SERVICE_SPEAKER,
+            text=f"了解了，您的地址是{known_address}，对吗？",
+            round_index=8,
+        )
+        user_turn = frontend_server.DialogueTurn(
+            speaker=frontend_server.USER_SPEAKER,
+            text="不是啊，我在浙江。",
+            round_index=9,
+        )
+        transcript = [service_turn, user_turn]
+
+        entity_type = frontend_server._predict_ie_entity_type_for_turn(
+            policy=policy,
+            turn=user_turn,
+            transcript=transcript,
+            runtime_state=runtime_state,
+        )
+        with patch("frontend.server.build_address_model_observation") as mocked_observation:
+            observation = frontend_server._append_address_ie_display_lines(
+                policy=policy,
+                turn=user_turn,
+                transcript=transcript,
+                runtime_state=runtime_state,
+            )
+
+        self.assertEqual(entity_type, "")
+        self.assertIsNone(observation)
+        mocked_observation.assert_not_called()
+        self.assertEqual(user_turn.post_display_lines, [])
+
+        scenario = frontend_server.Scenario.from_dict(build_scenario_payload("partial_region_denial"))
+        result = policy.respond(
+            scenario=scenario,
+            transcript=transcript,
+            collected_slots={"issue_description": "热水器故障", "phone": "13800138001"},
+            runtime_state=runtime_state,
+        )
+        self.assertEqual(result.reply, "好的，请问是浙江省哪个城市的哪个区和街道呢？")
+        self.assertTrue(runtime_state.awaiting_full_address)
+        self.assertEqual(runtime_state.partial_address_candidate, "浙江省")
 
     def test_pending_ie_prediction_uses_current_policy_for_phone_keypad_input(self):
         policy = frontend_server.ServiceDialoguePolicy()
@@ -1778,7 +1904,11 @@ class FrontendServerTests(unittest.TestCase):
         self.assertIn('id="review-toggle-btn"', index_response.text)
         self.assertIn('id="rewrite-air-link-btn"', index_response.text)
         self.assertIn('id="rewrite-link-modal"', index_response.text)
+        self.assertIn('id="rewrite-record-view-btn"', index_response.text)
+        self.assertIn('id="rewrite-context-modal"', index_response.text)
+        self.assertIn('id="rewrite-export-file-name-input"', index_response.text)
         self.assertIn("选择该条数据所属链路", index_response.text)
+        self.assertIn("测试配套信息", index_response.text)
         self.assertIn("点击任意用户行可删除该行及其下方所有内容", index_response.text)
 
         app_response = self.client.get("/static/app.js")
@@ -1789,7 +1919,25 @@ class FrontendServerTests(unittest.TestCase):
         self.assertIn("arrival_fault_type", app_response.text)
         self.assertIn("exportRecord.rewrite_status", app_response.text)
         self.assertIn("prepareRewriteRecordForExport(currentRecord, status)", app_response.text)
+        self.assertIn("stringifyRewriteStructuredLinesForExport(exportRecord)", app_response.text)
+        self.assertIn("stringifyRewriteStructuredExportValue", app_response.text)
+        self.assertIn("normalizeImportedRewriteStructuredLineValue", app_response.text)
+        self.assertIn("getRewriteLineRawValue(item)", app_response.text)
+        self.assertIn("delete duplicateRecord.air_energy_water_heater_link", app_response.text)
+        self.assertIn("delete duplicateImportedRecord.air_energy_water_heater_link", app_response.text)
         self.assertIn("exportRecord.annotator", app_response.text)
+        self.assertIn("test_mode_context: buildRewriteTestModeContext()", app_response.text)
+        self.assertIn("historical_address", app_response.text)
+        self.assertIn("history_device", app_response.text)
+        self.assertIn("openRewriteContextModal", app_response.text)
+        self.assertIn("buildRewriteExportFileName(scope", app_response.text)
+        self.assertIn("resolveRewriteExportModalFileName", app_response.text)
+        self.assertIn("replaceManualOverride = false", app_response.text)
+        self.assertIn("hydrateKnownAddressPrefill(true, { replaceManualOverride: true })", app_response.text)
+        self.assertIn("knownAddressClearedBeforeStart", app_response.text)
+        self.assertIn("prepareManualSessionInputsBeforeStart", app_response.text)
+        self.assertNotIn("randomizeManualSessionInputsBeforeStart", app_response.text)
+        self.assertNotIn("refreshKnownAddress: true", app_response.text)
         self.assertIn("delete exportRecord.air_energy_water_heater_link.source_rows", app_response.text)
         self.assertIn("delete exportRecord.air_energy_water_heater_link.endpoint", app_response.text)
         self.assertIn("delete exportRecord.air_energy_water_heater_link.path", app_response.text)

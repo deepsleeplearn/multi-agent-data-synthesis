@@ -17,8 +17,11 @@ let authenticatedUser = null;
 let sessionStartedAt = '';
 let sessionEndedAt = '';
 let sessionTimerInterval = null;
+let currentScenarioSnapshot = null;
+let currentSessionConfigSnapshot = {};
 let autoKnownAddressValue = '';
 let knownAddressExplicitOverride = false;
+let knownAddressClearedBeforeStart = false;
 let autoCallStartTimeValue = '';
 let currentAutoModeId = '';
 let faultIssueReferenceCategories = null;
@@ -215,6 +218,7 @@ const chatLauncherUnread = document.getElementById('chat-launcher-unread');
 const chatMentionDropdown = document.getElementById('chat-mention-dropdown');
 const chatMessageMenu = document.getElementById('chat-message-menu');
 const rewriteRecordMenu = document.getElementById('rewrite-record-menu');
+const rewriteRecordViewButton = document.getElementById('rewrite-record-view-btn');
 const rewriteRecordCopyButton = document.getElementById('rewrite-record-copy-btn');
 const rewriteRecordReviewButton = document.getElementById('rewrite-record-review-btn');
 const rewriteRecordDeleteButton = document.getElementById('rewrite-record-delete-btn');
@@ -277,6 +281,8 @@ const rewriteAlternationText = document.getElementById('rewrite-alternation-text
 const rewriteAlternationList = document.getElementById('rewrite-alternation-list');
 const rewriteExportSummary = document.getElementById('rewrite-export-summary');
 const rewriteExportStats = document.getElementById('rewrite-export-stats');
+const rewriteExportFileNameInput = document.getElementById('rewrite-export-file-name-input');
+const rewriteExportFileNameError = document.getElementById('rewrite-export-file-name-error');
 const rewriteExportScopeChoices = document.getElementById('rewrite-export-scope-choices');
 const rewriteExportCloseButton = document.getElementById('rewrite-export-close-btn');
 const rewriteExportCancelButton = document.getElementById('rewrite-export-cancel-btn');
@@ -299,6 +305,12 @@ const rewriteLinkError = document.getElementById('rewrite-link-error');
 const rewriteLinkCloseButton = document.getElementById('rewrite-link-close-btn');
 const rewriteLinkCancelButton = document.getElementById('rewrite-link-cancel-btn');
 const rewriteLinkConfirmButton = document.getElementById('rewrite-link-confirm-btn');
+const rewriteContextModal = document.getElementById('rewrite-context-modal');
+const rewriteContextTitle = document.getElementById('rewrite-context-title');
+const rewriteContextSummary = document.getElementById('rewrite-context-summary');
+const rewriteContextStats = document.getElementById('rewrite-context-stats');
+const rewriteContextCloseButton = document.getElementById('rewrite-context-close-btn');
+const rewriteContextOkButton = document.getElementById('rewrite-context-ok-btn');
 const PERSONA_HIDDEN_CONTEXT_FIELDS = [
     ['emotion', '当前情绪'],
     ['urgency', '紧急程度'],
@@ -1110,7 +1122,7 @@ function applyReducedMotionPreference(enabled) {
 
 function generateMockCallStartTime() {
     const base = new Date();
-    const offsetDays = Math.floor(Math.random() * 14);
+    const offsetDays = Math.floor(Math.random() * (3 * 366));
     base.setDate(base.getDate() - offsetDays);
     base.setHours(
         Math.floor(Math.random() * 24),
@@ -1358,12 +1370,16 @@ function closeRewriteRecordMenu() {
     rewriteRecordMenu.style.top = '';
 }
 
-function openRewriteRecordMenu(recordIndex, clientX, clientY) {
+function openRewriteRecordMenu(recordIndex, clientX, clientY, { source = 'list' } = {}) {
     if (!rewriteRecordMenu || !Number.isInteger(recordIndex) || recordIndex < 0 || recordIndex >= rewriteRecords.length) {
         closeRewriteRecordMenu();
         return;
     }
-    rewriteRecordMenuState = { recordIndex };
+    rewriteRecordMenuState = { recordIndex, source };
+    const record = rewriteRecords[recordIndex];
+    if (rewriteRecordViewButton) {
+        rewriteRecordViewButton.classList.toggle('hidden', !hasRewriteTestModeContext(record));
+    }
     const menuWidth = Math.max(rewriteRecordMenu.offsetWidth || 160, 140);
     const menuHeight = Math.max(rewriteRecordMenu.offsetHeight || 56, 48);
     const left = Math.min(clientX, window.innerWidth - menuWidth - 12);
@@ -1684,7 +1700,7 @@ function createScenarioListItem(scenario, index) {
 }
 
 function renderScenarioList() {
-    syncManualScenarioSelection({ refreshKnownAddress: true });
+    syncManualScenarioSelection();
 }
 
 function getManualRequestLabel(requestType) {
@@ -1704,7 +1720,7 @@ function historyDeviceCategoryOptionsForBrand(brand) {
     if (!normalizedBrand) {
         return [''];
     }
-    if (['COLMO', '真暖', '真省', '雪焰', '暖家', '煤改电', '真享'].includes(normalizedBrand)) {
+    if (['COLMO', '克莱沃', '真暖', '真省', '雪焰', '暖家', '煤改电', '真享'].includes(normalizedBrand)) {
         return ['家用空气能热水机'];
     }
     if (normalizedBrand === '烈焰') {
@@ -1809,7 +1825,7 @@ function clearHistoryDeviceConfig() {
     if (historyDeviceBrandSelect) historyDeviceBrandSelect.value = '';
     syncHistoryDeviceCategoryOptions();
     setHistoryDeviceDateParts('');
-    syncManualScenarioSelection({ refreshKnownAddress: false });
+    syncManualScenarioSelection();
 }
 
 function getHistoryDeviceConfig() {
@@ -1859,13 +1875,9 @@ function buildConfiguredScenarioSelection() {
     };
 }
 
-function syncManualScenarioSelection(options = {}) {
-    const { refreshKnownAddress = false } = options;
+function syncManualScenarioSelection() {
     selectedScenario = buildConfiguredScenarioSelection();
     updateStartSessionButtonState();
-    if (refreshKnownAddress && authenticatedUser) {
-        hydrateKnownAddressPrefill(false);
-    }
 }
 
 function isPotentialRewriteTurn(value) {
@@ -2106,6 +2118,32 @@ function extractRewriteStructuredLine(text = '', explicitKind = '') {
     return null;
 }
 
+function getRewriteLineRawValue(item) {
+    if (!item || typeof item !== 'object') return '';
+    for (const key of ['text', 'content', 'utterance', 'message', 'value']) {
+        if (Object.prototype.hasOwnProperty.call(item, key)) {
+            return item[key];
+        }
+    }
+    return '';
+}
+
+function normalizeImportedRewriteStructuredLineValue(role = '', value = '') {
+    if (isRewriteObservationRole(role)) {
+        if (typeof value === 'string') {
+            return value.replace(/^observation:\s*/i, '').trim();
+        }
+        return serializeRewriteObservationPayload(value || {});
+    }
+    if (isRewriteFunctionCallRole(role)) {
+        if (typeof value === 'string') {
+            return value.replace(/^function_call:\s*/i, '').trim();
+        }
+        return JSON.stringify(value ?? '');
+    }
+    return String(value ?? '').trim();
+}
+
 function inferRewriteFunctionCallTarget(text = '') {
     const normalizedText = String(text || '').trim();
     const matchedOption = REWRITE_FUNCTION_CALL_OPTIONS.find((option) => option.payload === normalizedText);
@@ -2225,17 +2263,20 @@ function normalizeRewriteLine(item, fallbackIndex = 0) {
     }
     if (!item || typeof item !== 'object') return null;
 
-    const rawText = String(
-        item.text
-        ?? item.content
-        ?? item.utterance
-        ?? item.message
-        ?? '',
-    ).trim();
+    const rawValue = getRewriteLineRawValue(item);
+    const rawText = String(rawValue ?? '').trim();
     if (!rawText) return null;
 
     const displayKind = String(item.display_kind || item.kind || '').trim().toLowerCase();
-    const speaker = normalizeRewriteSpeaker(item.speaker || item.role || item.actor || item.from || '');
+    const rawRole = String(item.speaker || item.role || item.actor || item.from || '').trim();
+    if (isRewriteFunctionCallRole(rawRole) || isRewriteObservationRole(rawRole)) {
+        return {
+            tone: 'system',
+            role: rawRole.toLowerCase(),
+            text: normalizeImportedRewriteStructuredLineValue(rawRole, rawValue),
+        };
+    }
+    const speaker = normalizeRewriteSpeaker(rawRole);
     const structuredLine = extractRewriteStructuredLine(rawText, displayKind);
     if (structuredLine) {
         return structuredLine;
@@ -3002,8 +3043,74 @@ function closeRewriteExportModal() {
         rewriteExportScopeChoices.classList.add('hidden');
     }
     if (rewriteExportConfirmButton) {
+        rewriteExportConfirmButton.textContent = '强制提交导出';
         rewriteExportConfirmButton.classList.remove('hidden');
     }
+    if (rewriteExportFileNameError) {
+        rewriteExportFileNameError.classList.add('hidden');
+    }
+}
+
+function getRewriteExportModalFileNameValue() {
+    return String(rewriteExportFileNameInput?.value || '').trim();
+}
+
+function sanitizeRewriteExportFileNameInput(fileName = '') {
+    return String(fileName || '')
+        .trim()
+        .replace(/[\\/:*?"<>|]+/g, '_')
+        .replace(/[\u0000-\u001f]/g, '')
+        .replace(/[.\s]+$/g, '');
+}
+
+function buildDefaultRewriteExportFileName(scope = 'all') {
+    const sourceName = String(rewriteSourceName || 'rewrite_export').trim();
+    const baseName = (sourceName.replace(/\.[^.]+$/, '') || 'rewrite_export').replace(/[\\/:*?"<>|]+/g, '_');
+    const extension = getRewriteExportFormat(scope);
+    const scopeSuffix = scope === 'file'
+        ? 'file'
+        : scope === 'test'
+            ? 'test'
+            : hasMixedRewriteRecordOrigins()
+                ? 'all'
+                : '';
+    return `${baseName}${scopeSuffix ? `_${scopeSuffix}` : ''}_rewrited.${extension}`;
+}
+
+function buildRewriteExportFileName(scope = 'all', requestedFileName = '') {
+    const requested = String(requestedFileName || '').trim();
+    if (!requested) {
+        return buildDefaultRewriteExportFileName(scope);
+    }
+    const extension = getRewriteExportFormat(scope);
+    const sanitized = sanitizeRewriteExportFileNameInput(requested).replace(/\.(jsonl|json)$/i, '');
+    if (!sanitized) {
+        return '';
+    }
+    return `${sanitized}.${extension}`;
+}
+
+function prepareRewriteExportFileNameInput(scope = 'all', requestedFileName = '') {
+    if (!rewriteExportFileNameInput) return;
+    rewriteExportFileNameInput.placeholder = buildDefaultRewriteExportFileName(scope);
+    rewriteExportFileNameInput.value = String(requestedFileName || '').trim();
+    if (rewriteExportFileNameError) {
+        rewriteExportFileNameError.classList.add('hidden');
+    }
+}
+
+function resolveRewriteExportModalFileName(scope = 'all') {
+    const requestedFileName = getRewriteExportModalFileNameValue();
+    const fileName = buildRewriteExportFileName(scope, requestedFileName);
+    if (!fileName) {
+        if (rewriteExportFileNameError) {
+            rewriteExportFileNameError.textContent = '请输入有效文件名。';
+            rewriteExportFileNameError.classList.remove('hidden');
+        }
+        rewriteExportFileNameInput?.focus();
+        return '';
+    }
+    return fileName;
 }
 
 function openRewriteExportScopeModal() {
@@ -3015,6 +3122,7 @@ function openRewriteExportScopeModal() {
     rewriteExportSummary.textContent = '当前右侧同时存在上传文件数据和测试转改写数据，请选择本次导出范围。';
     appendDataItem(rewriteExportStats, '上传文件', `${originSummary.file} 条`);
     appendDataItem(rewriteExportStats, '测试转改写', `${originSummary.test} 条`);
+    prepareRewriteExportFileNameInput('all');
     if (rewriteExportScopeChoices) {
         rewriteExportScopeChoices.classList.remove('hidden');
     }
@@ -3023,34 +3131,118 @@ function openRewriteExportScopeModal() {
     }
     rewriteExportModal.classList.remove('hidden');
     rewriteExportModal.setAttribute('aria-hidden', 'false');
+    window.requestAnimationFrame(() => rewriteExportFileNameInput?.focus());
 }
 
-function openRewriteExportModal(statusSummary, scope = 'all') {
+function openRewriteExportReadyModal(scope = 'all', requestedFileName = '') {
+    if (!rewriteExportModal || !rewriteExportSummary || !rewriteExportStats) return;
+    clearElement(rewriteExportStats);
+    const statusSummary = summarizeRewriteRecordStatuses(scope);
+    rewritePendingExportScope = scope;
+    rewritePendingExportAction = () => {
+        const fileName = resolveRewriteExportModalFileName(scope);
+        if (!fileName) return;
+        closeRewriteExportModal();
+        exportRewriteFileWithCurrentState(scope, fileName);
+    };
+    rewriteExportSummary.textContent = `当前导出范围为“${getRewriteExportScopeLabel(scope)}”，可指定导出文件名；留空则使用默认文件名。`;
+    appendDataItem(rewriteExportStats, '导出范围', getRewriteExportScopeLabel(scope));
+    appendDataItem(rewriteExportStats, '记录数', String(statusSummary.total));
+    appendDataItem(rewriteExportStats, '已提交', String(statusSummary.submitted));
+    appendDataItem(rewriteExportStats, '未提交', String(statusSummary.unsubmitted));
+    appendDataItem(rewriteExportStats, '未标注', String(statusSummary.unannotated));
+    prepareRewriteExportFileNameInput(scope, requestedFileName);
+    if (rewriteExportScopeChoices) {
+        rewriteExportScopeChoices.classList.add('hidden');
+    }
+    if (rewriteExportConfirmButton) {
+        rewriteExportConfirmButton.textContent = '导出';
+        rewriteExportConfirmButton.classList.remove('hidden');
+    }
+    rewriteExportModal.classList.remove('hidden');
+    rewriteExportModal.setAttribute('aria-hidden', 'false');
+    window.requestAnimationFrame(() => rewriteExportFileNameInput?.focus());
+}
+
+function openRewriteExportModal(statusSummary, scope = 'all', requestedFileName = '') {
     if (!rewriteExportModal || !rewriteExportSummary || !rewriteExportStats) return;
     clearElement(rewriteExportStats);
     rewritePendingExportScope = scope;
+    rewritePendingExportAction = () => {
+        const fileName = resolveRewriteExportModalFileName(scope);
+        if (!fileName) return;
+        closeRewriteExportModal();
+        exportRewriteFileWithCurrentState(scope, fileName);
+    };
     rewriteExportSummary.textContent = `当前导出范围为“${getRewriteExportScopeLabel(scope)}”，其中存在未提交或未标注数据。强制导出时，只有“已提交”的数据会保留 rewrited，其余记录将按原始导入内容导出。`;
     appendDataItem(rewriteExportStats, '导出范围', getRewriteExportScopeLabel(scope));
     appendDataItem(rewriteExportStats, '记录数', String(statusSummary.total));
     appendDataItem(rewriteExportStats, '已提交', String(statusSummary.submitted));
     appendDataItem(rewriteExportStats, '未提交', String(statusSummary.unsubmitted));
     appendDataItem(rewriteExportStats, '未标注', String(statusSummary.unannotated));
+    prepareRewriteExportFileNameInput(scope, requestedFileName);
     if (rewriteExportScopeChoices) {
         rewriteExportScopeChoices.classList.add('hidden');
     }
     if (rewriteExportConfirmButton) {
+        rewriteExportConfirmButton.textContent = '强制提交导出';
         rewriteExportConfirmButton.classList.remove('hidden');
     }
     rewriteExportModal.classList.remove('hidden');
     rewriteExportModal.setAttribute('aria-hidden', 'false');
+    window.requestAnimationFrame(() => rewriteExportFileNameInput?.focus());
 }
 
 function getCurrentRewriteAnnotator() {
     return String(authenticatedUser?.username || authenticatedUser?.display_name || '').trim();
 }
 
+function stringifyRewriteStructuredExportValue(role = '', value = '') {
+    if (isRewriteObservationRole(role)) {
+        if (typeof value === 'string') {
+            return serializeRewriteObservationPayload(parseRewriteObservationPayload(value));
+        }
+        return serializeRewriteObservationPayload(value || {});
+    }
+    if (isRewriteFunctionCallRole(role)) {
+        if (typeof value === 'string') {
+            const normalizedValue = value.trim();
+            if (!normalizedValue) return '';
+            try {
+                return JSON.stringify(JSON.parse(normalizedValue));
+            } catch (error) {
+                return JSON.stringify(normalizedValue);
+            }
+        }
+        return JSON.stringify(value ?? '');
+    }
+    return value;
+}
+
+function stringifyRewriteStructuredLineForExport(item) {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) return item;
+    const role = String(item.from ?? item.role ?? item.speaker ?? '').trim();
+    if (!isRewriteFunctionCallRole(role) && !isRewriteObservationRole(role)) return item;
+    const valueKeys = ['value', 'content', 'text', 'message', 'utterance'];
+    const valueKey = valueKeys.find((key) => Object.prototype.hasOwnProperty.call(item, key));
+    if (!valueKey) return item;
+    item[valueKey] = stringifyRewriteStructuredExportValue(role, item[valueKey]);
+    return item;
+}
+
+function stringifyRewriteStructuredLinesForExport(record) {
+    if (!record || typeof record !== 'object') return record;
+    const lineKeys = ['rewrited', ...REWRITE_DIALOGUE_KEYS];
+    lineKeys.forEach((key) => {
+        if (!Array.isArray(record[key])) return;
+        record[key].forEach((item) => stringifyRewriteStructuredLineForExport(item));
+    });
+    return record;
+}
+
 function prepareRewriteRecordForExport(record, rewriteStatus = '') {
     const exportRecord = cloneRewriteRecordData(record) || {};
+    stringifyRewriteStructuredLinesForExport(exportRecord);
     exportRecord.rewrite_status = String(rewriteStatus || '').trim();
     const annotator = String(exportRecord.annotator || getCurrentRewriteAnnotator()).trim();
     if (annotator) {
@@ -3081,6 +3273,109 @@ function setRewriteRecordAnnotator(record) {
     if (annotator) {
         record.annotator = annotator;
     }
+}
+
+function normalizeRewriteContextValue(value, fallback = '未知') {
+    const normalized = String(value ?? '').trim();
+    return normalized || fallback;
+}
+
+function buildRewriteHistoryDeviceContext(scenario = {}, sessionConfig = {}) {
+    const hiddenContext = scenario?.hidden_context && typeof scenario.hidden_context === 'object'
+        ? scenario.hidden_context
+        : {};
+    const hiddenDevice = hiddenContext.air_energy_history_device && typeof hiddenContext.air_energy_history_device === 'object'
+        ? hiddenContext.air_energy_history_device
+        : {};
+    const brand = normalizeRewriteContextValue(sessionConfig.history_device_brand || hiddenDevice.brand, '');
+    const category = normalizeRewriteContextValue(sessionConfig.history_device_category || hiddenDevice.category, '');
+    const purchaseDate = normalizeRewriteContextValue(
+        sessionConfig.history_device_purchase_date || hiddenDevice.purchase_date,
+        '',
+    );
+    const purchaseYear = normalizeRewriteContextValue(hiddenDevice.purchase_year, '');
+    const purchaseMonth = normalizeRewriteContextValue(hiddenDevice.purchase_month, '');
+    const hasConfiguredHistory = Boolean(brand || category || purchaseDate || purchaseYear || purchaseMonth)
+        && hiddenContext.product_routing_has_history_device !== false;
+    const derivedPurchaseDate = purchaseDate || (
+        purchaseYear && purchaseMonth ? `${purchaseYear}-${String(purchaseMonth).padStart(2, '0')}` : ''
+    );
+    return {
+        status: hasConfiguredHistory ? '已知' : '未知',
+        brand: hasConfiguredHistory ? normalizeRewriteContextValue(brand) : '未知',
+        category: hasConfiguredHistory ? normalizeRewriteContextValue(category) : '未知',
+        purchase_date: hasConfiguredHistory ? normalizeRewriteContextValue(derivedPurchaseDate) : '未知',
+        purchase_year: hasConfiguredHistory ? normalizeRewriteContextValue(purchaseYear) : '未知',
+        purchase_month: hasConfiguredHistory ? normalizeRewriteContextValue(purchaseMonth) : '未知',
+    };
+}
+
+function buildRewriteTestModeContext() {
+    const scenario = currentScenarioSnapshot && typeof currentScenarioSnapshot === 'object'
+        ? currentScenarioSnapshot
+        : {};
+    const sessionConfig = currentSessionConfigSnapshot && typeof currentSessionConfigSnapshot === 'object'
+        ? currentSessionConfigSnapshot
+        : {};
+    const hiddenContext = scenario.hidden_context && typeof scenario.hidden_context === 'object'
+        ? scenario.hidden_context
+        : {};
+    const historicalAddress = normalizeRewriteContextValue(
+        sessionConfig.known_address
+            || hiddenContext.service_known_address_value
+            || hiddenContext.frontend_auto_configured_known_address,
+    );
+    return {
+        historical_address: historicalAddress,
+        known_address: historicalAddress,
+        call_start_time: normalizeRewriteContextValue(scenario.call_start_time || sessionConfig.call_start_time),
+        history_device: buildRewriteHistoryDeviceContext(scenario, sessionConfig),
+    };
+}
+
+function hasRewriteTestModeContext(record) {
+    return Boolean(record?.test_mode_context && typeof record.test_mode_context === 'object');
+}
+
+function formatRewriteHistoryDeviceSummary(historyDevice) {
+    if (!historyDevice || typeof historyDevice !== 'object') return '未知';
+    if (String(historyDevice.status || '').trim() === '未知') return '未知';
+    return [
+        historyDevice.brand,
+        historyDevice.category,
+        historyDevice.purchase_date,
+    ]
+        .map((value) => String(value || '').trim())
+        .filter((value) => value && value !== '未知')
+        .join(' / ') || '未知';
+}
+
+function closeRewriteContextModal() {
+    if (!rewriteContextModal) return;
+    rewriteContextModal.classList.add('hidden');
+    rewriteContextModal.setAttribute('aria-hidden', 'true');
+}
+
+function openRewriteContextModal(recordIndex) {
+    const record = rewriteRecords[recordIndex];
+    if (!rewriteContextModal || !rewriteContextStats || !hasRewriteTestModeContext(record)) return;
+    const context = record.test_mode_context || {};
+    const historyDevice = context.history_device && typeof context.history_device === 'object'
+        ? context.history_device
+        : {};
+    clearElement(rewriteContextStats);
+    if (rewriteContextTitle) rewriteContextTitle.textContent = '测试配套信息';
+    if (rewriteContextSummary) {
+        rewriteContextSummary.textContent = `${buildRewriteRecordTitle(record, recordIndex)} 的测试模式配套信息。`;
+    }
+    appendDataItem(rewriteContextStats, '历史地址', normalizeRewriteContextValue(context.historical_address || context.known_address));
+    appendDataItem(rewriteContextStats, '通话开始时间', normalizeRewriteContextValue(context.call_start_time));
+    appendDataItem(rewriteContextStats, '历史设备状态', normalizeRewriteContextValue(historyDevice.status));
+    appendDataItem(rewriteContextStats, '历史设备品牌', normalizeRewriteContextValue(historyDevice.brand));
+    appendDataItem(rewriteContextStats, '历史设备品类', normalizeRewriteContextValue(historyDevice.category));
+    appendDataItem(rewriteContextStats, '历史设备购买时间', normalizeRewriteContextValue(historyDevice.purchase_date));
+    rewriteContextModal.classList.remove('hidden');
+    rewriteContextModal.setAttribute('aria-hidden', 'false');
 }
 
 function buildRewriteExportRecords(scope = 'all') {
@@ -3423,6 +3718,7 @@ function buildRewriteRecordFromSessionEntries() {
         auto_mode_id: autoRecordId,
         id: recordId,
         conversations,
+        test_mode_context: buildRewriteTestModeContext(),
         source: autoRecordId && !currentSessionId ? 'auto_mode' : 'manual_test',
     };
 }
@@ -3482,20 +3778,6 @@ function buildRewriteExportContent(scope = 'all') {
     return JSON.stringify(exportRecords, null, 2);
 }
 
-function buildRewriteExportFileName(scope = 'all') {
-    const sourceName = String(rewriteSourceName || 'rewrite_export').trim();
-    const baseName = (sourceName.replace(/\.[^.]+$/, '') || 'rewrite_export').replace(/[\\/:*?"<>|]+/g, '_');
-    const extension = getRewriteExportFormat(scope);
-    const scopeSuffix = scope === 'file'
-        ? 'file'
-        : scope === 'test'
-            ? 'test'
-            : hasMixedRewriteRecordOrigins()
-                ? 'all'
-                : '';
-    return `${baseName}${scopeSuffix ? `_${scopeSuffix}` : ''}_rewrited.${extension}`;
-}
-
 function exportRewriteFile() {
     if (!rewriteRecords.length) return;
     if (hasMixedRewriteRecordOrigins()) {
@@ -3505,7 +3787,7 @@ function exportRewriteFile() {
     exportRewriteScopeWithValidation('all');
 }
 
-function exportRewriteScopeWithValidation(scope = 'all') {
+function exportRewriteScopeWithValidation(scope = 'all', requestedFileName = '') {
     const indexes = getRewriteExportIndexes(scope);
     if (!indexes.length) {
         if (rewriteUploadStatus) {
@@ -3515,18 +3797,13 @@ function exportRewriteScopeWithValidation(scope = 'all') {
     }
     const statusSummary = summarizeRewriteRecordStatuses(scope);
     if (statusSummary.unsubmitted > 0 || statusSummary.unannotated > 0) {
-        rewritePendingExportAction = () => {
-            closeRewriteExportModal();
-            exportRewriteFileWithCurrentState(scope);
-        };
-        openRewriteExportModal(statusSummary, scope);
+        openRewriteExportModal(statusSummary, scope, requestedFileName);
         return;
     }
-    closeRewriteExportModal();
-    exportRewriteFileWithCurrentState(scope);
+    openRewriteExportReadyModal(scope, requestedFileName);
 }
 
-function exportRewriteFileWithCurrentState(scope = 'all') {
+function exportRewriteFileWithCurrentState(scope = 'all', fileName = '') {
     if (!rewriteRecords.length) return;
     const statusSummary = summarizeRewriteRecordStatuses(scope);
     if (statusSummary.unsubmitted > 0 || statusSummary.unannotated > 0) {
@@ -3536,7 +3813,7 @@ function exportRewriteFileWithCurrentState(scope = 'all') {
         }
     }
     const content = buildRewriteExportContent(scope);
-    const fileName = buildRewriteExportFileName(scope);
+    const resolvedFileName = fileName || buildDefaultRewriteExportFileName(scope);
     const format = getRewriteExportFormat(scope);
     const blob = new Blob([content], {
         type: format === 'jsonl'
@@ -3546,7 +3823,7 @@ function exportRewriteFileWithCurrentState(scope = 'all') {
     const objectUrl = URL.createObjectURL(blob);
     const anchor = document.createElement('a');
     anchor.href = objectUrl;
-    anchor.download = fileName;
+    anchor.download = resolvedFileName;
     document.body.appendChild(anchor);
     anchor.click();
     anchor.remove();
@@ -3554,7 +3831,7 @@ function exportRewriteFileWithCurrentState(scope = 'all') {
         URL.revokeObjectURL(objectUrl);
     }, 0);
     if (rewriteUploadStatus) {
-        rewriteUploadStatus.textContent = `已导出${getRewriteExportScopeLabel(scope)}：${fileName}`;
+        rewriteUploadStatus.textContent = `已导出${getRewriteExportScopeLabel(scope)}：${resolvedFileName}`;
     }
 }
 
@@ -4295,6 +4572,17 @@ function renderRewriteRecordInfo(record) {
     } else {
         appendDataItem(rewriteRecordInfo, '空气能链路', '未选择');
     }
+    if (hasRewriteTestModeContext(record)) {
+        const context = record.test_mode_context || {};
+        appendDataItem(rewriteRecordInfo, '测试配套信息', '右键查看');
+        appendDataItem(rewriteRecordInfo, '历史地址', normalizeRewriteContextValue(context.historical_address || context.known_address));
+        appendDataItem(rewriteRecordInfo, '通话开始时间', normalizeRewriteContextValue(context.call_start_time));
+        appendDataItem(
+            rewriteRecordInfo,
+            '历史设备',
+            formatRewriteHistoryDeviceSummary(context.history_device),
+        );
+    }
 
     if (record && typeof record === 'object') {
         [
@@ -4755,6 +5043,8 @@ function duplicateRewriteRecord(recordIndex) {
     assignRewriteRecordId(duplicateImportedRecord, duplicateId);
     delete duplicateRecord.rewrited;
     delete duplicateImportedRecord.rewrited;
+    delete duplicateRecord.air_energy_water_heater_link;
+    delete duplicateImportedRecord.air_energy_water_heater_link;
 
     const insertIndex = recordIndex + 1;
     const duplicatedEditableLines = cloneRewriteLines(
@@ -5162,9 +5452,14 @@ function endTextMagnifierPress(event) {
 
 async function hydrateKnownAddressPrefill(force = false, options = {}) {
     if (!authenticatedUser || !selectedScenario) return;
-    const { explicit = false, autoMode = false } = options;
+    const { explicit = false, autoMode = false, replaceManualOverride = false } = options;
+    if (knownAddressClearedBeforeStart && !replaceManualOverride) return;
     const currentValue = knownAddressInput.value.trim();
-    if (knownAddressExplicitOverride && !explicit && (!force || currentValue || !autoMode)) return;
+    if (knownAddressExplicitOverride && !explicit && !replaceManualOverride) {
+        if (!force) return;
+        if (!currentValue) return;
+        if (currentValue !== String(autoKnownAddressValue || '').trim()) return;
+    }
     if (!force && currentValue && currentValue !== autoKnownAddressValue) return;
     const scenarioId = selectedScenario.id;
     try {
@@ -5184,12 +5479,9 @@ async function hydrateKnownAddressPrefill(force = false, options = {}) {
     }
 }
 
-async function randomizeManualSessionInputsBeforeStart(options = {}) {
-    const { autoMode = false } = options;
+async function prepareManualSessionInputsBeforeStart() {
     selectedScenario = buildConfiguredScenarioSelection();
-    prefillMockCallStartTime(true);
     updateCallStartTimeValidationState();
-    await hydrateKnownAddressPrefill(true, { autoMode });
 }
 
 function formatElapsedDuration(startValue, endValue = '') {
@@ -5771,6 +6063,8 @@ function applySessionView(data) {
     sessionReviewLocked = false;
     sessionStartedAt = String(data.started_at || '').trim();
     sessionEndedAt = String(data.ended_at || '').trim();
+    currentScenarioSnapshot = cloneRewriteRecordData(data.scenario || null);
+    currentSessionConfigSnapshot = cloneRewriteRecordData(data.session_config || {}) || {};
 
     setSessionStatus(data.status || 'active');
     setSessionIdIndicator(data.session_id);
@@ -6894,8 +7188,11 @@ function resetWorkspace() {
     terminalProcessingState = null;
     sessionStartedAt = '';
     sessionEndedAt = '';
+    currentScenarioSnapshot = null;
+    currentSessionConfigSnapshot = {};
     autoKnownAddressValue = '';
     knownAddressExplicitOverride = false;
+    knownAddressClearedBeforeStart = false;
     autoCallStartTimeValue = '';
     stopSessionTimer();
     refreshSessionTimerDisplay();
@@ -6913,7 +7210,6 @@ function resetWorkspace() {
     knownAddressInput.value = '';
     callStartTimeInput.value = '';
     useSessionStartTimeCheckbox.checked = false;
-    prefillMockCallStartTime(true);
     updateCallStartTimeValidationState();
     sanitizeManualMaxRoundsInput();
     updateStartSessionButtonState();
@@ -7004,10 +7300,8 @@ function selectScenario(scenario) {
         scenario_id: scenario.id,
         product: { brand: scenario.product.split(' ')[0] || scenario.product, model: scenario.product.replace(/^[^ ]+\s*/, '') },
     });
-    prefillMockCallStartTime(false);
     updateCallStartTimeValidationState();
     updateStartSessionButtonState();
-    hydrateKnownAddressPrefill(false);
 }
 
 async function checkAuth() {
@@ -7188,7 +7482,7 @@ async function startSession() {
     }
     clearClosedSessionReviewBeforeNewRun();
 
-    await randomizeManualSessionInputsBeforeStart({ autoMode: false });
+    await prepareManualSessionInputsBeforeStart();
     if (!updateCallStartTimeValidationState()) {
         updateStartSessionButtonState();
         return;
@@ -7268,6 +7562,8 @@ function applyAutoModeView(data) {
     sessionReviewLocked = false;
     sessionStartedAt = String(data?.started_at || '').trim();
     sessionEndedAt = String(data?.ended_at || '').trim();
+    currentScenarioSnapshot = cloneRewriteRecordData(data?.scenario || null);
+    currentSessionConfigSnapshot = cloneRewriteRecordData(data?.session_config || {}) || {};
     resetReviewState();
     setSessionStatus(data?.status || (currentSessionId ? 'active' : 'completed'));
     setSessionIdIndicator(data?.auto_mode_id || currentSessionId || '', {
@@ -7358,7 +7654,7 @@ async function runAutoMode() {
     }
     clearClosedSessionReviewBeforeNewRun();
 
-    await randomizeManualSessionInputsBeforeStart({ autoMode: true });
+    await prepareManualSessionInputsBeforeStart();
     if (!updateCallStartTimeValidationState()) {
         updateStartSessionButtonState();
         return;
@@ -7612,17 +7908,17 @@ async function toggleIeDisplayForRound(roundIndex, enabled, entityType = 'addres
 loginForm.addEventListener('submit', login);
 loginPasswordToggle.addEventListener('click', togglePasswordVisibility);
 manualProductCategorySelect?.addEventListener('change', () => {
-    syncManualScenarioSelection({ refreshKnownAddress: true });
+    syncManualScenarioSelection();
 });
 manualRequestTypeSelect?.addEventListener('change', () => {
-    syncManualScenarioSelection({ refreshKnownAddress: true });
+    syncManualScenarioSelection();
 });
 historyDeviceBrandSelect?.addEventListener('change', () => {
     syncHistoryDeviceCategoryOptions();
-    syncManualScenarioSelection({ refreshKnownAddress: false });
+    syncManualScenarioSelection();
 });
 historyDeviceCategorySelect?.addEventListener('change', () => {
-    syncManualScenarioSelection({ refreshKnownAddress: false });
+    syncManualScenarioSelection();
 });
 [
     historyDevicePurchaseYearInput,
@@ -7632,7 +7928,7 @@ historyDeviceCategorySelect?.addEventListener('change', () => {
     input?.addEventListener('input', () => {
         input.value = String(input.value || '').replace(/\D+/g, '');
         syncHistoryDeviceDateValueFromParts();
-        syncManualScenarioSelection({ refreshKnownAddress: false });
+        syncManualScenarioSelection();
     });
     input?.addEventListener('blur', () => {
         if (input === historyDevicePurchaseMonthInput || input === historyDevicePurchaseDayInput) {
@@ -7640,17 +7936,17 @@ historyDeviceCategorySelect?.addEventListener('change', () => {
             if (value) input.value = String(Number(value));
         }
         syncHistoryDeviceDateValueFromParts();
-        syncManualScenarioSelection({ refreshKnownAddress: false });
+        syncManualScenarioSelection();
     });
 });
 historyDevicePurchaseDateInput?.addEventListener('input', () => {
     setHistoryDeviceDateParts(historyDevicePurchaseDateInput.value);
-    syncManualScenarioSelection({ refreshKnownAddress: false });
+    syncManualScenarioSelection();
 });
 historyDeviceCalendarButton?.addEventListener('click', openHistoryDeviceCalendarPicker);
 generateHistoryDeviceDateButton?.addEventListener('click', () => {
     setHistoryDeviceDateParts(randomHistoryDevicePurchaseDate());
-    syncManualScenarioSelection({ refreshKnownAddress: false });
+    syncManualScenarioSelection();
 });
 clearHistoryDeviceButton?.addEventListener('click', clearHistoryDeviceConfig);
 document.getElementById('logout-btn').onclick = logout;
@@ -7764,7 +8060,23 @@ if (rewriteExportScopeChoices) {
         const button = event.target.closest('[data-rewrite-export-scope]');
         if (!button) return;
         const scope = String(button.dataset.rewriteExportScope || 'all').trim() || 'all';
-        exportRewriteScopeWithValidation(scope);
+        exportRewriteScopeWithValidation(scope, getRewriteExportModalFileNameValue());
+    });
+}
+if (rewriteExportFileNameInput) {
+    rewriteExportFileNameInput.addEventListener('input', () => {
+        if (rewriteExportFileNameError) {
+            rewriteExportFileNameError.classList.add('hidden');
+        }
+    });
+    rewriteExportFileNameInput.addEventListener('keydown', (event) => {
+        if (event.key !== 'Enter') return;
+        event.preventDefault();
+        if (rewriteExportScopeChoices && !rewriteExportScopeChoices.classList.contains('hidden')) return;
+        const pendingAction = rewritePendingExportAction;
+        if (typeof pendingAction === 'function') {
+            pendingAction();
+        }
     });
 }
 if (rewriteExportModal) {
@@ -7960,10 +8272,12 @@ sessionIdCopyButton.addEventListener('click', copyCurrentSessionId);
 clearKnownAddressButton.addEventListener('click', () => {
     knownAddressInput.value = '';
     autoKnownAddressValue = '';
-    knownAddressExplicitOverride = true;
+    knownAddressExplicitOverride = false;
+    knownAddressClearedBeforeStart = true;
 });
 generateKnownAddressButton.addEventListener('click', () => {
-    hydrateKnownAddressPrefill(true, { explicit: true });
+    knownAddressClearedBeforeStart = false;
+    hydrateKnownAddressPrefill(true, { replaceManualOverride: true });
 });
 generateCallStartTimeButton.addEventListener('click', () => {
     useSessionStartTimeCheckbox.checked = false;
@@ -7975,12 +8289,15 @@ knownAddressInput.addEventListener('input', () => {
     const currentValue = knownAddressInput.value.trim();
     if (!currentValue) {
         autoKnownAddressValue = '';
-        knownAddressExplicitOverride = true;
+        knownAddressExplicitOverride = false;
+        knownAddressClearedBeforeStart = false;
     } else if (currentValue !== autoKnownAddressValue) {
         autoKnownAddressValue = '';
         knownAddressExplicitOverride = true;
+        knownAddressClearedBeforeStart = false;
     } else {
         knownAddressExplicitOverride = false;
+        knownAddressClearedBeforeStart = false;
     }
 });
 callStartTimeInput.addEventListener('input', () => {
@@ -7993,8 +8310,6 @@ callStartTimeInput.addEventListener('input', () => {
 useSessionStartTimeCheckbox.addEventListener('change', () => {
     if (useSessionStartTimeCheckbox.checked) {
         callStartTimeInput.value = formatDisplayTimestamp(new Date());
-    } else if (!callStartTimeInput.value.trim()) {
-        prefillMockCallStartTime(true);
     }
     updateCallStartTimeValidationState();
     updateStartSessionButtonState();
@@ -8061,6 +8376,25 @@ rewriteRecordList.addEventListener('contextmenu', (event) => {
     }
     openRewriteRecordMenu(recordIndex, event.clientX, event.clientY);
 });
+rewriteRecordInfo?.addEventListener('contextmenu', (event) => {
+    if (!Number.isInteger(rewriteSelectedIndex) || rewriteSelectedIndex < 0) {
+        closeRewriteRecordMenu();
+        return;
+    }
+    const record = rewriteRecords[rewriteSelectedIndex];
+    if (!hasRewriteTestModeContext(record)) {
+        closeRewriteRecordMenu();
+        return;
+    }
+    event.preventDefault();
+    openRewriteRecordMenu(rewriteSelectedIndex, event.clientX, event.clientY, { source: 'info' });
+});
+rewriteRecordViewButton?.addEventListener('click', () => {
+    if (!rewriteRecordMenuState) return;
+    const recordIndex = Number(rewriteRecordMenuState.recordIndex);
+    closeRewriteRecordMenu();
+    openRewriteContextModal(recordIndex);
+});
 rewriteRecordCopyButton?.addEventListener('click', () => {
     if (!rewriteRecordMenuState) return;
     duplicateRewriteRecord(Number(rewriteRecordMenuState.recordIndex));
@@ -8096,6 +8430,13 @@ rewriteRecordDeleteButton?.addEventListener('click', () => {
 rewriteRecordReviewButton?.addEventListener('click', () => {
     if (!rewriteRecordMenuState) return;
     void submitRewriteRecordReview(Number(rewriteRecordMenuState.recordIndex));
+});
+rewriteContextCloseButton?.addEventListener('click', closeRewriteContextModal);
+rewriteContextOkButton?.addEventListener('click', closeRewriteContextModal);
+rewriteContextModal?.addEventListener('click', (event) => {
+    if (event.target === rewriteContextModal || event.target.classList.contains('modal-backdrop')) {
+        closeRewriteContextModal();
+    }
 });
 modelSelectorButton?.addEventListener('click', (event) => {
     event.stopPropagation();
@@ -8454,7 +8795,6 @@ setNextRound(1);
 resetReviewState();
 setPasswordVisibility(false);
 setSelectedModelName('gpt-4o');
-prefillMockCallStartTime(true);
 syncHistoryDeviceCategoryOptions();
 updateCallStartTimeValidationState();
 updateStartSessionButtonState();
