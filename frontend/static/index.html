@@ -372,7 +372,7 @@
                     <p class="eyebrow">Rewrite Mode</p>
                     <h1>数据多样化改写模式</h1>
                 </div>
-                <p class="section-copy">上传JSON/JSONL包含对话数据的文件，按文件顺序浏览并在中间区域查看并编辑每条对话记录。</p>
+                <p class="section-copy">上传JSONL对话数据文件，按文件顺序浏览并在中间区域查看并编辑每条对话记录。</p>
             </section>
 
             <section class="panel-section">
@@ -381,9 +381,9 @@
                 </div>
                 <div class="rewrite-import-actions">
                     <label for="rewrite-file-input" class="rewrite-upload-dropzone">
-                        <span class="rewrite-upload-title">选择JSON/JSONL文件</span>
-                        <span class="rewrite-upload-copy">支持单个JSON数组、单条JSON对象、多行JSONL。</span>
-                        <input id="rewrite-file-input" type="file" accept=".json,.jsonl,application/json,application/x-ndjson">
+                        <span class="rewrite-upload-title">选择JSONL文件</span>
+                        <span class="rewrite-upload-copy">每行必须是包含 session_id 和 conversations 的JSON对象。</span>
+                        <input id="rewrite-file-input" type="file" accept=".jsonl,application/x-ndjson">
                     </label>
                     <button id="rewrite-export-btn" class="secondary-btn" type="button" disabled>导出编辑后文件</button>
                     <p id="rewrite-upload-status" class="terminal-hint">尚未导入文件。</p>
@@ -767,10 +767,10 @@
                 </div>
                 <button id="rewrite-context-close-btn" class="modal-close-btn" type="button" aria-label="关闭测试配套信息窗口">×</button>
             </div>
-            <p id="rewrite-context-summary" class="section-copy">展示该条测试转改写数据携带的测试模式配套信息。</p>
+            <p id="rewrite-context-summary" class="section-copy">查看并编辑该条数据携带的测试模式配套信息。</p>
             <div id="rewrite-context-stats" class="data-list"></div>
             <div class="modal-actions">
-                <button id="rewrite-context-ok-btn" class="primary-btn" type="button">关闭</button>
+                <button id="rewrite-context-ok-btn" class="primary-btn" type="button">确认</button>
             </div>
         </section>
     </div>

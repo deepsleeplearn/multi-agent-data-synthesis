@@ -111,6 +111,7 @@ let rewriteKeyPromptState = null;
 let rewriteLinkSubmitAfterConfirm = false;
 let rewriteAirLinkOptions = [];
 let rewriteAirLinkOptionsPromise = null;
+let rewriteContextEditRecordIndex = -1;
 let rewriteTransferNoticeTimer = null;
 let blockingActionNoticeTimer = null;
 let manualShellLeftHidden = false;
@@ -378,10 +379,10 @@ const REWRITE_RECORD_COLLECTION_KEYS = [
     'results',
 ];
 const REWRITE_RECORD_ID_KEYS = [
+    'session_id',
     'scenario_id',
     'id',
     'sample_id',
-    'session_id',
     'uuid',
     'record_id',
     'unique_id',
@@ -1960,7 +1961,37 @@ function normalizeRewriteRecordsPayloadWithPreference(payload, dialogueKeyOverri
     return [payload];
 }
 
-function parseJsonlRecords(text) {
+function isPlainObject(value) {
+    return Boolean(value && typeof value === 'object' && !Array.isArray(value));
+}
+
+function validateStrictRewriteJsonlRecord(record, index) {
+    const lineNumber = index + 1;
+    if (!isPlainObject(record)) {
+        throw new Error(`第 ${lineNumber} 行必须是 JSON 对象`);
+    }
+    if (!Object.prototype.hasOwnProperty.call(record, 'session_id') || !String(record.session_id ?? '').trim()) {
+        throw new Error(`第 ${lineNumber} 行必须包含非空 session_id`);
+    }
+    if (!Object.prototype.hasOwnProperty.call(record, 'conversations') || !Array.isArray(record.conversations)) {
+        throw new Error(`第 ${lineNumber} 行 conversations 必须是数组`);
+    }
+    record.conversations.forEach((turn, turnIndex) => {
+        const turnLabel = `第 ${lineNumber} 行 conversations[${turnIndex}]`;
+        if (!isPlainObject(turn)) {
+            throw new Error(`${turnLabel} 必须是 JSON 对象`);
+        }
+        const keys = Object.keys(turn).sort();
+        if (keys.length !== 2 || keys[0] !== 'content' || keys[1] !== 'role') {
+            throw new Error(`${turnLabel} 只能包含 role、content 两个键`);
+        }
+        if (!String(turn.role ?? '').trim()) {
+            throw new Error(`${turnLabel}.role 不能为空`);
+        }
+    });
+}
+
+function parseStrictRewriteJsonlRecords(text) {
     const records = [];
     String(text || '')
         .split(/\r?\n/)
@@ -1969,19 +2000,18 @@ function parseJsonlRecords(text) {
         .forEach((line, index) => {
             try {
                 const parsedLine = JSON.parse(line);
-                if (Array.isArray(parsedLine)) {
-                    if (parsedLine.every((item) => isPotentialRewriteTurn(item))) {
-                        records.push(parsedLine);
-                    } else {
-                        records.push(...parsedLine);
-                    }
-                } else {
-                    records.push(parsedLine);
-                }
+                validateStrictRewriteJsonlRecord(parsedLine, index);
+                records.push(parsedLine);
             } catch (error) {
-                throw new Error(`第 ${index + 1} 行不是合法 JSON`);
+                if (error instanceof SyntaxError) {
+                    throw new Error(`第 ${index + 1} 行不是合法 JSON`);
+                }
+                throw error;
             }
         });
+    if (!records.length) {
+        throw new Error('文件中没有可导入的 JSONL 记录');
+    }
     return records;
 }
 
@@ -1992,29 +2022,11 @@ function parseRewriteSourcePayload(text, fileName = '') {
     }
 
     const normalizedName = String(fileName || '').toLowerCase();
-    const preferJsonl = normalizedName.endsWith('.jsonl');
-    let parsed = null;
-    let format = '';
-
-    if (preferJsonl) {
-        try {
-            parsed = parseJsonlRecords(normalizedText);
-            format = 'jsonl';
-        } catch (jsonlError) {
-            parsed = JSON.parse(normalizedText);
-            format = 'json';
-        }
-    } else {
-        try {
-            parsed = JSON.parse(normalizedText);
-            format = 'json';
-        } catch (jsonError) {
-            parsed = parseJsonlRecords(normalizedText);
-            format = 'jsonl';
-        }
+    if (!normalizedName.endsWith('.jsonl')) {
+        throw new Error('改写模式只支持上传 JSONL 文件');
     }
 
-    return { parsed, format };
+    return { parsed: parseStrictRewriteJsonlRecords(normalizedText), format: 'jsonl' };
 }
 
 function parseRewriteRecords(payload, { dialogueKeyOverride = '' } = {}) {
@@ -3243,6 +3255,20 @@ function stringifyRewriteStructuredLinesForExport(record) {
 function prepareRewriteRecordForExport(record, rewriteStatus = '') {
     const exportRecord = cloneRewriteRecordData(record) || {};
     stringifyRewriteStructuredLinesForExport(exportRecord);
+    const sessionId = String(
+        exportRecord.session_id
+        || exportRecord.id
+        || exportRecord.auto_mode_id
+        || exportRecord.scenario_id
+        || '',
+    ).trim();
+    if (sessionId) {
+        exportRecord.session_id = sessionId;
+    }
+    if (inferRewriteRecordOrigin(exportRecord) === 'test') {
+        delete exportRecord.id;
+        delete exportRecord.auto_mode_id;
+    }
     exportRecord.rewrite_status = String(rewriteStatus || '').trim();
     const annotator = String(exportRecord.annotator || getCurrentRewriteAnnotator()).trim();
     if (annotator) {
@@ -3354,6 +3380,78 @@ function closeRewriteContextModal() {
     if (!rewriteContextModal) return;
     rewriteContextModal.classList.add('hidden');
     rewriteContextModal.setAttribute('aria-hidden', 'true');
+    rewriteContextEditRecordIndex = -1;
+}
+
+function appendRewriteContextEditField(container, labelText, fieldKey, value = '') {
+    if (!container) return;
+    const label = document.createElement('label');
+    label.className = 'field rewrite-context-edit-field';
+
+    const labelNode = document.createElement('span');
+    labelNode.textContent = labelText;
+
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.value = String(value ?? '');
+    input.dataset.rewriteContextField = fieldKey;
+    input.autocomplete = 'off';
+
+    label.append(labelNode, input);
+    container.appendChild(label);
+}
+
+function collectRewriteContextModalValues() {
+    const values = {};
+    rewriteContextStats?.querySelectorAll('[data-rewrite-context-field]').forEach((input) => {
+        values[input.dataset.rewriteContextField] = String(input.value ?? '').trim();
+    });
+    return values;
+}
+
+function saveRewriteContextModal() {
+    const recordIndex = rewriteContextEditRecordIndex;
+    if (!Number.isInteger(recordIndex) || recordIndex < 0) {
+        closeRewriteContextModal();
+        return;
+    }
+    const record = rewriteRecords[recordIndex];
+    if (!hasRewriteTestModeContext(record)) {
+        closeRewriteContextModal();
+        return;
+    }
+    const values = collectRewriteContextModalValues();
+    const existingContext = record.test_mode_context && typeof record.test_mode_context === 'object'
+        ? record.test_mode_context
+        : {};
+    const existingHistoryDevice = existingContext.history_device && typeof existingContext.history_device === 'object'
+        ? existingContext.history_device
+        : {};
+    const historicalAddress = normalizeRewriteContextValue(values.historical_address);
+    const nextContext = {
+        ...existingContext,
+        historical_address: historicalAddress,
+        known_address: historicalAddress,
+        call_start_time: normalizeRewriteContextValue(values.call_start_time),
+        history_device: {
+            ...existingHistoryDevice,
+            status: normalizeRewriteContextValue(values['history_device.status']),
+            brand: normalizeRewriteContextValue(values['history_device.brand']),
+            category: normalizeRewriteContextValue(values['history_device.category']),
+            purchase_date: normalizeRewriteContextValue(values['history_device.purchase_date']),
+            purchase_year: normalizeRewriteContextValue(values['history_device.purchase_year']),
+            purchase_month: normalizeRewriteContextValue(values['history_device.purchase_month']),
+        },
+    };
+    record.test_mode_context = nextContext;
+    if (rewriteImportedRecords[recordIndex] && typeof rewriteImportedRecords[recordIndex] === 'object') {
+        rewriteImportedRecords[recordIndex].test_mode_context = cloneRewriteRecordData(nextContext);
+    }
+    closeRewriteContextModal();
+    renderRewriteRecordState(recordIndex);
+    if (rewriteUploadStatus) {
+        rewriteUploadStatus.textContent = `${buildRewriteRecordTitle(record, recordIndex)} 的测试配套信息已更新。`;
+    }
 }
 
 function openRewriteContextModal(recordIndex) {
@@ -3368,14 +3466,20 @@ function openRewriteContextModal(recordIndex) {
     if (rewriteContextSummary) {
         rewriteContextSummary.textContent = `${buildRewriteRecordTitle(record, recordIndex)} 的测试模式配套信息。`;
     }
-    appendDataItem(rewriteContextStats, '历史地址', normalizeRewriteContextValue(context.historical_address || context.known_address));
-    appendDataItem(rewriteContextStats, '通话开始时间', normalizeRewriteContextValue(context.call_start_time));
-    appendDataItem(rewriteContextStats, '历史设备状态', normalizeRewriteContextValue(historyDevice.status));
-    appendDataItem(rewriteContextStats, '历史设备品牌', normalizeRewriteContextValue(historyDevice.brand));
-    appendDataItem(rewriteContextStats, '历史设备品类', normalizeRewriteContextValue(historyDevice.category));
-    appendDataItem(rewriteContextStats, '历史设备购买时间', normalizeRewriteContextValue(historyDevice.purchase_date));
+    rewriteContextEditRecordIndex = recordIndex;
+    appendRewriteContextEditField(rewriteContextStats, '历史地址', 'historical_address', normalizeRewriteContextValue(context.historical_address || context.known_address));
+    appendRewriteContextEditField(rewriteContextStats, '通话开始时间', 'call_start_time', normalizeRewriteContextValue(context.call_start_time));
+    appendRewriteContextEditField(rewriteContextStats, '历史设备状态', 'history_device.status', normalizeRewriteContextValue(historyDevice.status));
+    appendRewriteContextEditField(rewriteContextStats, '历史设备品牌', 'history_device.brand', normalizeRewriteContextValue(historyDevice.brand));
+    appendRewriteContextEditField(rewriteContextStats, '历史设备品类', 'history_device.category', normalizeRewriteContextValue(historyDevice.category));
+    appendRewriteContextEditField(rewriteContextStats, '历史设备购买时间', 'history_device.purchase_date', normalizeRewriteContextValue(historyDevice.purchase_date));
+    appendRewriteContextEditField(rewriteContextStats, '历史设备购买年份', 'history_device.purchase_year', normalizeRewriteContextValue(historyDevice.purchase_year));
+    appendRewriteContextEditField(rewriteContextStats, '历史设备购买月份', 'history_device.purchase_month', normalizeRewriteContextValue(historyDevice.purchase_month));
     rewriteContextModal.classList.remove('hidden');
     rewriteContextModal.setAttribute('aria-hidden', 'false');
+    window.requestAnimationFrame(() => {
+        rewriteContextStats.querySelector('[data-rewrite-context-field]')?.focus();
+    });
 }
 
 function buildRewriteExportRecords(scope = 'all') {
@@ -3641,9 +3745,6 @@ function validateRewriteAirLinkSelection(record, option) {
 async function ensureCurrentRewriteAirLinkSelection() {
     const record = rewriteRecords[rewriteSelectedIndex];
     await loadRewriteAirLinkOptions();
-    const selection = getRewriteAirLinkSelection(record);
-    const option = findRewriteAirLinkOption(selection?.link_number);
-    if (validateRewriteAirLinkSelection(record, option)) return true;
     await openRewriteLinkModal({ submitAfterConfirm: true });
     return false;
 }
@@ -3760,13 +3861,7 @@ function appendCurrentSessionToRewriteMode() {
 }
 
 function getRewriteExportFormat(scope = 'all') {
-    if (scope === 'test') return 'jsonl';
-    if (scope === 'all') {
-        const originSummary = summarizeRewriteRecordOrigins(getRewriteExportIndexes(scope));
-        if (originSummary.test > 0 && originSummary.file === 0) return 'jsonl';
-        if (originSummary.test > 0 && originSummary.file > 0) return 'jsonl';
-    }
-    return String(rewriteSourceFormat || '').trim().toLowerCase() === 'jsonl' ? 'jsonl' : 'json';
+    return 'jsonl';
 }
 
 function buildRewriteExportContent(scope = 'all') {
@@ -4565,7 +4660,6 @@ function renderRewriteRecordInfo(record) {
     const airLinkSelection = getRewriteAirLinkSelection(record);
     if (airLinkSelection) {
         appendDataItem(rewriteRecordInfo, '空气能链路编号', airLinkSelection.link_number || '-');
-        appendDataItem(rewriteRecordInfo, '空气能链路节点', airLinkSelection.endpoint || '-');
         if (airLinkSelection.arrival_fault_type) {
             appendDataItem(rewriteRecordInfo, '到货/故障', airLinkSelection.arrival_fault_type);
         }
@@ -4585,13 +4679,17 @@ function renderRewriteRecordInfo(record) {
     }
 
     if (record && typeof record === 'object') {
-        [
+        const displayedInfoKeys = new Set();
+        const infoEntries = [
             ...(rewriteIdKeyPreference && Object.prototype.hasOwnProperty.call(record, rewriteIdKeyPreference)
                 ? [[rewriteIdKeyPreference, record[rewriteIdKeyPreference]]]
                 : []),
             ...REWRITE_RECORD_ID_KEYS.map((key) => [key, record[key]]),
             ['rounds_used', record.rounds_used],
-        ].forEach(([key, value]) => {
+        ];
+        infoEntries.forEach(([key, value]) => {
+            if (displayedInfoKeys.has(key)) return;
+            displayedInfoKeys.add(key);
             const normalized = String(value ?? '').trim();
             if (normalized) {
                 appendDataItem(rewriteRecordInfo, key, normalized);
@@ -5130,7 +5228,8 @@ async function importRewriteFile(file) {
     });
     const text = await file.text();
     const { parsed, format } = parseRewriteSourcePayload(text, file.name);
-    await resolveRewriteImportPreferences(parsed);
+    rewriteIdKeyPreference = 'session_id';
+    rewriteDialogueKeyPreference = 'conversations';
     const records = parseRewriteRecords(parsed, { dialogueKeyOverride: rewriteDialogueKeyPreference });
     const importedFileRecords = cloneRewriteRecordData(records) || [];
     rewriteRecordEditCache.clear();
@@ -8432,7 +8531,7 @@ rewriteRecordReviewButton?.addEventListener('click', () => {
     void submitRewriteRecordReview(Number(rewriteRecordMenuState.recordIndex));
 });
 rewriteContextCloseButton?.addEventListener('click', closeRewriteContextModal);
-rewriteContextOkButton?.addEventListener('click', closeRewriteContextModal);
+rewriteContextOkButton?.addEventListener('click', saveRewriteContextModal);
 rewriteContextModal?.addEventListener('click', (event) => {
     if (event.target === rewriteContextModal || event.target.classList.contains('modal-backdrop')) {
         closeRewriteContextModal();

@@ -2062,6 +2062,15 @@ select:focus {
     line-height: 1.45;
 }
 
+.rewrite-context-edit-field {
+    gap: 0.34rem;
+}
+
+.rewrite-context-edit-field input {
+    width: 100%;
+    min-width: 0;
+}
+
 #rewrite-record-list {
     flex: 1;
 }
