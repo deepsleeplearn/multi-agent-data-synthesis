@@ -23,4 +23,5 @@ services:
     volumes:
       - ./outputs:/app/outputs
       - ./data:/app/data
+      - ./adds:/app/adds:ro
       - /Users/gj/Documents/vsfile/customer-data-process/models/punc_ct-transformer_zh-cn-common-vocab272727-pytorch:/app/models/punc_ct-transformer_zh-cn-common-vocab272727-pytorch:ro

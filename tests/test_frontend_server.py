@@ -1932,12 +1932,24 @@ class FrontendServerTests(unittest.TestCase):
         self.assertIn("return 'jsonl';", app_response.text)
         self.assertIn("const displayedInfoKeys = new Set()", app_response.text)
         self.assertIn("if (displayedInfoKeys.has(key)) return", app_response.text)
+        self.assertIn("appendDataItem(rewriteRecordInfo, 'session_id', sessionId)", app_response.text)
+        self.assertNotIn("appendDataItem(rewriteRecordInfo, '标题'", app_response.text)
+        self.assertNotIn("appendDataItem(rewriteRecordInfo, '测试配套信息'", app_response.text)
+        self.assertIn("formatRewriteAirLinkPath", app_response.text)
+        self.assertIn("appendDataItem(rewriteRecordInfo, '空气能链路路径'", app_response.text)
+        self.assertIn("refreshRewriteRecordInfoAfterAirLinkOptions", app_response.text)
         self.assertIn("delete exportRecord.id", app_response.text)
         self.assertIn("delete exportRecord.auto_mode_id", app_response.text)
         self.assertIn("stringifyRewriteStructuredLinesForExport(exportRecord)", app_response.text)
         self.assertIn("stringifyRewriteStructuredExportValue", app_response.text)
+        self.assertIn("role,", app_response.text)
+        self.assertIn("content: value", app_response.text)
+        self.assertNotIn("from: role,\n        value,", app_response.text)
         self.assertIn("normalizeImportedRewriteStructuredLineValue", app_response.text)
         self.assertIn("getRewriteLineRawValue(item)", app_response.text)
+        self.assertIn("parseRewriteFunctionCallPayloadCandidate", app_response.text)
+        self.assertIn("inferRewriteFunctionCallTargetFromPayload", app_response.text)
+        self.assertIn("firstCall.arguments?.entity_type", app_response.text)
         self.assertIn("delete duplicateRecord.air_energy_water_heater_link", app_response.text)
         self.assertIn("delete duplicateImportedRecord.air_energy_water_heater_link", app_response.text)
         self.assertIn("await openRewriteLinkModal({ submitAfterConfirm: true })", app_response.text)
@@ -1979,12 +1991,31 @@ class FrontendServerTests(unittest.TestCase):
         self.assertIn('id="chat-launcher"', index_response.text)
         self.assertIn('id="chat-admin-controls"', index_response.text)
 
+    def test_rewrite_review_validation_accepts_role_content_rewrited(self):
+        record = {
+            "rewrited": [
+                {"role": "用户", "content": "我要维修"},
+                {"role": "function_call", "content": '[{"name":"ie","arguments":{"entity_type":"addressInfo"}}]'},
+                {"role": "observation", "content": '{"address":"广东省广州市","error_code":0,"error_msg":""}'},
+                {"role": "客服", "content": "请问地址是广东省广州市吗？"},
+            ]
+        }
+
+        frontend_server._validate_rewrite_review_record("rewrite-role-content", record)
+
     def test_air_energy_water_heater_link_page_is_served(self):
         response = self.client.get("/rewrite/air-energy-water-heater-link")
 
         self.assertEqual(response.status_code, 200)
         self.assertIn("空气能热水器链路", response.text)
         self.assertIn("<!doctype html>", response.text.lower())
+        self.assertIn('"19": {"到货": 3, "故障": 4}', response.text)
+        self.assertIn('"1": {"转人工": 6}', response.text)
+        self.assertIn("linkRecordsByNumberAndCategory", response.text)
+        self.assertIn('id="recordViewerModal"', response.text)
+        self.assertIn("data-link-number", response.text)
+        self.assertIn("0c048932-dd3a-496b-8b31-244f2864041e", response.text)
+        self.assertIn("下一个", response.text)
 
     def test_air_energy_water_heater_link_options_api(self):
         self._login()
@@ -1997,6 +2028,9 @@ class FrontendServerTests(unittest.TestCase):
         self.assertEqual(option_by_link["1"]["endpoint"], "转人工")
         self.assertEqual(option_by_link["6"]["endpoint"], "1-到货\n2-故障")
         self.assertTrue(option_by_link["6"]["requires_arrival_fault"])
+        self.assertEqual(payload["volume_by_link_number"]["1"]["转人工"], 6)
+        self.assertEqual(payload["volume_by_link_number"]["19"]["到货"], 3)
+        self.assertEqual(payload["volume_by_link_number"]["19"]["故障"], 4)
 
     def test_user_requested_human_handoff_closes_session_and_keeps_review_flow(self):
         self._login()

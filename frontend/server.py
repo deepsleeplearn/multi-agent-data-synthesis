@@ -24,7 +24,7 @@ from typing import Any
 
 import requests
 from fastapi import Cookie, Depends, FastAPI, HTTPException, Response, status
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -146,6 +146,7 @@ REWRITE_REVIEW_DB_PATH = PROJECT_ROOT / "outputs" / "frontend_rewrite_review.sql
 REWRITE_REVIEW_DB_LOCK = threading.RLock()
 _REWRITE_REVIEW_DB_SCHEMA_READY = False
 AIR_ENERGY_WATER_HEATER_LINK_PAGE = PROJECT_ROOT / "adds" / "空气能热水器链路.html"
+AIR_ENERGY_WATER_HEATER_RECORDS_DB_PATH = PROJECT_ROOT / "adds" / "air_energy_water_heater_records.sqlite3"
 AIR_ENERGY_WATER_HEATER_LINK_OPTIONS_CACHE: list[dict[str, Any]] | None = None
 AIR_ENERGY_WATER_HEATER_LINK_OPTIONS_MTIME: float | None = None
 SESSION_REDIS_URL = os.getenv("FRONTEND_SESSION_REDIS_URL", "").strip()
@@ -266,7 +267,7 @@ def _load_air_energy_water_heater_link_options() -> list[dict[str, Any]]:
         return AIR_ENERGY_WATER_HEATER_LINK_OPTIONS_CACHE
 
     html = AIR_ENERGY_WATER_HEATER_LINK_PAGE.read_text(encoding="utf-8")
-    match = re.search(r"const\s+data\s*=\s*(\{.*?\});\s*const\s+byId\s*=", html, re.DOTALL)
+    match = re.search(r"const\s+data\s*=\s*(\{.*?\});\s*const\s+(?:linkVolumeByNumber|byId)\s*=", html, re.DOTALL)
     if not match:
         raise RuntimeError("无法从空气能热水器链路页面读取链路数据。")
     data = json.loads(match.group(1))
@@ -306,6 +307,113 @@ def _load_air_energy_water_heater_link_options() -> list[dict[str, Any]]:
     )
     AIR_ENERGY_WATER_HEATER_LINK_OPTIONS_MTIME = current_mtime
     return AIR_ENERGY_WATER_HEATER_LINK_OPTIONS_CACHE
+
+
+def _load_air_energy_water_heater_link_volume_by_number() -> dict[str, dict[str, int]]:
+    if not AIR_ENERGY_WATER_HEATER_RECORDS_DB_PATH.exists():
+        return {}
+    query = """
+        SELECT
+            TRIM(link_number) AS link_number,
+            COALESCE(NULLIF(TRIM(category), ''), '转人工') AS category,
+            COUNT(*) AS total
+        FROM air_energy_water_heater_records
+        WHERE TRIM(link_number) != ''
+        GROUP BY TRIM(link_number), COALESCE(NULLIF(TRIM(category), ''), '转人工')
+        ORDER BY
+            CAST(TRIM(link_number) AS INTEGER),
+            CASE COALESCE(NULLIF(TRIM(category), ''), '转人工')
+                WHEN '到货' THEN 1
+                WHEN '故障' THEN 2
+                WHEN '转人工' THEN 3
+                ELSE 4
+            END,
+            category
+    """
+    volume_by_number: dict[str, dict[str, int]] = {}
+    with sqlite3.connect(AIR_ENERGY_WATER_HEATER_RECORDS_DB_PATH) as conn:
+        for link_number, category, total in conn.execute(query):
+            link_number_text = str(link_number or "").strip()
+            category_text = str(category or "").strip() or "转人工"
+            if not link_number_text:
+                continue
+            volume_by_number.setdefault(link_number_text, {})[category_text] = int(total or 0)
+    return volume_by_number
+
+
+def _load_air_energy_water_heater_records_by_link_category() -> dict[str, dict[str, list[dict[str, Any]]]]:
+    if not AIR_ENERGY_WATER_HEATER_RECORDS_DB_PATH.exists():
+        return {}
+    query = """
+        SELECT
+            session_id,
+            TRIM(link_number) AS link_number,
+            COALESCE(NULLIF(TRIM(category), ''), '转人工') AS category,
+            annotator,
+            conversations_json,
+            test_mode_context_json
+        FROM air_energy_water_heater_records
+        WHERE TRIM(link_number) != ''
+        ORDER BY
+            CAST(TRIM(link_number) AS INTEGER),
+            CASE COALESCE(NULLIF(TRIM(category), ''), '转人工')
+                WHEN '到货' THEN 1
+                WHEN '故障' THEN 2
+                WHEN '转人工' THEN 3
+                ELSE 4
+            END,
+            id
+    """
+    grouped: dict[str, dict[str, list[dict[str, Any]]]] = {}
+    with sqlite3.connect(AIR_ENERGY_WATER_HEATER_RECORDS_DB_PATH) as conn:
+        for session_id, link_number, category, annotator, conversations_json, context_json in conn.execute(query):
+            link_number_text = str(link_number or "").strip()
+            category_text = str(category or "").strip() or "转人工"
+            if not link_number_text:
+                continue
+            try:
+                conversations = json.loads(conversations_json or "[]")
+            except json.JSONDecodeError:
+                conversations = []
+            try:
+                test_mode_context = json.loads(context_json or "{}")
+            except json.JSONDecodeError:
+                test_mode_context = {}
+            grouped.setdefault(link_number_text, {}).setdefault(category_text, []).append(
+                {
+                    "session_id": str(session_id or "").strip(),
+                    "annotator": str(annotator or "").strip(),
+                    "conversations": conversations if isinstance(conversations, list) else [],
+                    "test_mode_context": test_mode_context if isinstance(test_mode_context, dict) else {},
+                }
+            )
+    return grouped
+
+
+def _render_air_energy_water_heater_link_page() -> str:
+    html = AIR_ENERGY_WATER_HEATER_LINK_PAGE.read_text(encoding="utf-8")
+    volume_by_number = _load_air_energy_water_heater_link_volume_by_number()
+    volume_json = json.dumps(volume_by_number, ensure_ascii=False)
+    rendered, count = re.subn(
+        r"const\s+linkVolumeByNumber\s*=\s*\{.*?\n\s*\};(?=\n\s*const\s+(?:linkRecordsByNumberAndCategory|byId)\s*=)",
+        f"const linkVolumeByNumber = {volume_json};",
+        html,
+        count=1,
+        flags=re.DOTALL,
+    )
+    if count != 1:
+        raise RuntimeError("无法向空气能热水器链路页面注入数据量统计。")
+    records_json = json.dumps(_load_air_energy_water_heater_records_by_link_category(), ensure_ascii=False)
+    rendered, records_count = re.subn(
+        r"const\s+linkRecordsByNumberAndCategory\s*=\s*\{.*?\};(?=\n\s*const\s+byId\s*=)",
+        f"const linkRecordsByNumberAndCategory = {records_json};",
+        rendered,
+        count=1,
+        flags=re.DOTALL,
+    )
+    if records_count != 1:
+        raise RuntimeError("无法向空气能热水器链路页面注入数据明细。")
+    return rendered
 
 
 def _build_service_policy(model_name: str = ""):
@@ -3592,6 +3700,14 @@ def _rewrite_review_value_present(value: Any) -> bool:
     return bool(str(value).strip())
 
 
+def _rewrite_review_item_role(item: dict[str, Any]) -> str:
+    return _normalize_rewrite_review_role(item.get("role", item.get("from")))
+
+
+def _rewrite_review_item_content(item: dict[str, Any]) -> Any:
+    return item.get("content", item.get("value"))
+
+
 def _validate_rewrite_review_record(record_id: str, record: dict[str, Any]) -> None:
     rewrited = record.get("rewrited")
     if not isinstance(rewrited, list) or not rewrited:
@@ -3603,13 +3719,13 @@ def _validate_rewrite_review_record(record_id: str, record: dict[str, Any]) -> N
     for index, item in enumerate(rewrited):
         if not isinstance(item, dict):
             raise HTTPException(status_code=400, detail=f"记录 {record_id} 的 rewrited 第 {index + 1} 项格式无效。")
-        role = _normalize_rewrite_review_role(item.get("from"))
-        value = item.get("value")
+        role = _rewrite_review_item_role(item)
+        value = _rewrite_review_item_content(item)
         has_value = _rewrite_review_value_present(value)
         if role == "function_call":
             previous = rewrited[index - 1] if index > 0 and isinstance(rewrited[index - 1], dict) else None
-            previous_role = _normalize_rewrite_review_role(previous.get("from")) if previous else ""
-            previous_has_value = _rewrite_review_value_present(previous.get("value")) if previous else False
+            previous_role = _rewrite_review_item_role(previous) if previous else ""
+            previous_has_value = _rewrite_review_value_present(_rewrite_review_item_content(previous)) if previous else False
             if previous_role != "用户" or not previous_has_value:
                 conflict_messages.append(
                     f"第 {index + 1} 行 function_call 上一行必须是带内容的“用户”"
@@ -4704,11 +4820,13 @@ def list_air_energy_water_heater_links(
 ):
     try:
         options = _load_air_energy_water_heater_link_options()
+        volume_by_number = _load_air_energy_water_heater_link_volume_by_number()
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"读取空气能热水器链路失败: {exc}") from exc
     return {
         "options": options,
         "count": len(options),
+        "volume_by_link_number": volume_by_number,
     }
 
 
@@ -4802,7 +4920,13 @@ if static_dir.exists():
     def serve_air_energy_water_heater_link():
         if not AIR_ENERGY_WATER_HEATER_LINK_PAGE.exists():
             raise HTTPException(status_code=404, detail="空气能热水器链路页面不存在。")
-        return FileResponse(AIR_ENERGY_WATER_HEATER_LINK_PAGE, media_type="text/html")
+        try:
+            return HTMLResponse(
+                _render_air_energy_water_heater_link_page(),
+                headers={"Cache-Control": "no-store"},
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"渲染空气能热水器链路页面失败: {exc}") from exc
 
     app.mount("/static", StaticFiles(directory=str(static_dir), html=False), name="static")
 else:  # pragma: no cover

@@ -2156,10 +2156,41 @@ function normalizeImportedRewriteStructuredLineValue(role = '', value = '') {
     return String(value ?? '').trim();
 }
 
+function parseRewriteFunctionCallPayloadCandidate(text = '') {
+    let candidate = String(text || '').trim().replace(/^function_call:\s*/i, '').trim();
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+        if (!candidate) return null;
+        try {
+            const parsed = JSON.parse(candidate);
+            if (typeof parsed === 'string') {
+                candidate = parsed.trim();
+                continue;
+            }
+            return parsed;
+        } catch (error) {
+            return null;
+        }
+    }
+    return null;
+}
+
+function inferRewriteFunctionCallTargetFromPayload(payload) {
+    const calls = Array.isArray(payload) ? payload : [payload];
+    const firstCall = calls.find((item) => item && typeof item === 'object' && !Array.isArray(item));
+    if (!firstCall) return '';
+    const callName = String(firstCall.name || '').trim();
+    const entityType = String(firstCall.arguments?.entity_type || '').trim();
+    if (callName !== 'ie') return '';
+    if (entityType === REWRITE_FUNCTION_CALL_ADDRESS_TARGET) return REWRITE_FUNCTION_CALL_ADDRESS_TARGET;
+    if (entityType === REWRITE_FUNCTION_CALL_TELEPHONE_TARGET) return REWRITE_FUNCTION_CALL_TELEPHONE_TARGET;
+    return '';
+}
+
 function inferRewriteFunctionCallTarget(text = '') {
     const normalizedText = String(text || '').trim();
     const matchedOption = REWRITE_FUNCTION_CALL_OPTIONS.find((option) => option.payload === normalizedText);
-    return matchedOption ? matchedOption.target : '';
+    if (matchedOption) return matchedOption.target;
+    return inferRewriteFunctionCallTargetFromPayload(parseRewriteFunctionCallPayloadCandidate(normalizedText));
 }
 
 function getRewriteObservationFieldSpecs(payload = {}, targetType = '') {
@@ -2802,16 +2833,19 @@ function buildRewriteSubmittedEditableLines(record) {
     const normalizedLines = rewrited
         .map((item) => {
             if (!item || typeof item !== 'object') return null;
-            const role = String(item.from ?? '').trim();
+            const role = String(item.role ?? item.from ?? '').trim();
+            const rawValue = getRewriteLineRawValue(item);
             let text = '';
             if (isRewriteObservationRole(role)) {
-                text = serializeRewriteObservationPayload(item.value || {});
+                text = typeof rawValue === 'string'
+                    ? serializeRewriteObservationPayload(parseRewriteObservationPayload(rawValue))
+                    : serializeRewriteObservationPayload(rawValue || {});
             } else if (isRewriteFunctionCallRole(role)) {
-                text = typeof item.value === 'string'
-                    ? item.value
-                    : JSON.stringify(item.value ?? '');
+                text = typeof rawValue === 'string'
+                    ? rawValue
+                    : JSON.stringify(rawValue ?? '');
             } else {
-                text = String(item.value ?? '');
+                text = String(rawValue ?? '');
             }
             return createRewriteEditableLine({
                 tone: inferRewriteToneFromRole(role, 'system'),
@@ -2892,8 +2926,8 @@ function serializeRewriteSubmissionLine(line) {
         value = parseRewriteFunctionCallValue(text);
     }
     return {
-        from: role,
-        value,
+        role,
+        content: value,
     };
 }
 
@@ -3597,6 +3631,25 @@ function findRewriteAirLinkOption(linkNumber) {
     const normalized = String(linkNumber || '').trim();
     if (!normalized) return null;
     return rewriteAirLinkOptions.find((option) => String(option.link_number || '').trim() === normalized) || null;
+}
+
+function formatRewriteAirLinkPath(selection) {
+    const option = findRewriteAirLinkOption(selection?.link_number);
+    const pathValue = option?.path ?? selection?.path ?? selection?.route_path ?? selection?.path_text;
+    if (Array.isArray(pathValue)) {
+        return pathValue.map((item) => String(item || '').trim()).filter(Boolean).join(' > ');
+    }
+    return String(pathValue || '').trim();
+}
+
+function refreshRewriteRecordInfoAfterAirLinkOptions(recordIndex) {
+    loadRewriteAirLinkOptions()
+        .then(() => {
+            if (rewriteSelectedIndex === recordIndex && rewriteRecords[recordIndex]) {
+                renderRewriteRecordInfo(rewriteRecords[recordIndex]);
+            }
+        })
+        .catch(() => {});
 }
 
 async function loadRewriteAirLinkOptions() {
@@ -4653,13 +4706,23 @@ function renderRewriteRecordInfo(record) {
         return;
     }
 
-    appendDataItem(rewriteRecordInfo, '标题', buildRewriteRecordTitle(record, rewriteSelectedIndex));
+    const displayedInfoKeys = new Set();
+    const sessionId = String(record.session_id || resolveRewriteRecordId(record) || '').trim();
+    if (sessionId) {
+        appendDataItem(rewriteRecordInfo, 'session_id', sessionId);
+        displayedInfoKeys.add('session_id');
+    }
     const meta = buildRewriteRecordMeta(record);
     appendDataItem(rewriteRecordInfo, '轮次/行数', String(meta.turns));
     appendDataItem(rewriteRecordInfo, '状态', meta.status);
     const airLinkSelection = getRewriteAirLinkSelection(record);
     if (airLinkSelection) {
         appendDataItem(rewriteRecordInfo, '空气能链路编号', airLinkSelection.link_number || '-');
+        const pathText = formatRewriteAirLinkPath(airLinkSelection);
+        appendDataItem(rewriteRecordInfo, '空气能链路路径', pathText || '-');
+        if (!pathText && airLinkSelection.link_number && !rewriteAirLinkOptions.length) {
+            refreshRewriteRecordInfoAfterAirLinkOptions(rewriteSelectedIndex);
+        }
         if (airLinkSelection.arrival_fault_type) {
             appendDataItem(rewriteRecordInfo, '到货/故障', airLinkSelection.arrival_fault_type);
         }
@@ -4668,7 +4731,6 @@ function renderRewriteRecordInfo(record) {
     }
     if (hasRewriteTestModeContext(record)) {
         const context = record.test_mode_context || {};
-        appendDataItem(rewriteRecordInfo, '测试配套信息', '右键查看');
         appendDataItem(rewriteRecordInfo, '历史地址', normalizeRewriteContextValue(context.historical_address || context.known_address));
         appendDataItem(rewriteRecordInfo, '通话开始时间', normalizeRewriteContextValue(context.call_start_time));
         appendDataItem(
@@ -4679,7 +4741,6 @@ function renderRewriteRecordInfo(record) {
     }
 
     if (record && typeof record === 'object') {
-        const displayedInfoKeys = new Set();
         const infoEntries = [
             ...(rewriteIdKeyPreference && Object.prototype.hasOwnProperty.call(record, rewriteIdKeyPreference)
                 ? [[rewriteIdKeyPreference, record[rewriteIdKeyPreference]]]
