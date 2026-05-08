@@ -3,17 +3,18 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>MADS</title>
+    <title>CustAnnoX</title>
     <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
     <section id="auth-gate" class="auth-gate">
-        <div class="auth-card">
+        <div id="auth-remotion-root" class="auth-remotion-root" aria-hidden="true"></div>
+        <div class="auth-card auth-login-card">
             <div class="section-heading">
                 <p class="eyebrow">Access Control</p>
-                <h1>数据合成测试平台登录</h1>
+                <h1>CustAnnoX 登录</h1>
             </div>
-            <p class="section-copy">输入备案账号后才能进入手工测试页面。直接访问 URL 时会先停留在此登录界面。</p>
+            <p class="section-copy"></p>
             <form id="login-form" class="auth-form">
                 <label class="field">
                     <span>账号</span>
@@ -774,7 +775,6 @@
             </div>
         </section>
     </div>
-    <canvas id="cursor-trail-canvas" class="cursor-trail-canvas" aria-hidden="true"></canvas>
     <aside id="issue-reference-popover" class="issue-reference-popover hidden" hidden aria-hidden="true">
         <div class="issue-reference-header">
             <span>报修问题参考</span>
@@ -785,6 +785,7 @@
     <div id="text-magnifier" class="text-magnifier hidden" hidden aria-hidden="true">
         <div id="text-magnifier-viewport" class="text-magnifier-viewport"></div>
     </div>
+    <script type="module" src="/static/remotion-login.js"></script>
     <script src="/static/app.js"></script>
 </body>
 </html>

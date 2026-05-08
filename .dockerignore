@@ -12,3 +12,5 @@ outputs
 *.sqlite3
 .adds
 .omx
+node_modules
+npm-debug.log*

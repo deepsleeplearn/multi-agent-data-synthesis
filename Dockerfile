@@ -1,3 +1,13 @@
+FROM node:22-slim AS remotion-builder
+
+WORKDIR /app
+
+COPY package.json package-lock.json /app/
+RUN npm ci
+
+COPY frontend/remotion /app/frontend/remotion
+RUN npm run build:remotion-login
+
 FROM python:3.12-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -19,6 +29,7 @@ RUN pip install --upgrade pip \
     && pip install -r /app/requirements.txt -r /app/frontend-requirements.txt
 
 COPY . .
+COPY --from=remotion-builder /app/frontend/static/remotion-login.js /app/frontend/static/remotion-login.js
 
 RUN mkdir -p /app/outputs
 

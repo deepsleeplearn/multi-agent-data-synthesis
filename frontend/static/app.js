@@ -32,13 +32,6 @@ let magnifierStartPoint = null;
 let magnifierLastPoint = null;
 let magnifierCloneNode = null;
 let magnifierSuppressClickUntil = 0;
-let cursorTrailAnimationId = null;
-let cursorTrailVisible = false;
-let cursorTrailTarget = { x: -320, y: -320 };
-let cursorTrailPosition = { x: -320, y: -320 };
-let cursorTrailInitialized = false;
-let cursorTrailPoints = [];
-let cursorTrailLastTimestamp = 0;
 let sessionIdCopyFeedbackTimer = null;
 let autoModeJobId = '';
 let autoModePollTimer = null;
@@ -209,8 +202,6 @@ const sessionIdCopyButton = document.getElementById('session-id-copy-btn');
 const issueReferencePopover = document.getElementById('issue-reference-popover');
 const issueReferenceList = document.getElementById('issue-reference-list');
 const issueReferenceCloseButton = document.getElementById('issue-reference-close-btn');
-const cursorTrailCanvas = document.getElementById('cursor-trail-canvas');
-const cursorTrailContext = cursorTrailCanvas?.getContext('2d');
 const textMagnifier = document.getElementById('text-magnifier');
 const textMagnifierViewport = document.getElementById('text-magnifier-viewport');
 const chatLauncher = document.getElementById('chat-launcher');
@@ -340,10 +331,6 @@ const MAGNIFIER_LONG_PRESS_MS = 350;
 const MAGNIFIER_MOVE_TOLERANCE = 10;
 const MAGNIFIER_SCALE = 1.75;
 const MAGNIFIER_OFFSET = 24;
-const CURSOR_TRAIL_EASE = 0.16;
-const CURSOR_TRAIL_SETTLE_DISTANCE = 0.8;
-const CURSOR_TRAIL_POINT_SPACING = 5;
-const CURSOR_TRAIL_MAX_POINTS = 24;
 const CHAT_POLL_INTERVAL_MS = 4000;
 const CHAT_WINDOW_STORAGE_KEY = 'frontend-chat-window-preferences';
 const CHAT_MIN_WIDTH = 320;
@@ -450,10 +437,6 @@ const AUTHENTICATED_ONLY_ROOTS = [
     textMagnifier,
 ].filter(Boolean);
 const authenticatedUiAnchors = new Map();
-const prefersReducedMotionQuery = typeof window.matchMedia === 'function'
-    ? window.matchMedia('(prefers-reduced-motion: reduce)')
-    : null;
-let prefersReducedMotion = Boolean(prefersReducedMotionQuery?.matches);
 
 function formatDisplayTimestamp(date) {
     const year = date.getFullYear();
@@ -992,132 +975,6 @@ function setChatWindowVisibility(visible, { persist = true, scrollToBottom = fal
     }
     if (authenticatedUser) {
         refreshChatState({ forceScroll: shouldShow }).catch(() => {});
-    }
-}
-
-function resizeCursorTrailCanvas() {
-    if (!cursorTrailCanvas || !cursorTrailContext || prefersReducedMotion) return;
-    const dpr = window.devicePixelRatio || 1;
-    const width = Math.max(Math.floor(window.innerWidth * dpr), 1);
-    const height = Math.max(Math.floor(window.innerHeight * dpr), 1);
-    if (cursorTrailCanvas.width === width && cursorTrailCanvas.height === height) return;
-    cursorTrailCanvas.width = width;
-    cursorTrailCanvas.height = height;
-    cursorTrailContext.setTransform(dpr, 0, 0, dpr, 0, 0);
-}
-
-function ensureCursorTrailAnimation() {
-    if (cursorTrailAnimationId !== null || !cursorTrailContext || prefersReducedMotion) return;
-    cursorTrailAnimationId = window.requestAnimationFrame(renderCursorTrailFrame);
-}
-
-function drawCursorTrail(now) {
-    if (!cursorTrailContext || !cursorTrailCanvas) return;
-    resizeCursorTrailCanvas();
-    cursorTrailContext.clearRect(0, 0, window.innerWidth, window.innerHeight);
-    if (cursorTrailPoints.length < 2) return;
-
-    cursorTrailContext.lineCap = 'round';
-    cursorTrailContext.lineJoin = 'round';
-
-    for (let index = 1; index < cursorTrailPoints.length; index += 1) {
-        const previous = cursorTrailPoints[index - 1];
-        const current = cursorTrailPoints[index];
-        const progress = index / (cursorTrailPoints.length - 1);
-        const alphaBase = (1 - progress) * current.life;
-        if (alphaBase <= 0.02) continue;
-
-        const palettes = [
-            { width: 4.2, alpha: 0.42, hueShift: 0 },
-            { width: 2.4, alpha: 0.72, hueShift: 52 },
-            { width: 1.2, alpha: 0.96, hueShift: 124 },
-        ];
-
-        palettes.forEach((palette, layerIndex) => {
-            const hue = (now * 0.05 + current.hue + palette.hueShift + (index * 9)) % 360;
-            cursorTrailContext.strokeStyle = `hsla(${hue}, 98%, ${layerIndex === 2 ? 78 : 68}%, ${alphaBase * palette.alpha})`;
-            cursorTrailContext.lineWidth = palette.width * (1 - (progress * 0.45));
-            cursorTrailContext.beginPath();
-            cursorTrailContext.moveTo(previous.x, previous.y);
-            cursorTrailContext.lineTo(current.x, current.y);
-            cursorTrailContext.stroke();
-        });
-    }
-}
-
-function renderCursorTrailFrame(timestamp) {
-    cursorTrailAnimationId = null;
-    const delta = cursorTrailLastTimestamp ? Math.min(timestamp - cursorTrailLastTimestamp, 32) : 16;
-    cursorTrailLastTimestamp = timestamp;
-
-    const moveAxis = (current, target) => current + ((target - current) * CURSOR_TRAIL_EASE);
-    cursorTrailPosition = {
-        x: moveAxis(cursorTrailPosition.x, cursorTrailTarget.x),
-        y: moveAxis(cursorTrailPosition.y, cursorTrailTarget.y),
-    };
-
-    const lastPoint = cursorTrailPoints[cursorTrailPoints.length - 1];
-    if (
-        cursorTrailVisible
-        && (!lastPoint || Math.hypot(cursorTrailPosition.x - lastPoint.x, cursorTrailPosition.y - lastPoint.y) >= CURSOR_TRAIL_POINT_SPACING)
-    ) {
-        cursorTrailPoints.push({
-            x: cursorTrailPosition.x,
-            y: cursorTrailPosition.y,
-            life: 1,
-            hue: (timestamp * 0.03) % 360,
-        });
-    }
-
-    const decay = cursorTrailVisible ? 0.045 : 0.09;
-    cursorTrailPoints = cursorTrailPoints
-        .map((point) => ({ ...point, life: point.life - (decay * (delta / 16)) }))
-        .filter((point) => point.life > 0.02)
-        .slice(-CURSOR_TRAIL_MAX_POINTS);
-
-    drawCursorTrail(timestamp);
-
-    const distance = Math.hypot(
-        cursorTrailTarget.x - cursorTrailPosition.x,
-        cursorTrailTarget.y - cursorTrailPosition.y,
-    );
-    if (cursorTrailVisible || cursorTrailPoints.length > 0 || distance > CURSOR_TRAIL_SETTLE_DISTANCE) {
-        ensureCursorTrailAnimation();
-    }
-}
-
-function updateCursorGlow(event) {
-    if (prefersReducedMotion) return;
-    cursorTrailTarget = { x: event.clientX, y: event.clientY };
-    if (!cursorTrailInitialized) {
-        cursorTrailPosition = { ...cursorTrailTarget };
-        cursorTrailInitialized = true;
-    }
-    cursorTrailVisible = true;
-    ensureCursorTrailAnimation();
-}
-
-function hideCursorGlow() {
-    if (prefersReducedMotion) return;
-    cursorTrailVisible = false;
-    ensureCursorTrailAnimation();
-}
-
-function applyReducedMotionPreference(enabled) {
-    prefersReducedMotion = Boolean(enabled);
-    if (!prefersReducedMotion) return;
-    cursorTrailVisible = false;
-    cursorTrailInitialized = false;
-    cursorTrailTarget = { x: -320, y: -320 };
-    cursorTrailPosition = { x: -320, y: -320 };
-    cursorTrailPoints = [];
-    cursorTrailLastTimestamp = 0;
-    if (cursorTrailAnimationId !== null) {
-        window.cancelAnimationFrame(cursorTrailAnimationId);
-        cursorTrailAnimationId = null;
-    }
-    if (cursorTrailContext && cursorTrailCanvas) {
-        cursorTrailContext.clearRect(0, 0, window.innerWidth, window.innerHeight);
     }
 }
 
@@ -8682,7 +8539,6 @@ document.addEventListener('keydown', (event) => {
 });
 window.addEventListener('resize', () => {
     hideIssueReferencePopover();
-    resizeCursorTrailCanvas();
     if (chatOnlineDrawerOpen && chatOnlineDrawerPosition) {
         positionChatOnlineDrawer(chatOnlineDrawerPosition.clientX, chatOnlineDrawerPosition.clientY);
     }
@@ -8708,7 +8564,6 @@ window.addEventListener('resize', () => {
     applyRewriteShellLayout();
     applyRewriteWorkbenchRatio();
 });
-window.addEventListener('pointermove', updateCursorGlow, { passive: true });
 window.addEventListener('pointermove', handleChatLauncherDrag);
 window.addEventListener('pointermove', handleChatDrag);
 window.addEventListener('pointermove', trackRewriteShellResize);
@@ -8814,22 +8669,6 @@ if (rewriteResetButton) {
         resetRewriteRecordToInitial(rewriteSelectedIndex);
     });
 }
-if (prefersReducedMotionQuery?.addEventListener) {
-    prefersReducedMotionQuery.addEventListener('change', (event) => {
-        applyReducedMotionPreference(event.matches);
-    });
-} else if (prefersReducedMotionQuery?.addListener) {
-    prefersReducedMotionQuery.addListener((event) => {
-        applyReducedMotionPreference(event.matches);
-    });
-}
-applyReducedMotionPreference(prefersReducedMotion);
-document.addEventListener('pointerleave', hideCursorGlow, true);
-document.addEventListener('pointerout', (event) => {
-    if (!event.relatedTarget) {
-        hideCursorGlow();
-    }
-}, true);
 document.addEventListener('visibilitychange', () => {
     if (document.hidden || !authenticatedUser) return;
     refreshChatState({ forceScroll: chatWindowState?.visible !== false }).catch(() => {});
@@ -8958,7 +8797,6 @@ setSelectedModelName('gpt-4o');
 syncHistoryDeviceCategoryOptions();
 updateCallStartTimeValidationState();
 updateStartSessionButtonState();
-resizeCursorTrailCanvas();
 chatWindowState = loadChatWindowState();
 resetChatRuntime();
 resetRewriteWorkspace();

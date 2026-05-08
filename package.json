@@ -1,0 +1,15 @@
+{
+  "scripts": {
+    "build:remotion-login": "vite build --config frontend/remotion/vite.config.mjs"
+  },
+  "dependencies": {
+    "@remotion/player": "4.0.341",
+    "react": "19.1.1",
+    "react-dom": "19.1.1",
+    "remotion": "4.0.341"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "5.0.4",
+    "vite": "7.1.12"
+  }
+}

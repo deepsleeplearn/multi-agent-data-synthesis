@@ -9,4 +9,5 @@ css_data_synthesis_test/function_call.py
 adds/test.jsonl
 .omx/
 .gstack/
+node_modules/
 SKILL.md
