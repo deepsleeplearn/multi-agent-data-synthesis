@@ -1364,7 +1364,7 @@ class ServiceDialoguePolicy:
                     )
                 runtime_state.expected_product_routing_response = True
                 return ServicePolicyResult(
-                    reply=str(current_step.get("prompt", "")).strip(),
+                    reply=self._product_routing_prompt_reply(current_step),
                     slot_updates=slot_updates,
                     is_ready_to_close=False,
                 )
@@ -4663,7 +4663,7 @@ class ServiceDialoguePolicy:
         return self._with_optional_ok_prefix(self._choose_prompt_text(self.SURNAME_PROMPT))
 
     def _contactable_prompt(self) -> str:
-        return self._choose_prompt_text(self.CONTACTABLE_PROMPT)
+        return self._with_optional_ok_prefix(self._choose_prompt_text(self.CONTACTABLE_PROMPT))
 
     def _phone_keypad_prompt(self) -> str:
         return self._choose_prompt_text(self.PHONE_KEYPAD_PROMPT)
@@ -5424,6 +5424,9 @@ class ServiceDialoguePolicy:
     def _product_model_prompt(self) -> str:
         return self._choose_prompt_text(self.PRODUCT_MODEL_PROMPT)
 
+    def _product_routing_prompt_reply(self, current_step: dict[str, Any]) -> str:
+        return self._with_optional_ok_prefix(str(current_step.get("prompt", "")).strip())
+
     def _transition_to_next_slot(
         self,
         *,
@@ -5717,9 +5720,7 @@ class ServiceDialoguePolicy:
         )
         runtime_state.expected_product_routing_response = True
         current_step = steps[runtime_state.product_routing_step_index]
-        reply = current_step["prompt"]
-        if str(current_step.get("prompt_key", "")).strip() == "history_device_confirmation":
-            reply = self._with_optional_ok_prefix(reply)
+        reply = self._product_routing_prompt_reply(current_step)
         if prepend_fault_ack and runtime_state.product_routing_step_index == 0:
             reply = self._prepend_fault_acknowledgement(reply)
         return ServicePolicyResult(

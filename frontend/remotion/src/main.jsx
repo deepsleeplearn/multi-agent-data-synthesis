@@ -1,4 +1,4 @@
-import React from 'react';
+import React, {useEffect, useState} from 'react';
 import {createRoot} from 'react-dom/client';
 import {Player} from '@remotion/player';
 import {
@@ -6,11 +6,11 @@ import {
   interpolate,
   spring,
   useCurrentFrame,
-  useVideoConfig,
 } from 'remotion';
 
 const fps = 30;
-const durationInFrames = 240;
+const activeDurationSeconds = 60 * 60 * 12;
+const durationInFrames = fps * activeDurationSeconds;
 const compositionWidth = 1920;
 const compositionHeight = 1080;
 
@@ -27,6 +27,8 @@ const slide = (frame, start, end, from, to) =>
     extrapolateLeft: 'clamp',
     extrapolateRight: 'clamp',
   });
+
+const wave = (frame, speed, offset = 0) => Math.sin(frame * speed + offset);
 
 const baseFont =
   '"SFMono-Regular", "JetBrains Mono", "Fira Code", Consolas, monospace';
@@ -65,47 +67,10 @@ const styles = {
     background:
       'linear-gradient(90deg, rgba(103,232,249,0), rgba(103,232,249,0.44), rgba(45,212,191,0))',
   },
-  wordmarkWrap: {
+  zoomLayer: {
     position: 'absolute',
-    left: 150,
-    top: 410,
-    display: 'flex',
-    alignItems: 'center',
-    gap: 24,
-  },
-  wordmark: {
-    display: 'flex',
-    gap: 12,
-  },
-  tile: {
-    width: 74,
-    height: 74,
-    border: '1px solid rgba(255,255,255,0.28)',
-    borderRadius: 16,
-    display: 'grid',
-    placeItems: 'center',
-    background: 'rgba(15, 23, 42, 0.46)',
-    boxShadow: '0 24px 54px rgba(0,0,0,0.26)',
-    color: '#67e8f9',
-    fontSize: 34,
-    fontWeight: 900,
-  },
-  nameBlock: {
-    borderLeft: '2px solid rgba(103,232,249,0.72)',
-    paddingLeft: 22,
-  },
-  platformName: {
-    margin: 0,
-    color: '#ffffff',
-    fontSize: 58,
-    fontWeight: 900,
-    lineHeight: 1.05,
-  },
-  fullName: {
-    margin: '10px 0 0',
-    color: 'rgba(226,232,240,0.7)',
-    fontSize: 20,
-    lineHeight: 1.25,
+    inset: 0,
+    transformOrigin: '50% 50%',
   },
   orbit: {
     position: 'absolute',
@@ -137,130 +102,142 @@ const beams = [
   {x: 1320, y: 625, width: 360, rotate: 22, delay: 70},
 ];
 
-const LetterTile = ({letter, index, frame}) => {
-  const {fps: configFps} = useVideoConfig();
-  const scale = spring({
-    frame: frame - index * 5,
-    fps: configFps,
-    config: {damping: 16, stiffness: 115},
-  });
-  const y = slide(frame, index * 5, 30 + index * 5, 56, 0);
+const useBrowserZoomScale = () => {
+  const [zoomScale, setZoomScale] = useState(1);
 
-  return (
-    <div
-      style={{
-        ...styles.tile,
-        opacity: fade(frame, index * 4, 20 + index * 5),
-        transform: `translateY(${y}px) scale(${clamp(scale, 0.72, 1.08)})`,
-      }}
-    >
-      {letter}
-    </div>
-  );
+  useEffect(() => {
+    const baseDpr = window.devicePixelRatio || 1;
+
+    const syncScale = () => {
+      const currentDpr = window.devicePixelRatio || baseDpr;
+      setZoomScale(clamp(currentDpr / baseDpr, 0.72, 1.55));
+    };
+
+    syncScale();
+    window.addEventListener('resize', syncScale);
+    window.visualViewport?.addEventListener('resize', syncScale);
+    const timer = window.setInterval(syncScale, 250);
+
+    return () => {
+      window.removeEventListener('resize', syncScale);
+      window.visualViewport?.removeEventListener('resize', syncScale);
+      window.clearInterval(timer);
+    };
+  }, []);
+
+  return zoomScale;
 };
 
 const LoginIntro = ({reducedMotion = false}) => {
   const rawFrame = useCurrentFrame();
-  const frame = reducedMotion ? 96 : rawFrame;
+  const [liveFrame, setLiveFrame] = useState(rawFrame);
+  const zoomScale = useBrowserZoomScale();
 
-  const gridX = slide(frame, 0, durationInFrames - 1, -52, 52);
+  useEffect(() => {
+    const startedAt = performance.now() - (rawFrame / fps) * 1000;
+    let rafId = 0;
+
+    const tick = () => {
+      const elapsed = performance.now() - startedAt;
+      setLiveFrame(Math.floor((elapsed / 1000) * fps));
+      rafId = requestAnimationFrame(tick);
+    };
+
+    rafId = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(rafId);
+  }, []);
+
+  const motionFrame = reducedMotion ? Math.floor(liveFrame / 3) : liveFrame;
+  const entryFrame = Math.min(liveFrame, 120);
+
+  const gridX = slide(motionFrame, 0, durationInFrames - 1, -52, 52);
   const orbitProgress = spring({
-    frame,
+    frame: entryFrame,
     fps,
     config: {damping: 22, stiffness: 70},
   });
 
   return (
     <AbsoluteFill style={styles.fill}>
-      <div
-        style={{
-          ...styles.grid,
-          opacity: 0.42,
-          transform: `perspective(900px) rotateX(58deg) translate(${gridX}px, 20px)`,
-        }}
-      />
-      <div style={styles.particleLayer}>
-        {beams.map((beam) => {
-          const opacity = fade(frame, beam.delay, beam.delay + 36) * 0.72;
-          const width = slide(frame, beam.delay, beam.delay + 46, beam.width * 0.18, beam.width);
+      <div style={{...styles.zoomLayer, transform: `scale(${zoomScale})`}}>
+        <div
+          style={{
+            ...styles.grid,
+            opacity: 0.42,
+            transform: `perspective(900px) rotateX(58deg) translate(${gridX}px, 20px)`,
+          }}
+        />
+        <div style={styles.particleLayer}>
+          {beams.map((beam) => {
+            const opacity = fade(entryFrame, beam.delay, beam.delay + 36) * 0.72;
+            const pulse = 0.76 + wave(motionFrame, 0.028, beam.delay) * 0.18;
+            const width =
+              slide(entryFrame, beam.delay, beam.delay + 46, beam.width * 0.18, beam.width) *
+              pulse;
 
-          return (
-            <div
-              key={`${beam.x}-${beam.y}`}
-              style={{
-                ...styles.particleBeam,
-                left: beam.x,
-                top: beam.y,
-                width,
-                opacity,
-                transform: `rotate(${beam.rotate}deg)`,
-              }}
-            />
-          );
-        })}
-        {particles.map((particle) => {
-          const start = particle.delay;
-          const opacity = fade(frame, start, start + 28) * 0.88;
-          const scale = slide(frame, start, start + 34, 0.34, 1);
-          const x = slide(frame, start, durationInFrames - 1, particle.x - particle.driftX, particle.x);
-          const y = slide(frame, start, durationInFrames - 1, particle.y - particle.driftY, particle.y);
+            return (
+              <div
+                key={`${beam.x}-${beam.y}`}
+                style={{
+                  ...styles.particleBeam,
+                  left: beam.x,
+                  top: beam.y + wave(motionFrame, 0.018, beam.x) * 16,
+                  width,
+                  opacity: opacity * (0.82 + wave(motionFrame, 0.04, beam.y) * 0.16),
+                  transform: `rotate(${beam.rotate + wave(motionFrame, 0.016, beam.delay) * 3}deg)`,
+                }}
+              />
+            );
+          })}
+          {particles.map((particle) => {
+            const start = particle.delay;
+            const opacity = fade(entryFrame, start, start + 28) * 0.88;
+            const baseScale = slide(entryFrame, start, start + 34, 0.34, 1);
+            const scale = baseScale * (0.92 + wave(motionFrame, 0.045, particle.index) * 0.18);
+            const settledX = slide(entryFrame, start, start + 86, particle.x - particle.driftX, particle.x);
+            const settledY = slide(entryFrame, start, start + 86, particle.y - particle.driftY, particle.y);
+            const x = settledX + wave(motionFrame, 0.021 + particle.index * 0.0002, particle.y) * (18 + particle.size);
+            const y = settledY + wave(motionFrame, 0.026 + particle.index * 0.0003, particle.x) * (14 + particle.size * 0.8);
 
-          return (
-            <div
-              key={particle.index}
-              style={{
-                ...styles.particle,
-                left: x,
-                top: y,
-                width: particle.size,
-                height: particle.size,
-                background: particle.color,
-                opacity,
-                transform: `scale(${scale})`,
-              }}
-            />
-          );
-        })}
-      </div>
-      <div
-        style={{
-          ...styles.orbit,
-          width: 720,
-          height: 720,
-          left: -210,
-          top: -165,
-          opacity: 0.58,
-          transform: `scale(${0.82 + orbitProgress * 0.22}) rotate(${slide(frame, 0, 150, -22, 18)}deg)`,
-        }}
-      />
-      <div
-        style={{
-          ...styles.orbit,
-          width: 560,
-          height: 560,
-          right: -150,
-          bottom: -190,
-          opacity: 0.5,
-          transform: `scale(${0.86 + orbitProgress * 0.18}) rotate(${slide(frame, 0, 150, 18, -18)}deg)`,
-        }}
-      />
-
-      <div style={styles.wordmarkWrap}>
-        <div style={styles.wordmark}>
-          {['C', 'A', 'X'].map((letter, index) => (
-            <LetterTile key={letter} letter={letter} index={index} frame={frame} />
-          ))}
+            return (
+              <div
+                key={particle.index}
+                style={{
+                  ...styles.particle,
+                  left: x,
+                  top: y,
+                  width: particle.size,
+                  height: particle.size,
+                  background: particle.color,
+                  opacity,
+                  transform: `scale(${scale})`,
+                }}
+              />
+            );
+          })}
         </div>
         <div
           style={{
-            ...styles.nameBlock,
-            opacity: fade(frame, 24, 48),
-            transform: `translateX(${slide(frame, 24, 50, -18, 0)}px)`,
+            ...styles.orbit,
+            width: 720,
+            height: 720,
+            left: -210,
+            top: -165,
+            opacity: 0.58,
+            transform: `scale(${0.82 + orbitProgress * 0.22}) rotate(${slide(entryFrame, 0, 150, -22, 18)}deg)`,
           }}
-        >
-          <p style={styles.platformName}>CustAnnoX</p>
-          <p style={styles.fullName}>客服标注平台</p>
-        </div>
+        />
+        <div
+          style={{
+            ...styles.orbit,
+            width: 560,
+            height: 560,
+            right: -150,
+            bottom: -190,
+            opacity: 0.5,
+            transform: `scale(${0.86 + orbitProgress * 0.18}) rotate(${slide(entryFrame, 0, 150, 18, -18)}deg)`,
+          }}
+        />
       </div>
 
     </AbsoluteFill>
@@ -279,8 +256,8 @@ if (mount) {
       compositionWidth={compositionWidth}
       compositionHeight={compositionHeight}
       fps={fps}
-      autoPlay={!reducedMotion}
-      loop={false}
+      autoPlay
+      loop
       controls={false}
       moveToBeginningWhenEnded={false}
       inputProps={{reducedMotion}}

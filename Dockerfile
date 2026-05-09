@@ -1,4 +1,5 @@
-FROM node:22-slim AS remotion-builder
+ARG BASE_IMAGE_REGISTRY=docker.io
+FROM ${BASE_IMAGE_REGISTRY}/library/node:22-slim AS remotion-builder
 
 WORKDIR /app
 
@@ -8,7 +9,8 @@ RUN npm ci
 COPY frontend/remotion /app/frontend/remotion
 RUN npm run build:remotion-login
 
-FROM python:3.12-slim
+ARG BASE_IMAGE_REGISTRY=docker.io
+FROM ${BASE_IMAGE_REGISTRY}/library/python:3.12-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \

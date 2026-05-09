@@ -294,7 +294,7 @@ class ServicePolicyTests(unittest.TestCase):
             )
 
             self.assertEqual(result.slot_updates["surname"], "张")
-            self.assertEqual(result.reply, "请问您当前这个来电号码能联系到您吗？")
+            self.assertEqual(result.reply, "好的，请问您当前这个来电号码能联系到您吗？")
         finally:
             ServiceDialoguePolicy.SURNAME_PROMPT = original_prompt
 
@@ -757,7 +757,7 @@ class ServicePolicyTests(unittest.TestCase):
             runtime_state=state,
         )
 
-        self.assertEqual(result.reply, "请问您的空气能是什么具体品牌或系列呢？")
+        self.assertEqual(result.reply, "好的，请问您的空气能是什么具体品牌或系列呢？")
         self.assertEqual(scenario.product.category, "空气能热水机")
         self.assertEqual(result.slot_updates["request_type"], "fault")
         self.assertTrue(state.expected_product_routing_response)
@@ -1417,7 +1417,7 @@ class ServicePolicyTests(unittest.TestCase):
         )
 
         self.assertEqual(result.slot_updates["surname"], "王")
-        self.assertEqual(result.reply, "请问您当前这个来电号码能联系到您吗？")
+        self.assertEqual(result.reply, "好的，请问您当前这个来电号码能联系到您吗？")
 
     def test_cli_freeform_contactable_yes_without_known_phone_collects_digits(self):
         policy = ServiceDialoguePolicy()
@@ -1868,7 +1868,7 @@ class ServicePolicyTests(unittest.TestCase):
             runtime_state=state,
         )
 
-        self.assertEqual(result.reply, "请问您当前这个来电号码能联系到您吗？")
+        self.assertEqual(result.reply, "好的，请问您当前这个来电号码能联系到您吗？")
         self.assertTrue(state.expected_contactable_confirmation)
 
     def test_fault_opening_with_issue_description_moves_to_surname(self):
@@ -3959,7 +3959,7 @@ class ServicePolicyTests(unittest.TestCase):
         )
 
         self.assertEqual(result.slot_updates["surname"], "孙")
-        self.assertEqual(result.reply, "请问您当前这个来电号码能联系到您吗？")
+        self.assertEqual(result.reply, "好的，请问您当前这个来电号码能联系到您吗？")
 
     def test_invalid_then_valid_keypad_input_then_confirmation(self):
         policy = ServiceDialoguePolicy()
@@ -9052,7 +9052,7 @@ class ServicePolicyTests(unittest.TestCase):
         )
 
         self.assertEqual(result.slot_updates["surname"], "郑")
-        self.assertEqual(result.reply, "请问您当前这个来电号码能联系到您吗？")
+        self.assertEqual(result.reply, "好的，请问您当前这个来电号码能联系到您吗？")
         self.assertTrue(policy.last_used_model_intent_inference)
 
     def test_apology_prefixed_surname_prompt_uses_same_model_path(self):
@@ -9092,7 +9092,7 @@ class ServicePolicyTests(unittest.TestCase):
         )
 
         self.assertEqual(result.slot_updates["surname"], "郑")
-        self.assertEqual(result.reply, "请问您当前这个来电号码能联系到您吗？")
+        self.assertEqual(result.reply, "好的，请问您当前这个来电号码能联系到您吗？")
         self.assertTrue(policy.last_used_model_intent_inference)
 
     def test_surname_collection_falls_back_to_local_rule_when_model_returns_empty(self):
@@ -9127,7 +9127,7 @@ class ServicePolicyTests(unittest.TestCase):
         )
 
         self.assertEqual(result.slot_updates["surname"], "王")
-        self.assertEqual(result.reply, "请问您当前这个来电号码能联系到您吗？")
+        self.assertEqual(result.reply, "好的，请问您当前这个来电号码能联系到您吗？")
         self.assertFalse(policy.last_used_model_intent_inference)
 
     def test_explicit_surname_self_report_waits_for_surname_prompt(self):
