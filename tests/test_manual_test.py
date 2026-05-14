@@ -64,6 +64,11 @@ class ManualTestModuleTests(unittest.TestCase):
 
         self.assertEqual(sanitized, "阳光锦城 3 号楼2 单元 402")
 
+    def test_sanitize_manual_user_text_preserves_chinese_punctuation(self):
+        sanitized = _sanitize_manual_user_text(" 地址是河北省石家庄市，行唐县龙州镇。 ")
+
+        self.assertEqual(sanitized, "地址是河北省石家庄市，行唐县龙州镇。")
+
     def test_manual_command_token_tolerates_whitespace_noise(self):
         self.assertEqual(_manual_command_token(" \u3000/ state \n"), "/state")
 

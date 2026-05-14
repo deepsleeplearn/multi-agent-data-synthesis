@@ -1124,8 +1124,6 @@ class ServiceAgent:
         _ = user_text
         return build_telephone_model_observation(
             dialogue,
-            client=self.client,
-            model=self.model,
         )
 
     def _infer_product_routing_intent_with_model(

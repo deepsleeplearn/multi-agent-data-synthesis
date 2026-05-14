@@ -157,7 +157,6 @@ class DialogueOrchestrator:
                     transcript[-1].post_display_lines.append(
                         format_address_observation_line(
                             transcript,
-                            client=self.client,
                         )
                     )
                 if self.show_dialogue_progress:

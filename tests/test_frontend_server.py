@@ -204,20 +204,19 @@ class FrontendServerTests(unittest.TestCase):
             ["不制热/无热水", "故障码（P1/P4/P2/P5/PF等）", "设备不启动/通电不工作"],
         )
 
-    def test_punctuation_predict_endpoint_returns_punctuated_text(self):
+    def test_punctuation_predict_endpoint_returns_original_text(self):
         self._login()
 
-        with patch("frontend.server._punctuate_user_text_for_session", return_value="我在江苏省苏州市。"):
-            response = self.client.post(
-                "/api/punctuation/predict",
-                json={"text": "我在江苏省苏州市"},
-            )
+        response = self.client.post(
+            "/api/punctuation/predict",
+            json={"text": "我在江苏省苏州市，工业园区"},
+        )
 
         self.assertEqual(response.status_code, 200)
         payload = response.json()
         self.assertTrue(payload["ok"])
-        self.assertEqual(payload["input_text"], "我在江苏省苏州市")
-        self.assertEqual(payload["punctuated_text"], "我在江苏省苏州市。")
+        self.assertEqual(payload["input_text"], "我在江苏省苏州市，工业园区")
+        self.assertEqual(payload["punctuated_text"], "我在江苏省苏州市，工业园区")
 
     def test_chat_state_lists_online_users_and_accepts_group_messages(self):
         self._login()
@@ -577,23 +576,24 @@ class FrontendServerTests(unittest.TestCase):
             json={"scenario_id": "frontend_case"},
         ).json()
         session_id = start_payload["session_id"]
+        user_text = "美的空气能热水器需要维修，显示E1"
 
         with patch("frontend.server._punctuate_user_text_for_session", return_value="美的空气能热水器需要维修。") as punctuate_mock:
             reply_response = self.client.post(
                 "/api/session/respond",
-                json={"session_id": session_id, "text": "美的空气能热水器需要维修"},
+                json={"session_id": session_id, "text": user_text},
             )
 
         self.assertEqual(reply_response.status_code, 200)
         payload = reply_response.json()
         session = frontend_server.sessions[session_id]
         punctuate_mock.assert_not_called()
-        self.assertEqual(session["transcript"][0].text, "美的空气能热水器需要维修")
-        self.assertEqual(session["trace"][0]["user_text"], "美的空气能热水器需要维修")
-        self.assertEqual(payload["transcript"][0]["text"], "美的空气能热水器需要维修")
-        self.assertEqual(payload["terminal_entries"][0]["text"], "美的空气能热水器需要维修")
+        self.assertEqual(session["transcript"][0].text, user_text)
+        self.assertEqual(session["trace"][0]["user_text"], user_text)
+        self.assertEqual(payload["transcript"][0]["text"], user_text)
+        self.assertEqual(payload["terminal_entries"][0]["text"], user_text)
 
-    def test_session_respond_punctuates_user_text_from_second_round(self):
+    def test_session_respond_keeps_second_round_user_text_unpunctuated(self):
         self._login()
         start_payload = self.client.post(
             "/api/session/start",
@@ -614,13 +614,13 @@ class FrontendServerTests(unittest.TestCase):
             )
 
         self.assertEqual(second_reply_response.status_code, 200)
-        punctuate_mock.assert_called_once_with("我姓张")
+        punctuate_mock.assert_not_called()
         payload = second_reply_response.json()
         session = frontend_server.sessions[session_id]
-        self.assertEqual(session["transcript"][2].text, "我姓张。")
-        self.assertEqual(session["trace"][1]["user_text"], "我姓张。")
-        self.assertEqual(payload["transcript"][2]["text"], "我姓张。")
-        self.assertEqual(payload["terminal_entries"][2]["text"], "我姓张。")
+        self.assertEqual(session["transcript"][2].text, "我姓张")
+        self.assertEqual(session["trace"][1]["user_text"], "我姓张")
+        self.assertEqual(payload["transcript"][2]["text"], "我姓张")
+        self.assertEqual(payload["terminal_entries"][2]["text"], "我姓张")
 
     def test_known_address_and_round_limit_follow_manual_mode(self):
         self._login()
@@ -853,9 +853,7 @@ class FrontendServerTests(unittest.TestCase):
 
         self.assertIsNone(result)
         mocked_observation.assert_called_once_with(
-            "浙江省杭州市拱墅区和睦街道幸福花园15栋2单元701室",
-            client=frontend_server.llm_client,
-            model=frontend_server.config.service_agent_model,
+            [service_turn, user_turn],
         )
         self.assertIn(policy.ADDRESS_IE_FUNCTION_CALL_DISPLAY, user_turn.post_display_lines)
         self.assertTrue(any(line.startswith("observation:") for line in user_turn.post_display_lines))

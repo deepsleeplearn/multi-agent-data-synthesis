@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import sqlite3
 import sys
 import threading
@@ -39,6 +40,21 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 UNUSED_KNOWN_ADDRESSES_PATH = PROJECT_ROOT / "css_data_synthesis_test" / "unused_addresses.txt"
 _known_address_candidates_cache: tuple[str, ...] | None = None
+
+
+def _configure_logging() -> None:
+    level_name = os.getenv("LOG_LEVEL", "INFO").strip().upper() or "INFO"
+    level = getattr(logging, level_name, logging.INFO)
+    logging.basicConfig(
+        level=level,
+        format="%(asctime)s %(levelname)s %(name)s %(message)s",
+        force=False,
+    )
+    logging.getLogger("css_data_synthesis_test").setLevel(level)
+    logging.getLogger("frontend").setLevel(level)
+
+
+_configure_logging()
 
 try:
     from css_data_synthesis_test.address_utils import extract_address_components
@@ -78,11 +94,6 @@ try:
         MANUAL_TEST_SHOW_STATE_COMMAND,
         _manual_command_token,
         _sanitize_manual_user_text,
-    )
-    from css_data_synthesis_test.punctuation_service import (
-        configure_punctuation_service,
-        get_punctuation_service,
-        punctuate_text,
     )
     from css_data_synthesis_test.product_routing import (
         PROMPT_BRAND_OR_SERIES,
@@ -648,29 +659,7 @@ def _punctuate_via_local_api(text: str) -> str:
 
 def _punctuate_user_text_for_session(text: str) -> str:
     normalized = str(text or "").strip()
-    if not normalized:
-        return ""
-    try:
-        punct_service = get_punctuation_service()
-        if punct_service.backend == "local":
-            punctuated = _punctuate_via_local_api(normalized)
-        else:
-            punctuated = punctuate_text(normalized)
-        final_text = str(punctuated or normalized).strip()
-        print(
-            "[punctuation] backend=%s input=%r output=%r changed=%s"
-            % (
-                punct_service.backend,
-                normalized,
-                final_text,
-                str(final_text != normalized).lower(),
-            )
-        )
-        return final_text
-    except Exception as exc:  # pragma: no cover
-        print(f"[punctuation] failed input={normalized!r} error={exc!r}")
-        print(f"[punctuation] fallback output={normalized!r}")
-        return normalized
+    return normalized
 
 
 def _normalize_display_timestamp(value: str) -> str:
@@ -2860,8 +2849,6 @@ def _append_address_ie_display_lines(
     client: OpenAIChatClient | None = None,
     model: str = "",
 ) -> dict[str, Any] | None:
-    resolved_client = client or llm_client
-    resolved_model = model or config.service_agent_model
     previous_service_text = ""
     for previous_turn in reversed(transcript[:-1]):
         if previous_turn.speaker == SERVICE_SPEAKER:
@@ -2889,9 +2876,7 @@ def _append_address_ie_display_lines(
             ).strip()
             if confirmation_address:
                 observation = build_address_model_observation(
-                    confirmation_address,
-                    client=resolved_client,
-                    model=resolved_model,
+                    transcript,
                 )
                 turn.post_display_lines.append(policy.ADDRESS_IE_FUNCTION_CALL_DISPLAY)
                 turn.post_display_lines.append(
@@ -2912,8 +2897,6 @@ def _append_address_ie_display_lines(
             if denial_address and policy._is_confirmable_address_candidate(denial_address):
                 observation = build_address_model_observation(
                     transcript,
-                    client=resolved_client,
-                    model=resolved_model,
                 )
                 turn.post_display_lines.append(policy.ADDRESS_IE_FUNCTION_CALL_DISPLAY)
                 turn.post_display_lines.append(
@@ -2939,8 +2922,6 @@ def _append_address_ie_display_lines(
         return None
     observation = build_address_model_observation(
         transcript,
-        client=resolved_client,
-        model=resolved_model,
     )
     if policy._contains_negative_location_denial_fragment(str(observation.get("address") or "")):
         return None
@@ -3054,8 +3035,6 @@ def _append_phone_ie_display_lines(
     client: OpenAIChatClient | None = None,
     model: str = "",
 ) -> dict[str, Any] | None:
-    resolved_client = client or llm_client
-    resolved_model = model or config.service_agent_model
     if not runtime_state.awaiting_phone_keypad_input:
         return None
     previous_service_text = ""
@@ -3067,8 +3046,6 @@ def _append_phone_ie_display_lines(
         return None
     observation = build_telephone_model_observation(
         transcript,
-        client=resolved_client,
-        model=resolved_model,
     )
     runtime_state.pending_phone_ie_observation = dict(observation)
     turn.post_display_lines.append(policy.PHONE_IE_FUNCTION_CALL_DISPLAY)
@@ -3093,13 +3070,9 @@ def _ie_post_display_lines_for_transcript(
     model: str = "",
 ) -> list[str]:
     normalized_entity_type = _normalize_manual_ie_entity_type(entity_type)
-    resolved_client = client or llm_client
-    resolved_model = model or config.service_agent_model
     if normalized_entity_type == "telephone":
         observation = build_telephone_model_observation(
             transcript,
-            client=resolved_client,
-            model=resolved_model,
         )
         return [
             ServiceDialoguePolicy.PHONE_IE_FUNCTION_CALL_DISPLAY,
@@ -3108,8 +3081,6 @@ def _ie_post_display_lines_for_transcript(
 
     observation = build_address_model_observation(
         transcript,
-        client=resolved_client,
-        model=resolved_model,
     )
     return [
         ServiceDialoguePolicy.ADDRESS_IE_FUNCTION_CALL_DISPLAY,
@@ -4217,11 +4188,10 @@ def predict_punctuation(
     normalized = _sanitize_manual_user_text(req.text)
     if not normalized:
         return {"ok": True, "input_text": "", "punctuated_text": ""}
-    punctuated_text = _punctuate_user_text_for_session(normalized)
     return {
         "ok": True,
         "input_text": normalized,
-        "punctuated_text": punctuated_text,
+        "punctuated_text": normalized,
     }
 
 
@@ -4527,9 +4497,7 @@ def respond(
             **_build_session_view(req.session_id, session),
         }
 
-    punctuated_user_text = (
-        sanitized if round_index == 1 else _punctuate_user_text_for_session(sanitized)
-    )
+    punctuated_user_text = sanitized
 
     scenario = session["scenario"]
     policy = session["policy"]
@@ -4682,9 +4650,7 @@ def predict_pending_ie(
     if round_index > int(session["rounds_limit"]):
         return {"entity_type": "", "round_index": round_index}
 
-    punctuated_user_text = (
-        sanitized if round_index == 1 else _punctuate_user_text_for_session(sanitized)
-    )
+    punctuated_user_text = sanitized
     user_turn = DialogueTurn(
         speaker=USER_SPEAKER,
         text=punctuated_user_text,
@@ -4804,12 +4770,9 @@ def build_rewrite_ie_observation(
     if not dialogue_lines:
         raise HTTPException(status_code=400, detail="请先在 function_call 上方保留用户/客服对话内容。")
 
-    active_config = _config_for_model(req.model_name)
     observation = build_ie_model_observation(
         dialogue_lines,
         entity_type,
-        client=OpenAIChatClient(active_config),
-        model=active_config.service_agent_model,
     )
     return {"observation": observation}
 
@@ -4949,15 +4912,4 @@ if __name__ == "__main__":  # pragma: no cover
         help="Server port.",
     )
     args = parser.parse_args()
-    configure_punctuation_service()
-    if get_punctuation_service().backend == "local":
-        _start_local_punctuation_api(model_dir=str(get_punctuation_service().model_dir))
-    print(
-        "[punctuation] configured backend=%s model_dir=%s api_url=%s"
-        % (
-            get_punctuation_service().backend,
-            str(get_punctuation_service().model_dir),
-            get_punctuation_service().api_url,
-        )
-    )
     uvicorn.run(app, host=args.host, port=args.port)

@@ -1,11 +1,47 @@
 from __future__ import annotations
 
 import json
+import logging
+import os
+import time
+import uuid
 from typing import Any
 
 import httpx
 
 from css_data_synthesis_test.config import AppConfig, load_model_request_profiles
+
+
+logger = logging.getLogger(__name__)
+DEFAULT_REQUEST_LOG_BODY_LIMIT = 20000
+
+
+def _request_log_body_limit() -> int:
+    try:
+        return int(os.environ.get("REQUEST_LOG_BODY_LIMIT", str(DEFAULT_REQUEST_LOG_BODY_LIMIT)) or "0")
+    except ValueError:
+        return DEFAULT_REQUEST_LOG_BODY_LIMIT
+
+
+def _json_for_log(value: Any) -> str:
+    try:
+        text = json.dumps(value, ensure_ascii=False, default=str)
+    except TypeError:
+        text = str(value)
+    limit = _request_log_body_limit()
+    if limit > 0 and len(text) > limit:
+        return f"{text[:limit]}...<truncated {len(text) - limit} chars>"
+    return text
+
+
+def _redact_headers_for_log(headers: dict[str, str]) -> dict[str, str]:
+    redacted: dict[str, str] = {}
+    for key, value in headers.items():
+        if key.lower() in {"authorization", "x-api-key", "apikey", "api-key"}:
+            redacted[key] = "<redacted>"
+        else:
+            redacted[key] = value
+    return redacted
 
 
 def extract_json_object(text: str) -> dict[str, Any]:
@@ -273,8 +309,35 @@ class OpenAIChatClient:
         headers: dict[str, str],
         payload: dict[str, Any],
     ) -> dict[str, Any]:
-        with httpx.Client(timeout=self.config.request_timeout) as client:
-            response = client.post(base_url, json=payload, headers=headers)
+        request_id = uuid.uuid4().hex[:12]
+        logger.info(
+            "[model_request] id=%s method=POST url=%s headers=%s body=%s",
+            request_id,
+            base_url,
+            _json_for_log(_redact_headers_for_log(headers)),
+            _json_for_log(payload),
+        )
+        started_at = time.perf_counter()
+        try:
+            with httpx.Client(timeout=self.config.request_timeout) as client:
+                response = client.post(base_url, json=payload, headers=headers)
+            elapsed_ms = (time.perf_counter() - started_at) * 1000
+            logger.info(
+                "[model_response] id=%s status=%s elapsed_ms=%.1f content_type=%s body=%s",
+                request_id,
+                response.status_code,
+                elapsed_ms,
+                response.headers.get("content-type", "<missing>"),
+                _json_for_log(response.text),
+            )
+        except Exception:
+            elapsed_ms = (time.perf_counter() - started_at) * 1000
+            logger.exception(
+                "[model_response] id=%s status=exception elapsed_ms=%.1f",
+                request_id,
+                elapsed_ms,
+            )
+            raise
         return self._parse_response(response)
 
     async def _send_request_async(
@@ -284,8 +347,35 @@ class OpenAIChatClient:
         headers: dict[str, str],
         payload: dict[str, Any],
     ) -> dict[str, Any]:
-        async with httpx.AsyncClient(timeout=self.config.request_timeout) as client:
-            response = await client.post(base_url, json=payload, headers=headers)
+        request_id = uuid.uuid4().hex[:12]
+        logger.info(
+            "[model_request] id=%s method=POST url=%s headers=%s body=%s",
+            request_id,
+            base_url,
+            _json_for_log(_redact_headers_for_log(headers)),
+            _json_for_log(payload),
+        )
+        started_at = time.perf_counter()
+        try:
+            async with httpx.AsyncClient(timeout=self.config.request_timeout) as client:
+                response = await client.post(base_url, json=payload, headers=headers)
+            elapsed_ms = (time.perf_counter() - started_at) * 1000
+            logger.info(
+                "[model_response] id=%s status=%s elapsed_ms=%.1f content_type=%s body=%s",
+                request_id,
+                response.status_code,
+                elapsed_ms,
+                response.headers.get("content-type", "<missing>"),
+                _json_for_log(response.text),
+            )
+        except Exception:
+            elapsed_ms = (time.perf_counter() - started_at) * 1000
+            logger.exception(
+                "[model_response] id=%s status=exception elapsed_ms=%.1f",
+                request_id,
+                elapsed_ms,
+            )
+            raise
         return self._parse_response(response)
 
     def _parse_response(self, response: httpx.Response) -> dict[str, Any]:

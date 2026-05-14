@@ -102,7 +102,7 @@ def _build_auto_address_confirmation_result(
 
 
 def _sanitize_manual_user_text(raw: str) -> str:
-    normalized = unicodedata.normalize("NFKC", str(raw or ""))
+    normalized = str(raw or "")
     cleaned_chars: list[str] = []
     for char in normalized:
         category = unicodedata.category(char)
@@ -117,7 +117,8 @@ def _sanitize_manual_user_text(raw: str) -> str:
 
 
 def _manual_command_token(text: str) -> str:
-    return re.sub(r"\s+", "", _sanitize_manual_user_text(text)).lower()
+    normalized = unicodedata.normalize("NFKC", _sanitize_manual_user_text(text))
+    return re.sub(r"\s+", "", normalized).lower()
 
 
 def load_manual_test_scenario(
